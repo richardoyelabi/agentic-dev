@@ -1,0 +1,19 @@
+name: backend_qa
+description: "Reviews backend code against spec requirements, tests, and security"
+team: backend
+claude:
+  model: opus
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep, Bash]
+  max_budget_usd: 2.00
+prompt_template: backend_qa.md.j2
+input_documents: [backend_spec, api_contract, sprint_plan]
+output_documents: [backend_qa_report]
+working_directory: backend
+qa_agent: null
+constraints:
+  - "Review code against backend spec requirements"
+  - "Verify tests exist and are meaningful"
+  - "Check for security vulnerabilities (SQL injection, auth bypass, IDOR)"
+  - "Check for obvious scaling issues"
+  - "Verify CI/CD pipeline is maintained"

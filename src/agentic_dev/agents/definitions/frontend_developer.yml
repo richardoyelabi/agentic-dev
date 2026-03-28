@@ -1,0 +1,18 @@
+name: frontend_developer
+description: "Implements frontend code per sprint using the frontend spec and API contract"
+team: frontend
+claude:
+  model: sonnet
+  permission_mode: bypassPermissions
+  allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
+  max_budget_usd: 5.00
+prompt_template: frontend_developer.md.j2
+input_documents: [frontend_spec, api_contract, sprint_plan]
+output_documents: []
+working_directory: frontend
+qa_agent: frontend_qa
+constraints:
+  - "Implement only the features scoped to the current sprint"
+  - "Follow the tech stack from the frontend spec"
+  - "Write tests for all components"
+  - "Maintain GitHub Actions CI/CD pipeline"

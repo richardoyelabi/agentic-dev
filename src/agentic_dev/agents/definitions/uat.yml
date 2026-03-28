@@ -1,0 +1,18 @@
+name: uat
+description: "Performs user acceptance testing across the full stack"
+team: qa
+claude:
+  model: opus
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep, Bash, WebFetch]
+  max_budget_usd: 3.00
+prompt_template: uat.md.j2
+input_documents: [features_request, frontend_spec, backend_spec, api_contract, sprint_plan]
+output_documents: [uat_report]
+qa_agent: null
+constraints:
+  - "Test every acceptance criterion from features request"
+  - "Test API contract compliance"
+  - "Test frontend/backend integration"
+  - "Report findings to user, not to other teams"
+  - "Include pass/fail status for each test"

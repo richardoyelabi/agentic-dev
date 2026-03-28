@@ -1,0 +1,17 @@
+name: sprint_planner
+description: "Breaks features into ordered, feature-based sprints"
+team: design_architecture
+claude:
+  model: sonnet
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep]
+  max_budget_usd: 1.00
+prompt_template: sprint_planner.md.j2
+input_documents: [features_request, frontend_spec, backend_spec, api_contract]
+output_documents: [sprint_plan]
+qa_agent: sprint_planner_qa
+constraints:
+  - "Each sprint = one feature or small group of closely related features"
+  - "Sprints must be ordered by dependency"
+  - "Mark which sprints need third-party integration"
+  - "Assign sprint type: new or patch"

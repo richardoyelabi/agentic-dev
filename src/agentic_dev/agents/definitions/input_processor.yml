@@ -1,0 +1,16 @@
+name: input_processor
+description: "Normalizes user input, separates feature requirements from preferences"
+team: design_architecture
+claude:
+  model: sonnet
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+  max_budget_usd: 1.00
+prompt_template: input_processor.md.j2
+input_documents: [user_input]
+output_documents: [structured_input]
+qa_agent: null
+constraints:
+  - "Separate feature requirements from preferences (tech stack, deployment, UI/UX)"
+  - "Assign feature IDs in format [F001]"
+  - "Preserve all user preferences without modification"

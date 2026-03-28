@@ -1,0 +1,17 @@
+name: sprint_planner_qa
+description: "Reviews sprint decomposition for completeness and correct ordering"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep]
+  max_budget_usd: 1.00
+prompt_template: sprint_planner_qa.md.j2
+input_documents: [features_request, sprint_plan]
+output_documents: [sprint_planner_qa_report]
+qa_agent: null
+constraints:
+  - "Verify all features are covered by sprints"
+  - "Verify dependency ordering is correct"
+  - "Verify sprints are small enough to be manageable"
+  - "Check that integration flags are set correctly"

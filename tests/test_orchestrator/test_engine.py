@@ -1,0 +1,354 @@
+"""Tests for the pipeline engine."""
+
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
+from agentic_dev.agents.registry import AgentRegistry
+from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
+from agentic_dev.documents.store import DocumentStore
+from agentic_dev.exceptions import AgentRunError, CheckpointPause, OutputParseError
+from agentic_dev.orchestrator.checkpoint import CheckpointConfig
+from agentic_dev.orchestrator.engine import PipelineEngine
+from agentic_dev.prompts.renderer import PromptRenderer
+from agentic_dev.state.manager import StateManager
+from agentic_dev.state.models import (
+    PipelinePhase,
+    PipelineState,
+    SprintState,
+    SprintStatus,
+)
+
+
+def _make_agent(name: str, template: str = "tpl.md.j2") -> AgentDefinition:
+    return AgentDefinition(
+        name=name,
+        description=f"{name} agent",
+        team="test",
+        claude=ClaudeConfig(
+            model="sonnet",
+            permission_mode="plan",
+            allowed_tools=["Read"],
+            max_budget_usd=1.0,
+        ),
+        prompt_template=template,
+        input_documents=["input.md"],
+    )
+
+
+def _make_claude_result(text: str, cost: float = 0.10) -> ClaudeResult:
+    return ClaudeResult(
+        text=text,
+        session_id="sess-123",
+        cost_usd=cost,
+        exit_code=0,
+    )
+
+
+def _make_state(phase: PipelinePhase = PipelinePhase.IDLE, **kwargs) -> PipelineState:
+    return PipelineState(project_name="test-project", phase=phase, **kwargs)
+
+
+@pytest.fixture
+def claude() -> ClaudeRunner:
+    runner = MagicMock(spec=ClaudeRunner)
+    runner.run = AsyncMock()
+    return runner
+
+
+@pytest.fixture
+def registry() -> AgentRegistry:
+    reg = MagicMock(spec=AgentRegistry)
+    reg.get = MagicMock(side_effect=lambda name: _make_agent(name))
+    return reg
+
+
+@pytest.fixture
+def doc_store() -> DocumentStore:
+    store = MagicMock(spec=DocumentStore)
+    store.read = MagicMock(return_value="document content")
+    store.write = MagicMock()
+    store.exists = MagicMock(return_value=False)
+    return store
+
+
+@pytest.fixture
+def prompt_renderer() -> PromptRenderer:
+    renderer = MagicMock(spec=PromptRenderer)
+    renderer.render_agent_prompt = MagicMock(return_value="rendered prompt")
+    return renderer
+
+
+@pytest.fixture
+def state_manager() -> StateManager:
+    manager = MagicMock(spec=StateManager)
+    manager.save = MagicMock()
+    return manager
+
+
+@pytest.fixture
+def project_dir(tmp_path: Path) -> Path:
+    return tmp_path / "project"
+
+
+@pytest.fixture
+def engine(
+    project_dir, claude, registry, doc_store, prompt_renderer, state_manager
+) -> PipelineEngine:
+    return PipelineEngine(
+        project_dir=project_dir,
+        claude=claude,
+        registry=registry,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        state_manager=state_manager,
+        checkpoint_config=CheckpointConfig(after_design=False),
+    )
+
+
+class TestRunAdvancesThroughPhases:
+    """Test that run() progresses from IDLE toward COMPLETE."""
+
+    @pytest.mark.asyncio
+    async def test_input_processing_advances_to_feature_analysis(
+        self, engine, state_manager, claude
+    ):
+        """Starting from IDLE, input processing runs and advances."""
+        state = _make_state(PipelinePhase.IDLE)
+        # After INPUT_PROCESSING advances to FEATURE_ANALYSIS, we stop
+        # by making the next phase fail to load docs (to avoid running everything)
+        call_count = 0
+
+        def load_side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return state
+            # Return state as it is after modifications
+            return state
+
+        state_manager.load = MagicMock(side_effect=load_side_effect)
+        claude.run.return_value = _make_claude_result("processed input", cost=0.05)
+
+        # Make the feature analysis phase fail so we stop after input processing
+        with patch.object(
+            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        # Verify input processing ran (claude was called)
+        assert claude.run.called
+        assert state.phase == PipelinePhase.FAILED
+
+
+class TestCheckpointPause:
+    """Test that checkpoints pause the pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_design_checkpoint_raises_pause(
+        self, project_dir, claude, registry, doc_store, prompt_renderer, state_manager
+    ):
+        """Pipeline pauses at DESIGN_CHECKPOINT when after_design is True."""
+        config = CheckpointConfig(after_design=True)
+        engine = PipelineEngine(
+            project_dir=project_dir,
+            claude=claude,
+            registry=registry,
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            state_manager=state_manager,
+            checkpoint_config=config,
+        )
+
+        state = _make_state(PipelinePhase.SPRINT_PLANNING_QA)
+        state_manager.load = MagicMock(return_value=state)
+
+        with pytest.raises(CheckpointPause) as exc_info:
+            await engine.run()
+
+        assert exc_info.value.phase == PipelinePhase.DESIGN_CHECKPOINT
+        state_manager.save.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_no_pause_when_checkpoint_disabled(self, engine, state_manager, claude):
+        """Pipeline does not pause at DESIGN_CHECKPOINT when after_design is False."""
+        # engine fixture has after_design=False
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        # Will advance past checkpoint to SPRINTING, then we need sprint runner to work
+        # Make sprint scope exist and run
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        # backend + QA, frontend + QA for sprint 1, then UAT
+        claude.run.side_effect = [
+            _make_claude_result("backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("frontend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat report", cost=0.10),
+        ]
+
+        await engine.run()
+
+        assert state.phase == PipelinePhase.COMPLETE
+
+
+class TestErrorHandling:
+    """Test that errors set the FAILED state."""
+
+    @pytest.mark.asyncio
+    async def test_agent_run_error_sets_failed(self, engine, state_manager, claude):
+        """AgentRunError during a phase sets state to FAILED."""
+        state = _make_state(PipelinePhase.IDLE)
+        state_manager.load = MagicMock(return_value=state)
+        claude.run.side_effect = AgentRunError("input_processor", "boom")
+
+        with pytest.raises(AgentRunError):
+            await engine.run()
+
+        assert state.phase == PipelinePhase.FAILED
+        assert "boom" in state.error
+        state_manager.save.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_output_parse_error_sets_failed(self, engine, state_manager, claude):
+        """OutputParseError during a phase sets state to FAILED."""
+        state = _make_state(PipelinePhase.ARCHITECTURE)
+        state_manager.load = MagicMock(return_value=state)
+
+        # Architecture phase calls run_qa_cycle then split_documents
+        # Make QA cycle succeed but split_documents fail
+        claude.run.side_effect = [
+            _make_claude_result("no markers here", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+        ]
+
+        with pytest.raises(OutputParseError):
+            await engine.run()
+
+        assert state.phase == PipelinePhase.FAILED
+        state_manager.save.assert_called()
+
+
+class TestInputProcessingPhase:
+    """Test the input processing phase in detail."""
+
+    @pytest.mark.asyncio
+    async def test_input_processing_calls_single_agent(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """Input processing uses _run_single_agent to process raw input."""
+        state = _make_state(PipelinePhase.INPUT_PROCESSING)
+        state_manager.load = MagicMock(return_value=state)
+        claude.run.return_value = _make_claude_result("structured output", cost=0.05)
+
+        # Stop after input processing by failing feature analysis
+        with patch.object(
+            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        doc_store.read.assert_any_call("user_input")
+        doc_store.write.assert_any_call("structured_input", "structured output")
+
+
+class TestFeatureAnalysisPhase:
+    """Test the feature analysis phase with QA cycle."""
+
+    @pytest.mark.asyncio
+    async def test_feature_analysis_runs_qa_cycle(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """Feature analysis runs a full QA cycle and tracks cost."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS)
+        state_manager.load = MagicMock(return_value=state)
+
+        # Feature analysis: action + QA (no issues)
+        # Then FEATURE_ANALYSIS_QA advances to ARCHITECTURE which will fail
+        claude.run.side_effect = [
+            _make_claude_result("features output", cost=0.20),
+            _make_claude_result("APPROVED", cost=0.15),
+            # Architecture phase - will fail on split_documents
+            _make_claude_result("arch output", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+        ]
+
+        with pytest.raises(OutputParseError):
+            await engine.run()
+
+        # Verify cost was tracked from the feature analysis phase
+        assert state.total_cost_usd >= 0.35
+        assert len(state.agent_runs) >= 1
+        assert state.agent_runs[0].agent_name == "feature_analyst"
+
+
+class TestSprintPhase:
+    """Test the sprinting phase."""
+
+    @pytest.mark.asyncio
+    async def test_sprints_run_sequentially(self, engine, state_manager, claude):
+        """Each sprint runs in order and updates state."""
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[
+                SprintState(sprint_number=1, name="Sprint 1"),
+                SprintState(sprint_number=2, name="Sprint 2"),
+            ],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        claude.run.side_effect = [
+            # Sprint 1: backend + QA, frontend + QA
+            _make_claude_result("s1 backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("s1 frontend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            # Sprint 2: backend + QA, frontend + QA
+            _make_claude_result("s2 backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("s2 frontend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            # UAT
+            _make_claude_result("uat report", cost=0.10),
+        ]
+
+        await engine.run()
+
+        assert state.phase == PipelinePhase.COMPLETE
+        assert state.sprints[0].status == SprintStatus.COMPLETE
+        assert state.sprints[1].status == SprintStatus.COMPLETE
+        assert state.total_cost_usd > 0
+
+
+class TestUATPhase:
+    """Test the UAT phase."""
+
+    @pytest.mark.asyncio
+    async def test_uat_runs_single_agent(self, engine, state_manager, claude, doc_store):
+        """UAT runs without QA cycle and saves report."""
+        state = _make_state(PipelinePhase.UAT)
+        state_manager.load = MagicMock(return_value=state)
+        doc_store.exists = MagicMock(return_value=True)
+        doc_store.read = MagicMock(return_value="spec content")
+        claude.run.return_value = _make_claude_result("uat passed", cost=0.20)
+
+        await engine.run()
+
+        assert state.phase == PipelinePhase.COMPLETE
+        doc_store.write.assert_any_call("uat_report", "uat passed")

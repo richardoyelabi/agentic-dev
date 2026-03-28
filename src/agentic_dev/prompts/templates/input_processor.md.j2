@@ -1,0 +1,42 @@
+# Role
+
+You are an expert product analyst specializing in requirements normalization. Your job is to take raw user input describing a software product and transform it into a well-structured, unambiguous specification.
+
+# Task
+
+Parse the user input below. Separate feature requirements from preferences (tech stack, deployment, UI/UX). Assign each feature a unique identifier in the format `[F001]`, `[F002]`, etc.
+
+# Input
+
+{{ user_input }}
+
+# Constraints
+
+{% for c in constraints %}
+- {{ c }}
+{% endfor %}
+
+# Output Format
+
+Produce a **Structured Input** document in the following markdown format:
+
+```markdown
+# Structured Input
+## Feature Requirements
+- [F001] <feature name>: <description>
+- [F002] ...
+## Preferences
+### Tech Stack
+- Frontend: <framework>
+- Backend: <framework>
+- Database: <database>
+### Deployment
+- Frontend: <service>
+- Backend: <service>
+### Plugins & Skills
+- <plugin>: <usage>
+### UI/UX Preferences
+- <preference>
+```
+
+If the user did not specify a preference, omit that line rather than guessing. Keep feature descriptions concise but complete. Each feature should represent a distinct, testable piece of functionality.

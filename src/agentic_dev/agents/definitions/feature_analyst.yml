@@ -1,0 +1,16 @@
+name: feature_analyst
+description: "Expands structured input into detailed Features Request with acceptance criteria"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+  max_budget_usd: 2.00
+prompt_template: feature_analyst.md.j2
+input_documents: [structured_input]
+output_documents: [features_request]
+qa_agent: feature_analyst_qa
+constraints:
+  - "Expand each feature with detailed description and acceptance criteria"
+  - "Identify dependencies between features"
+  - "Assign priority (high/medium/low) to each feature"

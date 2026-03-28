@@ -1,0 +1,18 @@
+name: architect_qa
+description: "Reviews architecture specs for consistency, completeness, and no duplication"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep]
+  max_budget_usd: 2.00
+prompt_template: architect_qa.md.j2
+input_documents: [features_request, structured_input, frontend_spec, backend_spec, api_contract]
+output_documents: [architect_qa_report]
+qa_agent: null
+constraints:
+  - "Verify cross-document consistency"
+  - "Verify no duplication between frontend spec, backend spec, and API contract"
+  - "Verify API contract covers all features"
+  - "Check for security vulnerabilities"
+  - "Check for obvious scaling issues"

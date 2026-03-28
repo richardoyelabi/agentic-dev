@@ -1,0 +1,17 @@
+name: integration_qa
+description: "Reviews integration code for SDK usage, security, and completeness"
+team: integration
+claude:
+  model: opus
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep, Bash]
+  max_budget_usd: 1.50
+prompt_template: integration_qa.md.j2
+input_documents: [api_contract, sprint_plan, integration_guide]
+output_documents: [integration_qa_report]
+qa_agent: null
+constraints:
+  - "Verify integration code uses official SDKs"
+  - "Verify manual steps are clear and complete"
+  - "Check for security vulnerabilities in integration code"
+  - "Verify API keys and credentials are not hardcoded"

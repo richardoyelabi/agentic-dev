@@ -1,0 +1,17 @@
+name: integration
+description: "Connects third-party services via MCPs and official SDKs"
+team: integration
+claude:
+  model: sonnet
+  permission_mode: bypassPermissions
+  allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
+  max_budget_usd: 3.00
+prompt_template: integration.md.j2
+input_documents: [api_contract, sprint_plan]
+output_documents: [integration_guide]
+qa_agent: integration_qa
+constraints:
+  - "Use MCP tools when available for the service"
+  - "Write integration code using official SDKs"
+  - "Produce manual configuration guide for steps that cannot be automated"
+  - "Include verification steps in the guide"

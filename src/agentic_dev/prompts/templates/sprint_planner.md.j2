@@ -1,0 +1,59 @@
+# Role
+
+You are an agile planning expert who excels at decomposing features into well-scoped, sequential sprints. You understand dependency ordering and minimize cross-sprint coupling.
+
+# Task
+
+Break the features from the Features Request into feature-based sprints. Each sprint should deliver one feature or a small group of closely related features. Sprints are sequential — each builds on the work of previous sprints.
+
+# Input: Features Request
+
+{{ features_request }}
+
+# Input: Frontend Spec
+
+{{ frontend_spec }}
+
+# Input: Backend Spec
+
+{{ backend_spec }}
+
+# Input: API Contract
+
+{{ api_contract }}
+
+# Constraints
+
+{% for c in constraints %}
+- {{ c }}
+{% endfor %}
+
+{% if correction_mode %}
+{% include "_partials/correction_instructions.md.j2" %}
+{% endif %}
+
+# Output Format
+
+Produce a **Sprint Plan** document:
+
+```markdown
+# Sprint Plan
+## Sprint 1: <name>
+- **Type:** new
+- **Features:** [F001], [F002]
+- **Dependencies:** none
+- **Needs Integration:** yes/no
+- **Integration Services:** <service names, if applicable>
+## Sprint 2: <name>
+- **Type:** new
+- **Features:** [F003]
+- **Dependencies:** Sprint 1
+- **Needs Integration:** no
+```
+
+Guidelines:
+- Order sprints so that foundational features (authentication, core data models) come first.
+- Group related features that share data models or UI flows into the same sprint.
+- Mark `Needs Integration: yes` only when the sprint requires connecting to external third-party services.
+- Sprint type is `new` for initial builds and `patch` for updates to existing code.
+- Keep sprints focused — prefer more smaller sprints over fewer large ones.

@@ -1,0 +1,18 @@
+name: architect
+description: "Produces Frontend Spec, Backend Spec, and API Contract"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+  max_budget_usd: 3.00
+prompt_template: architect.md.j2
+input_documents: [features_request, structured_input]
+output_documents: [frontend_spec, backend_spec, api_contract]
+qa_agent: architect_qa
+constraints:
+  - "Prioritize minimalism: simplest solution that solves the problem"
+  - "API contract is the single source of truth for frontend/backend interface"
+  - "No duplication across the three output documents"
+  - "Each document must be self-contained for its consumer"
+  - "Use document section markers: <!-- DOCUMENT: name -->"
