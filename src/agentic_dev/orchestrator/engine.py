@@ -115,7 +115,7 @@ class PipelineEngine:
 
         output = await self._run_single_agent(
             agent_name="input_processor",
-            input_docs={"raw_input": self._doc_store.read("user_input")},
+            input_docs={"user_input": self._doc_store.read("user_input")},
             output_doc_name="structured_input",
         )
         self._doc_store.write("structured_input", output)

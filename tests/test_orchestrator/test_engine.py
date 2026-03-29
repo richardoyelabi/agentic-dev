@@ -248,7 +248,7 @@ class TestInputProcessingPhase:
     async def test_input_processing_calls_single_agent(
         self, engine, state_manager, claude, doc_store
     ):
-        """Input processing uses _run_single_agent to process raw input."""
+        """Input processing uses _run_single_agent with docs/user_input content."""
         state = _make_state(PipelinePhase.INPUT_PROCESSING)
         state_manager.load = MagicMock(return_value=state)
         claude.run.return_value = _make_claude_result("structured output", cost=0.05)
@@ -262,6 +262,28 @@ class TestInputProcessingPhase:
 
         doc_store.read.assert_any_call("user_input")
         doc_store.write.assert_any_call("structured_input", "structured output")
+
+    @pytest.mark.asyncio
+    async def test_input_processing_passes_user_input_to_renderer(
+        self, engine, state_manager, claude, doc_store, prompt_renderer
+    ):
+        """input_processor template expects user_input; context key must match."""
+        state = _make_state(PipelinePhase.INPUT_PROCESSING)
+        state_manager.load = MagicMock(return_value=state)
+        claude.run.return_value = _make_claude_result("structured output", cost=0.05)
+        doc_store.read.return_value = "saved requirements body"
+
+        with patch.object(
+            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        assert prompt_renderer.render_agent_prompt.call_count >= 1
+        first_call = prompt_renderer.render_agent_prompt.call_args_list[0]
+        input_docs = first_call.kwargs["input_documents"]
+        assert input_docs == {"user_input": "saved requirements body"}
+        assert "raw_input" not in input_docs
 
 
 class TestFeatureAnalysisPhase:
