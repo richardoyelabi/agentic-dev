@@ -6,6 +6,7 @@ from pathlib import Path
 from agentic_dev.agents.base import AgentDefinition
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
+from agentic_dev.exceptions import AgentRunError
 from agentic_dev.orchestrator.agent_bridge import to_run_config
 from agentic_dev.prompts.renderer import PromptRenderer
 
@@ -53,6 +54,12 @@ async def run_qa_cycle(
         working_dir=workspace,
     )
 
+    if not action_result.text.strip():
+        raise AgentRunError(
+            agent_name=action_agent.name,
+            message="Agent returned empty output",
+        )
+
     # 2. Save the action output
     doc_store.write(output_doc_name, action_result.text)
 
@@ -96,6 +103,13 @@ async def run_qa_cycle(
         correction_cost = correction_result.cost_usd
         corrected = True
         final_output = correction_result.text
+
+        if not final_output.strip():
+            raise AgentRunError(
+                agent_name=action_agent.name,
+                message="Agent returned empty output after correction",
+            )
+
         doc_store.write(output_doc_name, final_output)
 
     return QACycleResult(

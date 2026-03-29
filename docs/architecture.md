@@ -48,7 +48,7 @@ Executes a single sprint: backend → frontend → integration (if needed).
 Configurable pause points. Default: pause after design phase.
 
 ### `claude/runner.py`
-Async subprocess wrapper for the `claude` CLI. Builds commands from agent configs.
+Async subprocess wrapper for the `claude` CLI. Builds commands from agent configs. In print mode the rendered prompt is passed immediately after `-p`, before flags such as `--allowedTools`, so the CLI does not parse the prompt as an extra tool name.
 
 ### `agents/registry.py`
 Loads agent definitions from YAML files. Provides lookup by name and team.

@@ -153,7 +153,8 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
     from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
 
     checkpoint_config = _load_config(project_dir)
-    claude = ClaudeRunner()
+    log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
+    claude = ClaudeRunner(log_dir=log_dir)
     registry = AgentRegistry(definitions_dir=AGENT_DEFINITIONS_DIR)
     doc_store = DocumentStore(project_dir)
     prompt_renderer = PromptRenderer(templates_dir=PROMPT_TEMPLATES_DIR)

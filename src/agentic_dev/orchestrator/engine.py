@@ -308,6 +308,13 @@ class PipelineEngine:
             prompt=prompt,
             working_dir=self._project_dir,
         )
+
+        if not result.text.strip():
+            raise AgentRunError(
+                agent_name=agent_name,
+                message="Agent returned empty output",
+            )
+
         return result.text
 
     def _record_agent_run(

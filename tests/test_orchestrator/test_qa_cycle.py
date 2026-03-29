@@ -8,6 +8,7 @@ import pytest
 from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
+from agentic_dev.exceptions import AgentRunError
 from agentic_dev.orchestrator.qa_cycle import QACycleResult, run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
 
@@ -237,3 +238,49 @@ async def test_correction_prompt_uses_correction_mode(
     assert correction_call.kwargs.get("correction_mode") is True
     assert correction_call.kwargs.get("previous_output") == "v1"
     assert "ISSUES_FOUND" in correction_call.kwargs.get("qa_feedback", "")
+
+
+@pytest.mark.asyncio
+async def test_empty_action_output_raises_error(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """An empty result from the action agent should raise AgentRunError."""
+    claude.run.side_effect = [
+        _make_claude_result("", cost=0.10),
+    ]
+
+    with pytest.raises(AgentRunError, match="empty output"):
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={"input.md": "requirements"},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+        )
+
+
+@pytest.mark.asyncio
+async def test_empty_correction_output_raises_error(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """An empty result from the correction run should raise AgentRunError."""
+    claude.run.side_effect = [
+        _make_claude_result("initial output", cost=0.15),
+        _make_claude_result("ISSUES_FOUND: fix it", cost=0.10),
+        _make_claude_result("   ", cost=0.20),
+    ]
+
+    with pytest.raises(AgentRunError, match="empty output after correction"):
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={"input.md": "requirements"},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+        )

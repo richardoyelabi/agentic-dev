@@ -236,19 +236,19 @@ Dev: `pytest>=8.0`, `pytest-asyncio>=0.24`, `pytest-mock>=3.14`
 
 The Python orchestrator invokes Claude Code CLI via `asyncio.create_subprocess_exec`. Each agent run is a single `claude` CLI invocation in print mode (`-p`).
 
-**Invocation pattern:**
+**Invocation pattern:** The user prompt must be the first argument after `-p`. `--allowedTools` accepts multiple values; if the prompt is placed after it, the CLI treats the prompt as another tool name and print mode fails with “no input”.
+
 ```bash
-claude -p \
+claude -p "$(cat rendered_prompt.md)" \
   --output-format json \
   --model <agent.model> \
   --permission-mode <agent.permission_mode> \
   --allowedTools <agent.allowed_tools> \
-  --max-turns 50 \
-  "$(cat rendered_prompt.md)"
+  --max-turns 50
 ```
 
 Flags used:
-- `-p` (print mode): non-interactive, reads prompt from argument, outputs result
+- `-p` (print mode): non-interactive, reads prompt from the positional argument immediately following `-p`, outputs result
 - `--output-format json`: returns structured JSON with `result`, `session_id`, `cost_usd`
 - `--model`: `claude-opus-4-6` or `claude-sonnet-4-6`
 - `--permission-mode`: `plan` (read-only, for design agents) or `bypassPermissions` (for dev agents that write code)
