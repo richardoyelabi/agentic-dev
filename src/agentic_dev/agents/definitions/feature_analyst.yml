@@ -3,8 +3,9 @@ description: "Expands structured input into detailed Features Request with accep
 team: design_architecture
 claude:
   model: opus
-  permission_mode: plan
-  allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 1
   max_budget_usd: 2.00
 prompt_template: feature_analyst.md.j2
 input_documents: [structured_input]

@@ -68,12 +68,14 @@ class TestBuildCommand:
 
         assert cmd[cmd.index("--allowedTools") + 1] == "Read,Glob,Grep"
 
-    def test_empty_allowed_tools_omitted(self, tmp_path: Path):
+    def test_empty_allowed_tools_passes_empty_string(self, tmp_path: Path):
+        """Explicitly disable all tools by passing --allowedTools "" rather than omitting."""
         runner = ClaudeRunner()
         agent = FakeAgentConfig(allowed_tools=[])
         cmd = runner.build_command(agent, tmp_path)
 
-        assert "--allowedTools" not in cmd
+        assert "--allowedTools" in cmd
+        assert cmd[cmd.index("--allowedTools") + 1] == ""
 
     def test_session_resume_flag(self, tmp_path: Path):
         runner = ClaudeRunner()
@@ -123,19 +125,13 @@ class TestBuildCommand:
 
         assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
 
-    def test_bare_mode_flag(self, tmp_path: Path):
+    def test_bare_mode_never_added(self, tmp_path: Path):
+        """--bare breaks OAuth auth so we never add it regardless of use_bare_mode."""
         runner = ClaudeRunner()
-        agent = FakeAgentConfig(use_bare_mode=True)
-        cmd = runner.build_command(agent, tmp_path)
-
-        assert "--bare" in cmd
-
-    def test_bare_mode_omitted_when_false(self, tmp_path: Path):
-        runner = ClaudeRunner()
-        agent = FakeAgentConfig(use_bare_mode=False)
-        cmd = runner.build_command(agent, tmp_path)
-
-        assert "--bare" not in cmd
+        for bare in (True, False):
+            agent = FakeAgentConfig(use_bare_mode=bare)
+            cmd = runner.build_command(agent, tmp_path)
+            assert "--bare" not in cmd
 
 
 class TestRun:

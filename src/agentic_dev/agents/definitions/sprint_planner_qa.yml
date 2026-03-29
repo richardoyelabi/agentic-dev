@@ -3,8 +3,9 @@ description: "Reviews sprint decomposition for completeness and correct ordering
 team: design_architecture
 claude:
   model: opus
-  permission_mode: plan
-  allowed_tools: [Read, Glob, Grep]
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 1
   max_budget_usd: 1.00
 prompt_template: sprint_planner_qa.md.j2
 input_documents: [features_request, sprint_plan]

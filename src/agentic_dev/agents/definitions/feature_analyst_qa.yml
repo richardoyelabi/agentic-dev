@@ -3,8 +3,9 @@ description: "Reviews Features Request for completeness, testability, and correc
 team: design_architecture
 claude:
   model: opus
-  permission_mode: plan
-  allowed_tools: [Read, Glob, Grep]
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 1
   max_budget_usd: 1.50
 prompt_template: feature_analyst_qa.md.j2
 input_documents: [structured_input, features_request]

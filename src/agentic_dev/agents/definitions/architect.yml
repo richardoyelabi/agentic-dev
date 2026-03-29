@@ -3,8 +3,9 @@ description: "Produces Frontend Spec, Backend Spec, and API Contract"
 team: design_architecture
 claude:
   model: opus
-  permission_mode: plan
-  allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 1
   max_budget_usd: 3.00
 prompt_template: architect.md.j2
 input_documents: [features_request, structured_input]

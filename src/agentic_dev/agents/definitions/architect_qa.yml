@@ -3,8 +3,9 @@ description: "Reviews architecture specs for consistency, completeness, and no d
 team: design_architecture
 claude:
   model: opus
-  permission_mode: plan
-  allowed_tools: [Read, Glob, Grep]
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 1
   max_budget_usd: 2.00
 prompt_template: architect_qa.md.j2
 input_documents: [features_request, structured_input, frontend_spec, backend_spec, api_contract]

@@ -88,11 +88,10 @@ class ClaudeRunner:
             ]
         )
 
-        if agent.use_bare_mode:
-            cmd.append("--bare")
-
-        if agent.allowed_tools:
-            cmd.extend(["--allowedTools", ",".join(agent.allowed_tools)])
+        # Always pass --allowedTools so Claude doesn't default to all tools.
+        # An empty list means "no tools" — pass "" to explicitly disable tool use.
+        allowed_tools_value = ",".join(agent.allowed_tools) if agent.allowed_tools else ""
+        cmd.extend(["--allowedTools", allowed_tools_value])
 
         if session_id:
             cmd.extend(["--resume", session_id])

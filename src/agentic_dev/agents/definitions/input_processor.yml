@@ -3,8 +3,9 @@ description: "Normalizes user input, separates feature requirements from prefere
 team: design_architecture
 claude:
   model: sonnet
-  permission_mode: plan
-  allowed_tools: [Read, Glob, Grep, WebSearch, WebFetch]
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 1
   max_budget_usd: 1.00
 prompt_template: input_processor.md.j2
 input_documents: [user_input]
