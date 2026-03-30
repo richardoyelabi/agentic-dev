@@ -4,9 +4,13 @@ Uses a dedicated Claude agent to analyze an existing codebase and produce
 a Codebase Analysis document that feeds into the Input Processor.
 """
 
+from __future__ import annotations
+
+import asyncio
 from pathlib import Path
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
+from agentic_dev.onboarding.models import AnnotatedSource
 from agentic_dev.orchestrator.agent_bridge import AgentRunConfig
 
 
@@ -49,12 +53,15 @@ Produce your analysis in the following format:
 async def analyze_codebase(
     claude: ClaudeRunner,
     codebase_path: Path,
+    annotation: str = "",
 ) -> ClaudeResult:
     """Analyze an existing codebase using a Claude agent.
 
     Args:
         claude: The ClaudeRunner instance.
         codebase_path: Path to the existing codebase to analyze.
+        annotation: Optional human description of what this codebase represents
+            (e.g. "Frontend React app", "Auth microservice").
 
     Returns:
         ClaudeResult containing the Codebase Analysis document.
@@ -70,8 +77,35 @@ async def analyze_codebase(
         system_prompt=None,
     )
 
+    prompt = ANALYZER_PROMPT
+    if annotation:
+        prompt = (
+            f"Context: This codebase is described as: \"{annotation}\"\n\n"
+            + prompt
+        )
+
     return await claude.run(
         agent=config,
-        prompt=ANALYZER_PROMPT,
+        prompt=prompt,
         working_dir=codebase_path,
     )
+
+
+async def analyze_codebases(
+    claude: ClaudeRunner,
+    sources: list[AnnotatedSource],
+) -> list[ClaudeResult]:
+    """Analyze multiple codebases concurrently.
+
+    Args:
+        claude: The ClaudeRunner instance.
+        sources: List of annotated codebase sources to analyze.
+
+    Returns:
+        List of ClaudeResults in the same order as the input sources.
+    """
+    tasks = [
+        analyze_codebase(claude, Path(src.value), src.annotation)
+        for src in sources
+    ]
+    return list(await asyncio.gather(*tasks))

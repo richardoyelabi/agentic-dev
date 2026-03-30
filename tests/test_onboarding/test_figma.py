@@ -8,10 +8,13 @@ import pytest
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.onboarding.figma import (
+    FIGMA_PROMPT_TEMPLATE,
     FigmaMCPNotConfigured,
     analyze_figma_design,
+    analyze_figma_designs,
     get_figma_mcp_config,
 )
+from agentic_dev.onboarding.models import AnnotatedSource
 
 
 SAMPLE_FIGMA_URL = "https://www.figma.com/file/abc123/MyDesign"
@@ -140,3 +143,59 @@ class TestAnalyzeFigmaDesign:
 
         with pytest.raises(AgentRunError, match="onboarding_figma"):
             await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
+
+    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    async def test_annotation_prepended_to_prompt(
+        self, mock_get_config: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_runner = _make_mock_runner()
+
+        await analyze_figma_design(
+            mock_runner, SAMPLE_FIGMA_URL, tmp_path, annotation="Admin dashboard"
+        )
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert prompt.startswith("Context: This Figma file is described as:")
+        assert "Admin dashboard" in prompt
+        assert SAMPLE_FIGMA_URL in prompt
+
+    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    async def test_empty_annotation_uses_original_prompt(
+        self, mock_get_config: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_runner = _make_mock_runner()
+
+        await analyze_figma_design(
+            mock_runner, SAMPLE_FIGMA_URL, tmp_path, annotation=""
+        )
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        expected = FIGMA_PROMPT_TEMPLATE.format(figma_url=SAMPLE_FIGMA_URL)
+        assert prompt == expected
+
+
+class TestAnalyzeFigmaDesigns:
+    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    async def test_runs_all_sources(
+        self, mock_get_config: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_get_config.return_value = Path("/fake/figma.json")
+        results = [
+            _make_claude_result(text="Design 1"),
+            _make_claude_result(text="Design 2"),
+        ]
+        mock_runner = MagicMock(spec=ClaudeRunner)
+        mock_runner.run = AsyncMock(side_effect=results)
+
+        sources = [
+            AnnotatedSource(value="https://figma.com/file/a", annotation="App UI"),
+            AnnotatedSource(value="https://figma.com/file/b", annotation="Admin"),
+        ]
+        actual = await analyze_figma_designs(mock_runner, sources, tmp_path)
+
+        assert len(actual) == 2
+        assert actual[0].text == "Design 1"
+        assert actual[1].text == "Design 2"
+        assert mock_runner.run.call_count == 2

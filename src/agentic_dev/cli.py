@@ -193,9 +193,11 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
 def new(
     app_name: str = typer.Argument(help="Name of the application to create"),
     path: str | None = typer.Option(None, help="Directory to create the project in"),
-    from_figma: str | None = typer.Option(None, help="Figma URL to import designs from"),
-    from_codebase: str | None = typer.Option(
-        None, help="Path to existing codebase to onboard"
+    from_figma: list[str] | None = typer.Option(
+        None, help="Figma URL to import designs from (use '::' for annotation, repeatable)"
+    ),
+    from_codebase: list[str] | None = typer.Option(
+        None, help="Codebase path to onboard (use '::' for annotation, repeatable)"
     ),
 ) -> None:
     """Create a new project and start the development pipeline."""
@@ -220,25 +222,46 @@ def new(
         # Collect user requirements
         user_input = _collect_user_requirements()
 
-        if from_codebase:
+        from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
+
+        codebase_sources = [AnnotatedSource.parse(s) for s in (from_codebase or [])]
+        figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
+
+        if codebase_sources:
             from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
-            from agentic_dev.onboarding.analyzer import analyze_codebase  # noqa: WPS433
+            from agentic_dev.onboarding.analyzer import analyze_codebases  # noqa: WPS433
 
-            console.print(f"[cyan]Analyzing existing codebase: {from_codebase}[/cyan]")
-            codebase_result = asyncio.run(
-                analyze_codebase(ClaudeRunner(), Path(from_codebase))
+            for src in codebase_sources:
+                label = f"{src.value} ({src.annotation})" if src.annotation else src.value
+                console.print(f"[cyan]Analyzing existing codebase: {label}[/cyan]")
+
+            codebase_results = asyncio.run(
+                analyze_codebases(ClaudeRunner(), codebase_sources)
             )
-            user_input = (user_input or "") + "\n\n" + codebase_result.text
+            for src, result in zip(codebase_sources, codebase_results):
+                header = "\n\n---\n## Source: Codebase"
+                if src.annotation:
+                    header += f" - {src.annotation}"
+                header += f"\n**Path:** `{src.value}`\n\n"
+                user_input = (user_input or "") + header + result.text
 
-        if from_figma:
+        if figma_sources:
             from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
-            from agentic_dev.onboarding.figma import analyze_figma_design  # noqa: WPS433
+            from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
 
-            console.print(f"[cyan]Importing designs from Figma: {from_figma}[/cyan]")
-            figma_result = asyncio.run(
-                analyze_figma_design(ClaudeRunner(), from_figma, project_dir)
+            for src in figma_sources:
+                label = f"{src.value} ({src.annotation})" if src.annotation else src.value
+                console.print(f"[cyan]Importing designs from Figma: {label}[/cyan]")
+
+            figma_results = asyncio.run(
+                analyze_figma_designs(ClaudeRunner(), figma_sources, project_dir)
             )
-            user_input = (user_input or "") + "\n\n" + figma_result.text
+            for src, result in zip(figma_sources, figma_results):
+                header = "\n\n---\n## Source: Figma Design"
+                if src.annotation:
+                    header += f" - {src.annotation}"
+                header += f"\n**URL:** `{src.value}`\n\n"
+                user_input = (user_input or "") + header + result.text
 
         if not user_input:
             console.print("[bold red]No requirements provided. Aborting.[/bold red]")

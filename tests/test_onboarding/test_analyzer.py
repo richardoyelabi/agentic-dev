@@ -7,7 +7,12 @@ import pytest
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.exceptions import AgentRunError
-from agentic_dev.onboarding.analyzer import ANALYZER_PROMPT, analyze_codebase
+from agentic_dev.onboarding.analyzer import (
+    ANALYZER_PROMPT,
+    analyze_codebase,
+    analyze_codebases,
+)
+from agentic_dev.onboarding.models import AnnotatedSource
 
 
 def _make_claude_result(
@@ -85,3 +90,42 @@ class TestAnalyzeCodebase:
 
         with pytest.raises(AgentRunError, match="onboarding_analyzer"):
             await analyze_codebase(mock_runner, tmp_path)
+
+    async def test_annotation_prepended_to_prompt(self, tmp_path: Path) -> None:
+        mock_runner = _make_mock_runner()
+
+        await analyze_codebase(mock_runner, tmp_path, annotation="Frontend React app")
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert prompt.startswith("Context: This codebase is described as:")
+        assert "Frontend React app" in prompt
+        assert ANALYZER_PROMPT in prompt
+
+    async def test_empty_annotation_uses_original_prompt(self, tmp_path: Path) -> None:
+        mock_runner = _make_mock_runner()
+
+        await analyze_codebase(mock_runner, tmp_path, annotation="")
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert prompt == ANALYZER_PROMPT
+
+
+class TestAnalyzeCodebases:
+    async def test_runs_all_sources(self, tmp_path: Path) -> None:
+        results = [
+            _make_claude_result(text="Analysis 1"),
+            _make_claude_result(text="Analysis 2"),
+        ]
+        mock_runner = MagicMock(spec=ClaudeRunner)
+        mock_runner.run = AsyncMock(side_effect=results)
+
+        sources = [
+            AnnotatedSource(value=str(tmp_path / "frontend"), annotation="Frontend"),
+            AnnotatedSource(value=str(tmp_path / "backend"), annotation="Backend"),
+        ]
+        actual = await analyze_codebases(mock_runner, sources)
+
+        assert len(actual) == 2
+        assert actual[0].text == "Analysis 1"
+        assert actual[1].text == "Analysis 2"
+        assert mock_runner.run.call_count == 2

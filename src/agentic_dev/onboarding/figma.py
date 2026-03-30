@@ -4,12 +4,15 @@ Uses a Claude agent with the Figma MCP server to extract design information
 and produce a Design Analysis document.
 """
 
-import json
+from __future__ import annotations
+
+import asyncio
 from pathlib import Path
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.config import MCP_CONFIGS_DIR
 from agentic_dev.exceptions import AgenticDevError
+from agentic_dev.onboarding.models import AnnotatedSource
 from agentic_dev.orchestrator.agent_bridge import AgentRunConfig
 
 
@@ -79,6 +82,7 @@ async def analyze_figma_design(
     claude: ClaudeRunner,
     figma_url: str,
     working_dir: Path,
+    annotation: str = "",
 ) -> ClaudeResult:
     """Analyze a Figma design using a Claude agent with Figma MCP tools.
 
@@ -86,6 +90,8 @@ async def analyze_figma_design(
         claude: The ClaudeRunner instance.
         figma_url: URL to the Figma file to analyze.
         working_dir: Working directory for the agent.
+        annotation: Optional human description of what this Figma file represents
+            (e.g. "Main app UI", "Admin dashboard").
 
     Returns:
         ClaudeResult containing the Design Analysis document.
@@ -107,9 +113,39 @@ async def analyze_figma_design(
     )
 
     prompt = FIGMA_PROMPT_TEMPLATE.format(figma_url=figma_url)
+    if annotation:
+        prompt = (
+            f"Context: This Figma file is described as: \"{annotation}\"\n\n"
+            + prompt
+        )
 
     return await claude.run(
         agent=config,
         prompt=prompt,
         working_dir=working_dir,
     )
+
+
+async def analyze_figma_designs(
+    claude: ClaudeRunner,
+    sources: list[AnnotatedSource],
+    working_dir: Path,
+) -> list[ClaudeResult]:
+    """Analyze multiple Figma design files concurrently.
+
+    Args:
+        claude: The ClaudeRunner instance.
+        sources: List of annotated Figma URL sources to analyze.
+        working_dir: Working directory for the agents.
+
+    Returns:
+        List of ClaudeResults in the same order as the input sources.
+
+    Raises:
+        FigmaMCPNotConfigured: If Figma MCP server is not configured.
+    """
+    tasks = [
+        analyze_figma_design(claude, src.value, working_dir, src.annotation)
+        for src in sources
+    ]
+    return list(await asyncio.gather(*tasks))
