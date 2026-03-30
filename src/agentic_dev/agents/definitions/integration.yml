@@ -6,6 +6,7 @@ claude:
   permission_mode: bypassPermissions
   allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
   max_budget_usd: 3.00
+  max_turns: 150
 prompt_template: integration.md.j2
 input_documents: [api_contract, sprint_plan]
 output_documents: [integration_guide]

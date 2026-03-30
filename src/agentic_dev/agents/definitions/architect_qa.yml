@@ -5,7 +5,7 @@ claude:
   model: opus
   permission_mode: bypassPermissions
   allowed_tools: []
-  max_turns: 1
+  max_turns: 5
   max_budget_usd: 2.00
 prompt_template: architect_qa.md.j2
 input_documents: [features_request, structured_input, frontend_spec, backend_spec, api_contract]

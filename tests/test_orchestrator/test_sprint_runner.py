@@ -146,6 +146,24 @@ async def test_sprint_failure_returns_failed_result(runner, claude):
 
 
 @pytest.mark.asyncio
+async def test_partial_cost_preserved_on_frontend_failure(runner, claude):
+    """When the frontend agent fails after backend succeeds, backend cost is preserved."""
+    claude.run.side_effect = [
+        # Backend succeeds
+        _make_claude_result("backend code", cost=0.20),
+        _make_claude_result("APPROVED", cost=0.10),
+        # Frontend action agent crashes
+        AgentRunError(agent_name="frontend_developer", message="timeout"),
+    ]
+
+    result = await runner.run_sprint(sprint_number=1, sprint_scope="scope")
+
+    assert result.success is False
+    # Backend costs (0.20 + 0.10) must be preserved even though frontend failed
+    assert result.total_cost == pytest.approx(0.30)
+
+
+@pytest.mark.asyncio
 async def test_costs_aggregated_with_corrections(runner, claude):
     """Costs include correction runs when QA finds issues."""
     claude.run.side_effect = [

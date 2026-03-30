@@ -5,7 +5,7 @@ claude:
   model: sonnet
   permission_mode: bypassPermissions
   allowed_tools: []
-  max_turns: 1
+  max_turns: 5
   max_budget_usd: 1.00
 prompt_template: sprint_planner.md.j2
 input_documents: [features_request, frontend_spec, backend_spec, api_contract]

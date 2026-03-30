@@ -60,16 +60,17 @@ class SprintRunner:
         Returns:
             SprintResult with costs and success status.
         """
+        partial_cost: list[float] = [0.0]
         try:
             return await self._execute_sprint(
-                sprint_number, sprint_scope, needs_integration
+                sprint_number, sprint_scope, needs_integration, partial_cost
             )
         except AgentRunError as exc:
             logger.error("Sprint %d failed: %s", sprint_number, exc)
             return SprintResult(
                 sprint_number=sprint_number,
                 success=False,
-                total_cost=0.0,
+                total_cost=partial_cost[0],
                 error=str(exc),
             )
 
@@ -78,8 +79,13 @@ class SprintRunner:
         sprint_number: int,
         sprint_scope: str,
         needs_integration: bool,
+        partial_cost: list[float],
     ) -> SprintResult:
-        """Run the backend, frontend, and optional integration QA cycles."""
+        """Run the backend, frontend, and optional integration QA cycles.
+
+        partial_cost is a single-element list used as a mutable accumulator so
+        the caller can recover cost even if this method raises AgentRunError.
+        """
         backend_spec = self._doc_store.read("backend_spec")
         frontend_spec = self._doc_store.read("frontend_spec")
         api_contract = self._doc_store.read("api_contract")
@@ -106,6 +112,9 @@ class SprintRunner:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
         )
+        partial_cost[0] += (
+            backend_result.action_cost + backend_result.qa_cost + backend_result.correction_cost
+        )
 
         # Frontend QA cycle
         frontend_input_docs = {
@@ -123,6 +132,9 @@ class SprintRunner:
             workspace=self._project_dir / "frontend",
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
+        )
+        partial_cost[0] += (
+            frontend_result.action_cost + frontend_result.qa_cost + frontend_result.correction_cost
         )
 
         # Optional integration QA cycle
@@ -145,17 +157,7 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
             )
-
-        total_cost = (
-            backend_result.action_cost
-            + backend_result.qa_cost
-            + backend_result.correction_cost
-            + frontend_result.action_cost
-            + frontend_result.qa_cost
-            + frontend_result.correction_cost
-        )
-        if integration_result is not None:
-            total_cost += (
+            partial_cost[0] += (
                 integration_result.action_cost
                 + integration_result.qa_cost
                 + integration_result.correction_cost
@@ -164,7 +166,7 @@ class SprintRunner:
         return SprintResult(
             sprint_number=sprint_number,
             success=True,
-            total_cost=total_cost,
+            total_cost=partial_cost[0],
             backend_result=backend_result,
             frontend_result=frontend_result,
             integration_result=integration_result,

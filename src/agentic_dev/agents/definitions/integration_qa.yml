@@ -3,7 +3,7 @@ description: "Reviews integration code for SDK usage, security, and completeness
 team: integration
 claude:
   model: opus
-  permission_mode: plan
+  permission_mode: bypassPermissions
   allowed_tools: [Read, Glob, Grep, Bash]
   max_budget_usd: 1.50
 prompt_template: integration_qa.md.j2
