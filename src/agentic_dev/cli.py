@@ -74,6 +74,9 @@ def _display_status(state: PipelineState) -> None:
     table.add_row("Updated", state.updated_at.strftime("%Y-%m-%d %H:%M:%S UTC"))
     table.add_row("Total Cost", f"${state.total_cost_usd:.4f}")
 
+    if state.remediation_cycle > 0:
+        table.add_row("Remediation Cycle", str(state.remediation_cycle))
+
     if state.error:
         table.add_row("Error", f"[red]{state.error}[/red]")
 
@@ -293,6 +296,39 @@ def resume(
         raise typer.Exit(code=1)
 
 
+def _start_update_cycle(
+    project_dir: Path,
+    state: PipelineState,
+    state_mgr: StateManager,
+    change_input: str,
+    mode: str,
+    restart_phase: PipelinePhase,
+) -> None:
+    """Archive docs, write change input, reset state, and run the pipeline.
+
+    Shared by the ``update`` and ``remediate`` commands.
+    """
+    from agentic_dev.state.transitions import reset_for_update  # noqa: WPS433
+
+    doc_store = DocumentStore(project_dir)
+
+    cycle_label = (
+        f"cycle_{state.remediation_cycle}"
+        if mode == "remediate"
+        else f"update_{state.updated_at.strftime('%Y%m%dT%H%M%SZ')}"
+    )
+    doc_store.archive_cycle(cycle_label)
+    console.print(f"[cyan]Archived documents to docs/archive/{cycle_label}/[/cyan]")
+
+    doc_store.write("user_input", change_input)
+
+    state = reset_for_update(state, restart_phase, mode)
+    state_mgr.save(state)
+
+    console.print(f"[cyan]Restarting pipeline from {restart_phase}[/cyan]")
+    _run_pipeline(project_dir, state)
+
+
 @app.command()
 def update(
     app_name: str = typer.Argument(help="Name of the application to update"),
@@ -318,16 +354,13 @@ def update(
         doc_store = DocumentStore(project_dir)
 
         if change_request:
-            doc_store.write("change_request.md", change_request)
-            console.print("[green]Saved change request to docs/change_request.md[/green]")
+            change_input = change_request
         elif full_spec:
             spec_path = Path(full_spec)
             if not spec_path.exists():
                 console.print(f"[bold red]Spec file not found: {full_spec}[/bold red]")
                 raise typer.Exit(code=1)
-            new_input = spec_path.read_text(encoding="utf-8")
-            doc_store.write("user_input.md", new_input)
-            console.print("[green]Saved updated spec to docs/user_input.md[/green]")
+            change_input = spec_path.read_text(encoding="utf-8")
         else:
             console.print(
                 "[bold red]Provide --change-request or --full-spec.[/bold red]"
@@ -337,20 +370,76 @@ def update(
         # Determine restart phase using document diff
         from agentic_dev.documents.diff import diff_structured_input  # noqa: WPS433
 
-        restart_phase = "FEATURE_ANALYSIS"
+        restart_phase = PipelinePhase.FEATURE_ANALYSIS
         if full_spec and doc_store.exists("structured_input.md"):
             old_input = doc_store.read("structured_input.md")
-            new_input_text = doc_store.read("user_input.md")
-            diff_result = diff_structured_input(old_input, new_input_text)
-            restart_phase = diff_result.restart_from.upper()
+            diff_result = diff_structured_input(old_input, change_input)
+            restart_phase = PipelinePhase(diff_result.restart_from.upper())
 
-        state.mode = "update"
-        state.phase = PipelinePhase(restart_phase)
-        state.error = None
-        state_mgr.save(state)
+        _start_update_cycle(
+            project_dir=project_dir,
+            state=state,
+            state_mgr=state_mgr,
+            change_input=change_input,
+            mode="update",
+            restart_phase=restart_phase,
+        )
 
-        console.print(f"[cyan]Restarting pipeline from {restart_phase}[/cyan]")
-        _run_pipeline(project_dir, state)
+    except AgenticDevError as exc:
+        _display_error(exc)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def remediate(
+    app_name: str = typer.Argument(help="Name of the application to remediate"),
+    path: str | None = typer.Option(None, help="Directory containing the project"),
+) -> None:
+    """Fix UAT failures by running a full remediation pipeline cycle."""
+    try:
+        workspace_mgr = _get_workspace_manager(path)
+        project_dir = workspace_mgr.get_project_dir(app_name)
+
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+
+        if state.phase != PipelinePhase.COMPLETE:
+            console.print(
+                "[bold red]Project must be in COMPLETE state to remediate. "
+                f"Current phase: {state.phase}[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+        doc_store = DocumentStore(project_dir)
+
+        if not doc_store.exists("uat_report"):
+            console.print(
+                "[bold red]No UAT report found. Run the pipeline to completion first.[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+        uat_report = doc_store.read("uat_report")
+        if not uat_report.strip():
+            console.print("[bold red]UAT report is empty.[/bold red]")
+            raise typer.Exit(code=1)
+
+        from agentic_dev.orchestrator.uat_composer import compose_remediation_input  # noqa: WPS433
+
+        change_input = compose_remediation_input(uat_report, app_name)
+
+        console.print(
+            f"[cyan]Starting remediation cycle {state.remediation_cycle + 1} "
+            f"for {app_name}[/cyan]"
+        )
+
+        _start_update_cycle(
+            project_dir=project_dir,
+            state=state,
+            state_mgr=state_mgr,
+            change_input=change_input,
+            mode="remediate",
+            restart_phase=PipelinePhase.INPUT_PROCESSING,
+        )
 
     except AgenticDevError as exc:
         _display_error(exc)

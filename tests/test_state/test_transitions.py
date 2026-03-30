@@ -9,6 +9,7 @@ from agentic_dev.state.models import PipelinePhase, PipelineState
 from agentic_dev.state.transitions import (
     VALID_TRANSITIONS,
     advance_phase,
+    reset_for_update,
     resume_from_failure,
     validate_transition,
 )
@@ -59,6 +60,62 @@ class TestAdvancePhase:
         state = PipelineState(project_name="test-project")
         with pytest.raises(InvalidTransitionError):
             advance_phase(state, PipelinePhase.UAT)
+
+
+class TestResetForUpdate:
+    def test_reset_for_update_from_complete(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.COMPLETE,
+            total_cost_usd=5.0,
+        )
+        result = reset_for_update(state, PipelinePhase.FEATURE_ANALYSIS, "update")
+
+        assert result.phase == PipelinePhase.FEATURE_ANALYSIS
+        assert result.mode == "update"
+        assert result.sprints == []
+        assert result.agent_runs == []
+        assert result.error is None
+        assert result.current_sprint is None
+
+    def test_reset_for_update_preserves_cost(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.COMPLETE,
+            total_cost_usd=12.50,
+        )
+        result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
+
+        assert result.total_cost_usd == 12.50
+
+    def test_reset_for_remediation_increments_cycle(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.COMPLETE,
+            remediation_cycle=0,
+        )
+        result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "remediate")
+
+        assert result.mode == "remediate"
+        assert result.remediation_cycle == 1
+
+    def test_reset_for_remediation_increments_from_existing(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.COMPLETE,
+            remediation_cycle=2,
+        )
+        result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "remediate")
+
+        assert result.remediation_cycle == 3
+
+    def test_reset_rejects_non_complete(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.SPRINTING,
+        )
+        with pytest.raises(InvalidTransitionError):
+            reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
 
 
 class TestResumeFromFailure:

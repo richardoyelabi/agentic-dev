@@ -72,7 +72,7 @@ class PipelineState(BaseModel):
 
     project_name: str
     phase: PipelinePhase = PipelinePhase.IDLE
-    mode: Literal["new", "update"] = "new"
+    mode: Literal["new", "update", "remediate"] = "new"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     sprints: list[SprintState] = Field(default_factory=list)
@@ -81,4 +81,5 @@ class PipelineState(BaseModel):
     error: str | None = None
     failed_at_phase: PipelinePhase | None = None
     total_cost_usd: float = 0.0
+    remediation_cycle: int = 0
     agent_runs: list[AgentRunRecord] = Field(default_factory=list)

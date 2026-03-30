@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from agentic_dev.cli import app
 from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, CONFIG_FILE
+from agentic_dev.documents.store import DocumentStore
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import PipelinePhase, PipelineState
@@ -428,7 +429,6 @@ class TestUpdateCommand:
     def test_change_request_saves_doc(
         self, mock_run_pipeline, project_with_state: Path
     ) -> None:
-        # Set state to COMPLETE
         state_mgr = StateManager(project_with_state / "test-app")
         state = state_mgr.load()
         state.phase = PipelinePhase.COMPLETE
@@ -444,9 +444,60 @@ class TestUpdateCommand:
         )
 
         assert result.exit_code == 0, result.output
-        cr_path = project_with_state / "test-app" / "docs" / "change_request.md"
-        assert cr_path.exists()
-        assert "dark mode" in cr_path.read_text(encoding="utf-8").lower()
+        user_input_path = project_with_state / "test-app" / "docs" / "user_input"
+        assert user_input_path.exists()
+        assert "dark mode" in user_input_path.read_text(encoding="utf-8").lower()
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_update_archives_docs(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        project_dir = project_with_state / "test-app"
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        # Write a doc that should be archived
+        doc_store = DocumentStore(project_dir)
+        doc_store.write("features.md", "original features")
+
+        result = runner.invoke(
+            app,
+            [
+                "update", "test-app",
+                "--change-request", "Add dark mode",
+                "--path", str(project_with_state),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        archive_dir = project_dir / "docs" / "archive"
+        assert archive_dir.exists()
+        # At least one archive subdirectory should exist
+        assert len(list(archive_dir.iterdir())) >= 1
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_update_resets_state(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        runner.invoke(
+            app,
+            [
+                "update", "test-app",
+                "--change-request", "Add dark mode",
+                "--path", str(project_with_state),
+            ],
+        )
+
+        updated_state = state_mgr.load()
+        assert updated_state.mode == "update"
+        assert updated_state.phase == PipelinePhase.FEATURE_ANALYSIS
 
     def test_no_option_fails(self, project_with_state: Path) -> None:
         state_mgr = StateManager(project_with_state / "test-app")
@@ -467,3 +518,133 @@ class TestUpdateCommand:
             ["update", "nonexistent", "--change-request", "x", "--path", str(tmp_path)],
         )
         assert result.exit_code == 1
+
+
+class TestRemediateCommand:
+    def test_requires_complete_state(self, project_with_state: Path) -> None:
+        result = runner.invoke(
+            app,
+            ["remediate", "test-app", "--path", str(project_with_state)],
+        )
+
+        assert result.exit_code == 1
+        assert "COMPLETE" in result.output
+
+    def test_requires_uat_report(self, project_with_state: Path) -> None:
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["remediate", "test-app", "--path", str(project_with_state)],
+        )
+
+        assert result.exit_code == 1
+        assert "UAT report" in result.output
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_remediate_resets_and_runs_pipeline(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        project_dir = project_with_state / "test-app"
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        doc_store = DocumentStore(project_dir)
+        doc_store.write("uat_report", "FAIL: Missing empty state handling.")
+
+        result = runner.invoke(
+            app,
+            ["remediate", "test-app", "--path", str(project_with_state)],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_run_pipeline.assert_called_once()
+
+        updated_state = state_mgr.load()
+        assert updated_state.mode == "remediate"
+        assert updated_state.phase == PipelinePhase.INPUT_PROCESSING
+        assert updated_state.remediation_cycle == 1
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_remediate_writes_composed_input(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        project_dir = project_with_state / "test-app"
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        doc_store = DocumentStore(project_dir)
+        doc_store.write("uat_report", "FAIL: Missing confirmation dialog.")
+
+        runner.invoke(
+            app,
+            ["remediate", "test-app", "--path", str(project_with_state)],
+        )
+
+        user_input = doc_store.read("user_input")
+        assert "Remediation Request" in user_input
+        assert "Missing confirmation dialog" in user_input
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_remediate_archives_docs(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        project_dir = project_with_state / "test-app"
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        doc_store = DocumentStore(project_dir)
+        doc_store.write("uat_report", "FAIL: Something broke.")
+        doc_store.write("features.md", "original features")
+
+        runner.invoke(
+            app,
+            ["remediate", "test-app", "--path", str(project_with_state)],
+        )
+
+        archive_dir = project_dir / "docs" / "archive" / "cycle_0"
+        assert archive_dir.exists()
+        assert (archive_dir / "features.md").exists()
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_remediate_increments_cycle(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        project_dir = project_with_state / "test-app"
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.remediation_cycle = 2
+        state_mgr.save(state)
+
+        doc_store = DocumentStore(project_dir)
+        doc_store.write("uat_report", "FAIL: Still broken.")
+
+        runner.invoke(
+            app,
+            ["remediate", "test-app", "--path", str(project_with_state)],
+        )
+
+        updated_state = state_mgr.load()
+        assert updated_state.remediation_cycle == 3
+
+    def test_missing_project_fails(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app,
+            ["remediate", "nonexistent", "--path", str(tmp_path)],
+        )
+        assert result.exit_code == 1
+
+    def test_remediate_help(self) -> None:
+        result = runner.invoke(app, ["remediate", "--help"])
+        assert result.exit_code == 0
+        assert "UAT" in result.output or "remediat" in result.output.lower()

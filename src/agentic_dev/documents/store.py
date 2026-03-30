@@ -1,5 +1,6 @@
 """Document storage for reading and writing pipeline documents."""
 
+import shutil
 from pathlib import Path
 
 from agentic_dev.exceptions import DocumentError
@@ -49,3 +50,26 @@ class DocumentStore:
         if not qa_dir.exists():
             return []
         return sorted(f.name for f in qa_dir.glob("*.md"))
+
+    def archive_cycle(self, cycle_label: str) -> Path:
+        """Copy all current docs to docs/archive/{cycle_label}/.
+
+        Copies everything in docs/ except the archive/ directory itself.
+        Returns the archive directory path.
+        """
+        archive_dir = self.docs_dir / "archive" / cycle_label
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        if not self.docs_dir.exists():
+            return archive_dir
+
+        for item in self.docs_dir.iterdir():
+            if item.name == "archive":
+                continue
+            dest = archive_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
+
+        return archive_dir

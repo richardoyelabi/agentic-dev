@@ -41,6 +41,36 @@ def advance_phase(
     return state
 
 
+def reset_for_update(
+    state: PipelineState,
+    restart_phase: PipelinePhase,
+    mode: str,
+) -> PipelineState:
+    """Reset a COMPLETE pipeline for an update or remediation cycle.
+
+    Preserves total_cost_usd. Clears sprints, agent_runs, error.
+    Sets phase to restart_phase and mode to the given mode.
+    If mode is "remediate", increments remediation_cycle.
+
+    Raises InvalidTransitionError if state is not in COMPLETE phase.
+    """
+    if state.phase != PipelinePhase.COMPLETE:
+        raise InvalidTransitionError(state.phase, PipelinePhase.COMPLETE)
+
+    state.phase = restart_phase
+    state.mode = mode  # type: ignore[assignment]
+    state.sprints = []
+    state.agent_runs = []
+    state.current_sprint = None
+    state.error = None
+    state.failed_at_phase = None
+    state.checkpoint_feedback = None
+    if mode == "remediate":
+        state.remediation_cycle += 1
+    state.updated_at = datetime.now(timezone.utc)
+    return state
+
+
 def resume_from_failure(state: PipelineState) -> PipelineState:
     """Reset a FAILED state back to the phase where it failed, clearing the error.
 
