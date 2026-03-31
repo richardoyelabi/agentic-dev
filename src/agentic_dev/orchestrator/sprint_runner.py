@@ -156,6 +156,7 @@ class SprintRunner:
                 workspace=self._project_dir,
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
+                qa_output_key="integration_guide",
             )
             partial_cost[0] += (
                 integration_result.action_cost

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
 
 from agentic_dev.config import PROMPT_TEMPLATES_DIR
 from agentic_dev.exceptions import AgenticDevError
@@ -23,6 +23,7 @@ class PromptRenderer:
         self._templates_dir = templates_dir or PROMPT_TEMPLATES_DIR
         self._env = Environment(
             loader=FileSystemLoader(str(self._templates_dir)),
+            undefined=StrictUndefined,
             keep_trailing_newline=True,
             trim_blocks=True,
             lstrip_blocks=True,

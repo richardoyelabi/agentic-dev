@@ -34,6 +34,7 @@ async def run_qa_cycle(
     workspace: Path,
     doc_store: DocumentStore,
     prompt_renderer: PromptRenderer,
+    qa_output_key: str | None = None,
 ) -> QACycleResult:
     """Execute one action -> QA -> optional correction cycle.
 
@@ -64,7 +65,8 @@ async def run_qa_cycle(
     doc_store.write(output_doc_name, action_result.text)
 
     # 3. Render and run the QA agent
-    qa_input_docs = {**input_docs, output_doc_name: action_result.text}
+    qa_key = qa_output_key or output_doc_name
+    qa_input_docs = {**input_docs, qa_key: action_result.text}
     qa_prompt = prompt_renderer.render_agent_prompt(
         template_name=qa_agent.prompt_template,
         input_documents=qa_input_docs,
@@ -76,6 +78,12 @@ async def run_qa_cycle(
         prompt=qa_prompt,
         working_dir=workspace,
     )
+
+    if not qa_result.text.strip():
+        raise AgentRunError(
+            agent_name=qa_agent.name,
+            message="QA agent returned empty output",
+        )
 
     # 4. Save the QA report
     qa_report_name = f"qa_reports/{output_doc_name}"

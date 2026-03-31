@@ -64,7 +64,7 @@ class TestOnboardingCLI:
         mock_analyze_codebase.assert_called_once()
         mock_analyze_figma.assert_called_once()
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Build a dashboard" in content
         assert "Codebase Analysis" in content
@@ -100,7 +100,7 @@ class TestOnboardingCLI:
         assert result.exit_code == 0, result.output
         mock_analyze_figma.assert_called_once()
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Design Analysis" in content
         assert "Build a landing page" in content
@@ -130,7 +130,7 @@ class TestOnboardingCLI:
         )
 
         assert result.exit_code == 0, result.output
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content
 
@@ -245,7 +245,7 @@ class TestOnboardingCLI:
         assert result.exit_code == 0, result.output
         mock_run_pipeline.assert_called_once()
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content
         assert "Design Analysis" in content
@@ -281,7 +281,7 @@ class TestMultiSourceOnboarding:
         assert result.exit_code == 0, result.output
         assert mock_analyze_codebase.call_count == 2
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Frontend: React" in content
         assert "Backend: Django" in content
@@ -315,7 +315,7 @@ class TestMultiSourceOnboarding:
         assert result.exit_code == 0, result.output
         assert mock_analyze_figma.call_count == 2
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "App UI" in content
         assert "Admin Panel" in content
@@ -346,7 +346,7 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Source: Codebase - Frontend React app" in content
         assert "/path/frontend" in content
@@ -382,7 +382,7 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Source: Figma Design - Admin dashboard" in content
         assert "https://figma.com/file/abc" in content
@@ -430,7 +430,7 @@ class TestMultiSourceOnboarding:
         assert mock_analyze_codebase.call_count == 2
         assert mock_analyze_figma.call_count == 2
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Source: Codebase - Frontend" in content
         assert "Source: Codebase - Backend API" in content
@@ -464,6 +464,6 @@ class TestMultiSourceOnboarding:
         assert result.exit_code == 0, result.output
         mock_analyze_codebase.assert_called_once()
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content

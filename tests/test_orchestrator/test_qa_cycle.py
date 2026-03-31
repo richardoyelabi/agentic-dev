@@ -284,3 +284,113 @@ async def test_empty_correction_output_raises_error(
             doc_store=doc_store,
             prompt_renderer=prompt_renderer,
         )
+
+
+@pytest.mark.asyncio
+async def test_qa_output_key_overrides_output_doc_name_for_qa_input(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When qa_output_key is provided, the QA agent receives the action output
+    under that key instead of the output_doc_name."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={"api_contract": "contract"},
+        output_doc_name="sprint_1_integration",
+        qa_output_key="integration_guide",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    # The QA prompt should be rendered with 'integration_guide' as the key
+    qa_render_call = prompt_renderer.render_agent_prompt.call_args_list[1]
+    qa_input_docs = qa_render_call.kwargs.get(
+        "input_documents",
+        qa_render_call.args[1] if len(qa_render_call.args) > 1 else None,
+    )
+    assert "integration_guide" in qa_input_docs
+    assert qa_input_docs["integration_guide"] == "action output"
+    # The dynamic output_doc_name should NOT be a key
+    assert "sprint_1_integration" not in qa_input_docs
+
+
+@pytest.mark.asyncio
+async def test_qa_output_key_defaults_to_output_doc_name(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When qa_output_key is not provided, behavior is unchanged."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={"req": "requirements"},
+        output_doc_name="result.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    qa_render_call = prompt_renderer.render_agent_prompt.call_args_list[1]
+    qa_input_docs = qa_render_call.kwargs.get(
+        "input_documents",
+        qa_render_call.args[1] if len(qa_render_call.args) > 1 else None,
+    )
+    assert "result.md" in qa_input_docs
+
+
+@pytest.mark.asyncio
+async def test_empty_qa_output_raises_error(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """An empty result from the QA agent should raise AgentRunError."""
+    claude.run.side_effect = [
+        _make_claude_result("valid action output", cost=0.15),
+        _make_claude_result("", cost=0.10),
+    ]
+
+    with pytest.raises(AgentRunError, match="QA agent returned empty output"):
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={"input.md": "requirements"},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+        )
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_qa_output_raises_error(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """Whitespace-only QA output should also raise AgentRunError."""
+    claude.run.side_effect = [
+        _make_claude_result("valid action output", cost=0.15),
+        _make_claude_result("   \n  ", cost=0.10),
+    ]
+
+    with pytest.raises(AgentRunError, match="QA agent returned empty output"):
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={"input.md": "requirements"},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+        )

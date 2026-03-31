@@ -276,7 +276,7 @@ class PipelineEngine:
     async def _run_uat(self, state: PipelineState) -> PipelineState:
         """Run the UAT agent (no QA cycle)."""
         input_docs = {}
-        for doc_name in ["features", "frontend_spec", "backend_spec", "api_contract"]:
+        for doc_name in ["features", "frontend_spec", "backend_spec", "api_contract", "sprint_plan"]:
             if self._doc_store.exists(doc_name):
                 input_docs[doc_name] = self._doc_store.read(doc_name)
 

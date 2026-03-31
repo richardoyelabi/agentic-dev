@@ -143,7 +143,7 @@ class TestNewCommand:
         )
 
         assert result.exit_code == 0, result.output
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         assert user_input_path.exists()
         assert "todo" in user_input_path.read_text(encoding="utf-8").lower()
 
@@ -198,7 +198,7 @@ class TestNewCommand:
 
         assert result.exit_code == 0, result.output
         mock_analyze.assert_called_once()
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input"
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content
 
@@ -444,7 +444,7 @@ class TestUpdateCommand:
         )
 
         assert result.exit_code == 0, result.output
-        user_input_path = project_with_state / "test-app" / "docs" / "user_input"
+        user_input_path = project_with_state / "test-app" / "docs" / "user_input.md"
         assert user_input_path.exists()
         assert "dark mode" in user_input_path.read_text(encoding="utf-8").lower()
 

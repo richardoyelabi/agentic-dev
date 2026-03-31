@@ -6,27 +6,19 @@ You are an independent architecture reviewer. You evaluate software specificatio
 
 **Important: Output your entire response as plain text in this message. Do not use any tools, do not write to files, do not create a plan. Write everything directly here.**
 
-Review the Frontend Spec, Backend Spec, and API Contract for internal consistency, completeness against the Features Request, and absence of duplication. The API Contract must be the single source of truth for the frontend/backend interface.
+Review the Architecture document (containing the Frontend Spec, Backend Spec, and API Contract) for internal consistency, completeness against the Features Request, and absence of duplication. The API Contract must be the single source of truth for the frontend/backend interface.
 
 # Input: Features Request
 
-{{ features_request }}
+{{ features }}
 
 # Input: Structured Input
 
 {{ structured_input }}
 
-# Input: Frontend Spec
+# Input: Architecture (Frontend Spec + Backend Spec + API Contract)
 
-{{ frontend_spec }}
-
-# Input: Backend Spec
-
-{{ backend_spec }}
-
-# Input: API Contract
-
-{{ api_contract }}
+{{ architecture }}
 
 # Evaluation Criteria
 

@@ -116,3 +116,46 @@ class TestArchiveCycle:
         store.archive_cycle("cycle_0")
 
         assert store.read("features.md") == "original"
+
+
+class TestAutoMdExtension:
+    """DocumentStore should auto-append .md extension for easier viewing."""
+
+    def test_write_without_extension_creates_md_file(self, store):
+        path = store.write("features", "content")
+        assert path.suffix == ".md"
+        assert path.name == "features.md"
+
+    def test_read_without_extension_finds_md_file(self, store):
+        store.write("features", "content")
+        assert store.read("features") == "content"
+
+    def test_exists_without_extension_finds_md_file(self, store):
+        store.write("features", "content")
+        assert store.exists("features") is True
+
+    def test_write_with_md_extension_does_not_double(self, store):
+        path = store.write("features.md", "content")
+        assert path.name == "features.md"
+        assert not (store.docs_dir / "features.md.md").exists()
+
+    def test_roundtrip_mixed_extensions(self, store):
+        """Write without extension, read with extension, and vice versa."""
+        store.write("features", "content A")
+        assert store.read("features.md") == "content A"
+
+        store.write("architecture.md", "content B")
+        assert store.read("architecture") == "content B"
+
+    def test_list_documents_finds_auto_extended_files(self, store):
+        store.write("features", "a")
+        store.write("architecture", "b")
+        result = store.list_documents()
+        assert "architecture.md" in result
+        assert "features.md" in result
+
+    def test_qa_reports_auto_extended(self, store):
+        store.write("qa_reports/sprint_1_backend", "report")
+        assert store.read("qa_reports/sprint_1_backend") == "report"
+        result = store.list_qa_reports()
+        assert "sprint_1_backend.md" in result
