@@ -2,7 +2,11 @@
 
 from pydantic import BaseModel
 
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import CheckpointDecisionEvent
 from agentic_dev.state.models import PipelinePhase
+
+_event_log = get_event_logger("checkpoint")
 
 
 class CheckpointConfig(BaseModel):
@@ -20,12 +24,22 @@ def should_pause(
 ) -> bool:
     """Return True if the pipeline should pause at the given phase."""
     if phase == PipelinePhase.DESIGN_CHECKPOINT:
-        return config.after_design
-    if phase == PipelinePhase.SPRINTING and sprint_just_completed:
-        return config.after_each_sprint
-    if phase == PipelinePhase.UAT:
-        return config.before_uat
-    return False
+        result = config.after_design
+    elif phase == PipelinePhase.SPRINTING and sprint_just_completed:
+        result = config.after_each_sprint
+    elif phase == PipelinePhase.UAT:
+        result = config.before_uat
+    else:
+        result = False
+
+    emit(_event_log, CheckpointDecisionEvent(
+        phase=str(phase),
+        should_pause=result,
+        config_snapshot=config.model_dump(),
+        message=f"Checkpoint at {phase}: {'pausing' if result else 'continuing'}",
+    ))
+
+    return result
 
 
 def from_autonomy_level(level: str) -> CheckpointConfig:

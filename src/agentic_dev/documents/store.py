@@ -4,6 +4,10 @@ import shutil
 from pathlib import Path
 
 from agentic_dev.exceptions import DocumentError
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import DocumentWriteEvent, DocumentReadEvent, DocumentArchiveEvent
+
+_event_log = get_event_logger("documents")
 
 
 class DocumentStore:
@@ -29,6 +33,12 @@ class DocumentStore:
         target = self._resolve(doc_name)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+        emit(_event_log, DocumentWriteEvent(
+            doc_name=doc_name,
+            content_length=len(content),
+            path=str(target),
+            message=f"Wrote {doc_name} ({len(content)} chars)",
+        ))
         return target
 
     def read(self, doc_name: str) -> str:
@@ -39,7 +49,14 @@ class DocumentStore:
         target = self._resolve(doc_name)
         if not target.exists():
             raise DocumentError(f"Document not found: {target}")
-        return target.read_text(encoding="utf-8")
+        content = target.read_text(encoding="utf-8")
+        emit(_event_log, DocumentReadEvent(
+            doc_name=doc_name,
+            content_length=len(content),
+            path=str(target),
+            message=f"Read {doc_name} ({len(content)} chars)",
+        ))
+        return content
 
     def exists(self, doc_name: str) -> bool:
         """Check whether a document exists."""
@@ -79,4 +96,9 @@ class DocumentStore:
             else:
                 shutil.copy2(item, dest)
 
+        emit(_event_log, DocumentArchiveEvent(
+            cycle_label=cycle_label,
+            archive_path=str(archive_dir),
+            message=f"Archived documents to {archive_dir}",
+        ))
         return archive_dir

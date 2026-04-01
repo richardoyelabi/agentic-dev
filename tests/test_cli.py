@@ -352,15 +352,19 @@ class TestLogsCommand:
         )
 
         assert result.exit_code == 0
-        assert "No log files" in result.output or "No matching" in result.output
+        assert "No log files" in result.output or "No pipeline runs" in result.output
 
-    def test_displays_log_files(self, project_with_state: Path) -> None:
+    def test_displays_pipeline_log(self, project_with_state: Path) -> None:
         logs_dir = (
             project_with_state / "test-app" / AGENTIC_DEV_METADATA_DIR / "logs"
         )
-        (logs_dir / "architect-sprint-1.log").write_text(
+        run_dir = logs_dir / "runs" / "abc123def456"
+        run_dir.mkdir(parents=True)
+        (run_dir / "pipeline.log").write_text(
             "Log content here", encoding="utf-8"
         )
+        latest = logs_dir / "latest"
+        latest.symlink_to(run_dir)
 
         result = runner.invoke(
             app,
@@ -374,8 +378,14 @@ class TestLogsCommand:
         logs_dir = (
             project_with_state / "test-app" / AGENTIC_DEV_METADATA_DIR / "logs"
         )
-        (logs_dir / "architect-sprint-1.log").write_text("arch log", encoding="utf-8")
-        (logs_dir / "frontend-sprint-1.log").write_text("fe log", encoding="utf-8")
+        dumps_dir = logs_dir / "agent_dumps"
+        dumps_dir.mkdir(parents=True)
+        (dumps_dir / "architect_20260401T143201Z.json").write_text(
+            '{"agent": "architect"}', encoding="utf-8"
+        )
+        (dumps_dir / "frontend_20260401T143201Z.json").write_text(
+            '{"agent": "frontend"}', encoding="utf-8"
+        )
 
         result = runner.invoke(
             app,
@@ -383,24 +393,24 @@ class TestLogsCommand:
         )
 
         assert result.exit_code == 0
-        assert "arch log" in result.output
-        assert "fe log" not in result.output
+        assert "architect" in result.output
+        assert "frontend" not in result.output
 
-    def test_filter_by_sprint(self, project_with_state: Path) -> None:
+    def test_view_specific_run(self, project_with_state: Path) -> None:
         logs_dir = (
             project_with_state / "test-app" / AGENTIC_DEV_METADATA_DIR / "logs"
         )
-        (logs_dir / "architect-sprint-1.log").write_text("sprint 1", encoding="utf-8")
-        (logs_dir / "architect-sprint-2.log").write_text("sprint 2", encoding="utf-8")
+        run_dir = logs_dir / "runs" / "specific123ab"
+        run_dir.mkdir(parents=True)
+        (run_dir / "pipeline.log").write_text("specific run log", encoding="utf-8")
 
         result = runner.invoke(
             app,
-            ["logs", "test-app", "--sprint", "2", "--path", str(project_with_state)],
+            ["logs", "test-app", "--run", "specific123ab", "--path", str(project_with_state)],
         )
 
         assert result.exit_code == 0
-        assert "sprint 2" in result.output
-        assert "sprint 1" not in result.output
+        assert "specific run log" in result.output
 
     def test_missing_project_fails(self, tmp_path: Path) -> None:
         result = runner.invoke(

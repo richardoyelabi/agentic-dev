@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+import traceback
 from pathlib import Path
 
 import typer
@@ -15,7 +16,9 @@ from agentic_dev.config import (
     AGENTIC_DEV_METADATA_DIR,
     CONFIG_FILE,
     DEFAULT_PROJECTS_DIR,
+    LATEST_SYMLINK,
     LOGS_DIR,
+    RUNS_DIR,
 )
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgenticDevError, CheckpointPause
@@ -152,6 +155,19 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
     from agentic_dev.agents.registry import AgentRegistry  # noqa: WPS433
     from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
     from agentic_dev.config import AGENT_DEFINITIONS_DIR, PROMPT_TEMPLATES_DIR  # noqa: WPS433
+    from agentic_dev.logging import (  # noqa: WPS433
+        emit,
+        generate_run_id,
+        get_event_logger,
+        setup_logging,
+        teardown_logging,
+    )
+    from agentic_dev.logging.events import (  # noqa: WPS433
+        PipelineCheckpointEvent,
+        PipelineCompleteEvent,
+        PipelineFailedEvent,
+        PipelineStartEvent,
+    )
     from agentic_dev.orchestrator.engine import PipelineEngine  # noqa: WPS433
     from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
 
@@ -173,13 +189,54 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
         checkpoint_config=checkpoint_config,
     )
 
+    run_id = generate_run_id()
+    _event_log = get_event_logger("pipeline")
+    setup_logging(run_id, state.project_name, log_dir, console)
+
+    from datetime import datetime, timezone  # noqa: WPS433
+
+    start_time = datetime.now(timezone.utc)
+
+    emit(_event_log, PipelineStartEvent(
+        mode=state.mode,
+        phase=str(state.phase),
+        command_args={},
+        message=f"Pipeline started (mode={state.mode}, phase={state.phase})",
+    ))
+
     try:
         asyncio.run(engine.run())
+        duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+        current_state = state_manager.load()
+        emit(_event_log, PipelineCompleteEvent(
+            total_cost_usd=current_state.total_cost_usd,
+            total_duration_s=duration_s,
+            sprint_count=len(current_state.sprints),
+            message=f"Pipeline complete (${current_state.total_cost_usd:.4f}, {duration_s:.1f}s)",
+        ))
+        teardown_logging()
         console.print("[bold green]Pipeline completed successfully.[/bold green]")
     except CheckpointPause:
         current_state = state_manager.load()
+        docs = doc_store.list_documents()
+        emit(_event_log, PipelineCheckpointEvent(
+            phase=str(current_state.phase),
+            total_cost_usd=current_state.total_cost_usd,
+            documents_produced=docs,
+            message=f"Pipeline paused at checkpoint ({current_state.phase})",
+        ))
+        teardown_logging()
         _display_checkpoint(current_state, project_dir)
     except AgenticDevError as exc:
+        duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+        emit(_event_log, PipelineFailedEvent(
+            error=str(exc),
+            failed_at_phase=str(state.phase),
+            traceback=traceback.format_exc(),
+            level="ERROR",
+            message=f"Pipeline failed at {state.phase}: {exc}",
+        ))
+        teardown_logging()
         _display_error(exc)
         raise typer.Exit(code=1)
 
@@ -530,37 +587,72 @@ def config(
 @app.command()
 def logs(
     app_name: str = typer.Argument(help="Name of the application"),
-    agent: str | None = typer.Option(None, help="Filter by agent name"),
-    sprint: int | None = typer.Option(None, help="Filter by sprint number"),
+    run: str | None = typer.Option(None, help="Specific run ID to view"),
+    jsonl: bool = typer.Option(False, "--jsonl", help="Show JSON lines instead of human-readable log"),
+    agent: str | None = typer.Option(None, help="Filter agent dumps by agent name"),
     path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
-    """View agent run logs."""
+    """View pipeline run logs or agent dumps."""
     try:
         workspace_mgr = _get_workspace_manager(path)
         project_dir = workspace_mgr.get_project_dir(app_name)
 
         logs_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
-        if not logs_dir.exists() or not list(logs_dir.iterdir()):
+        if not logs_dir.exists():
             console.print("[yellow]No log files found.[/yellow]")
             return
 
-        log_files = sorted(logs_dir.glob("*.log"))
-
+        # If --agent is specified, show agent dumps
         if agent:
-            log_files = [f for f in log_files if agent in f.name]
-        if sprint is not None:
-            log_files = [f for f in log_files if f"sprint-{sprint}" in f.name]
-
-        if not log_files:
-            console.print("[yellow]No matching log files found.[/yellow]")
+            dumps_dir = logs_dir / "agent_dumps"
+            if not dumps_dir.exists():
+                console.print("[yellow]No agent dumps found.[/yellow]")
+                return
+            dump_files = sorted(dumps_dir.glob(f"*{agent}*.json"))
+            if not dump_files:
+                console.print(f"[yellow]No dumps found for agent '{agent}'.[/yellow]")
+                return
+            for dump_file in dump_files:
+                console.print(Panel(
+                    dump_file.read_text(encoding="utf-8"),
+                    title=dump_file.name,
+                    border_style="blue",
+                ))
             return
 
-        for log_file in log_files:
-            console.print(Panel(
-                log_file.read_text(encoding="utf-8"),
-                title=log_file.name,
-                border_style="blue",
-            ))
+        # Otherwise show pipeline run logs
+        runs_dir = logs_dir / RUNS_DIR
+        if run:
+            run_dir = runs_dir / run
+        else:
+            latest = logs_dir / LATEST_SYMLINK
+            if latest.is_symlink() or latest.exists():
+                run_dir = latest.resolve()
+            elif runs_dir.exists():
+                run_dirs = sorted(runs_dir.iterdir())
+                if not run_dirs:
+                    console.print("[yellow]No pipeline runs found.[/yellow]")
+                    return
+                run_dir = run_dirs[-1]
+            else:
+                console.print("[yellow]No pipeline runs found.[/yellow]")
+                return
+
+        if not run_dir.exists():
+            console.print(f"[yellow]Run directory not found: {run_dir}[/yellow]")
+            return
+
+        log_file = run_dir / ("events.jsonl" if jsonl else "pipeline.log")
+        if not log_file.exists():
+            console.print(f"[yellow]Log file not found: {log_file.name}[/yellow]")
+            return
+
+        run_id = run_dir.name
+        console.print(Panel(
+            log_file.read_text(encoding="utf-8"),
+            title=f"Run {run_id} — {log_file.name}",
+            border_style="blue",
+        ))
 
     except AgenticDevError as exc:
         _display_error(exc)

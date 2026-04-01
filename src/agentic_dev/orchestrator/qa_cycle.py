@@ -7,8 +7,18 @@ from agentic_dev.agents.base import AgentDefinition
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.context import get_run_context
+from agentic_dev.logging.events import (
+    QACycleStartEvent,
+    QACycleVerdictEvent,
+    QACycleCorrectionEvent,
+    QACycleCompleteEvent,
+)
 from agentic_dev.orchestrator.agent_bridge import to_run_config
 from agentic_dev.prompts.renderer import PromptRenderer
+
+_event_log = get_event_logger("qa_cycle")
 
 ISSUES_FOUND_MARKER = "ISSUES_FOUND"
 
@@ -42,6 +52,17 @@ async def run_qa_cycle(
     ``ISSUES_FOUND`` in its output), the action agent runs once more with
     the original inputs plus the QA feedback. No retry loops.
     """
+    ctx = get_run_context()
+    sprint = ctx.sprint_number if ctx else None
+
+    emit(_event_log, QACycleStartEvent(
+        action_agent=action_agent.name,
+        qa_agent=qa_agent.name,
+        output_doc_name=output_doc_name,
+        sprint=sprint,
+        message=f"QA cycle: {action_agent.name} -> {qa_agent.name} for '{output_doc_name}'",
+    ))
+
     # 1. Render and run the action agent
     action_prompt = prompt_renderer.render_agent_prompt(
         template_name=action_agent.prompt_template,
@@ -94,7 +115,16 @@ async def run_qa_cycle(
     corrected = False
     final_output = action_result.text
 
-    if ISSUES_FOUND_MARKER in qa_result.text:
+    issues_found = ISSUES_FOUND_MARKER in qa_result.text
+    emit(_event_log, QACycleVerdictEvent(
+        action_agent=action_agent.name,
+        qa_agent=qa_agent.name,
+        issues_found=issues_found,
+        sprint=sprint,
+        message=f"QA verdict: {'issues found' if issues_found else 'approved'} ({qa_agent.name})",
+    ))
+
+    if issues_found:
         correction_prompt = prompt_renderer.render_agent_prompt(
             template_name=action_agent.prompt_template,
             input_documents=input_docs,
@@ -109,6 +139,12 @@ async def run_qa_cycle(
             working_dir=workspace,
         )
         correction_cost = correction_result.cost_usd
+        emit(_event_log, QACycleCorrectionEvent(
+            action_agent=action_agent.name,
+            correction_cost=correction_cost,
+            sprint=sprint,
+            message=f"Correction applied for {action_agent.name} (${correction_cost:.4f})",
+        ))
         corrected = True
         final_output = correction_result.text
 
@@ -119,6 +155,16 @@ async def run_qa_cycle(
             )
 
         doc_store.write(output_doc_name, final_output)
+
+    total_cost = action_result.cost_usd + qa_result.cost_usd + correction_cost
+    emit(_event_log, QACycleCompleteEvent(
+        action_agent=action_agent.name,
+        qa_agent=qa_agent.name,
+        corrected=corrected,
+        total_cost=total_cost,
+        sprint=sprint,
+        message=f"QA cycle complete: {action_agent.name} ({'corrected' if corrected else 'clean'}, ${total_cost:.4f})",
+    ))
 
     return QACycleResult(
         output=final_output,

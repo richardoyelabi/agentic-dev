@@ -233,7 +233,7 @@ class TestLogging:
         with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_process):
             await runner.run(agent, "test prompt", tmp_path)
 
-        log_files = list(log_dir.glob("test_agent_*.json"))
+        log_files = list((log_dir / "agent_dumps").glob("test_agent_*.json"))
         assert len(log_files) == 1
 
         log_data = json.loads(log_files[0].read_text(encoding="utf-8"))
