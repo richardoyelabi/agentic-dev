@@ -23,10 +23,10 @@ A Python CLI tool (`agentic-dev`) that orchestrates Claude Code CLI sessions to 
 | | Architect QA | opus | Reviews specs for consistency, no duplication |
 | | Sprint Planner | sonnet | Breaks features into feature-based sprints |
 | | Sprint Planner QA | opus | Reviews sprint decomposition |
-| Frontend | Frontend Developer | sonnet | Implements frontend per sprint using superpowers |
-| | Frontend QA | opus | Reviews frontend code independently |
-| Backend | Backend Developer | sonnet | Implements backend per sprint using superpowers |
-| | Backend QA | opus | Reviews backend code independently |
+| Frontend | Frontend Developer | sonnet | Implements frontend per sprint using superpowers; maintains README.md and ARCHITECTURE.md |
+| | Frontend QA | opus | Reviews frontend code and documentation independently |
+| Backend | Backend Developer | sonnet | Implements backend per sprint using superpowers; maintains README.md and ARCHITECTURE.md |
+| | Backend QA | opus | Reviews backend code and documentation independently |
 | Integration | Integration Agent | sonnet | Connects third-party services via MCPs |
 | | Integration QA | opus | Reviews integration work |
 | QA | UAT Agent | opus | User acceptance testing across full stack |
@@ -97,12 +97,13 @@ Every action agent in the pipeline has an independent QA counterpart, with two i
 3. If QA found issues: run action agent again with input + previous output + QA feedback
 4. Done. One cycle only. No loops.
 
-QA evaluates against 5 criteria:
+QA evaluates against 6 criteria:
 - Does it do what it's supposed to do?
 - Does it work well?
 - Is it reasonably well designed?
 - Is it safe (no security vulnerabilities)?
 - No obvious scaling issues?
+- Is it documented? (Frontend/Backend QA only: README.md and ARCHITECTURE.md are present, accurate, and free of stale references)
 
 ## Sprint System
 
@@ -204,7 +205,7 @@ Output feeds into the normal pipeline as additional context for the Input Proces
 └── backend/               # Separate git repo with CLAUDE.md + CI/CD
 ```
 
-Each generated repo gets a tailored `CLAUDE.md` and a `.github/workflows/ci.yml` for CI/CD.
+Each generated repo gets a tailored `CLAUDE.md`, a `.github/workflows/ci.yml` for CI/CD, and developer-maintained documentation (`README.md` and `ARCHITECTURE.md`) that is updated incrementally each sprint.
 
 **Generated CLAUDE.md content includes:**
 - Project name and tech stack summary

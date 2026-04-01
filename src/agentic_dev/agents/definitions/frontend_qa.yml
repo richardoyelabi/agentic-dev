@@ -17,3 +17,4 @@ constraints:
   - "Check for security vulnerabilities (XSS, injection)"
   - "Check for obvious scaling issues"
   - "Verify CI/CD pipeline is maintained"
+  - "Verify project documentation (README.md, ARCHITECTURE.md) is present, accurate, and up-to-date with the current sprint's changes"

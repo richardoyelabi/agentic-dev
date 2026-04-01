@@ -203,6 +203,44 @@ AGENT_TEMPLATES = {
 }
 
 
+class TestDocumentationRequirements:
+    """Verify developer templates include documentation requirements and QA templates include documentation criterion."""
+
+    def test_frontend_developer_includes_documentation_section(self, real_renderer):
+        result = real_renderer.render(
+            "frontend_developer.md.j2",
+            AGENT_TEMPLATES["frontend_developer.md.j2"],
+        )
+        assert "Documentation Requirements" in result
+        assert "README.md" in result
+        assert "ARCHITECTURE.md" in result
+
+    def test_backend_developer_includes_documentation_section(self, real_renderer):
+        result = real_renderer.render(
+            "backend_developer.md.j2",
+            AGENT_TEMPLATES["backend_developer.md.j2"],
+        )
+        assert "Documentation Requirements" in result
+        assert "README.md" in result
+        assert "ARCHITECTURE.md" in result
+
+    def test_frontend_qa_includes_documentation_criterion(self, real_renderer):
+        result = real_renderer.render(
+            "frontend_qa.md.j2",
+            AGENT_TEMPLATES["frontend_qa.md.j2"],
+        )
+        assert "Is it documented?" in result
+        assert "### Documentation" in result
+
+    def test_backend_qa_includes_documentation_criterion(self, real_renderer):
+        result = real_renderer.render(
+            "backend_qa.md.j2",
+            AGENT_TEMPLATES["backend_qa.md.j2"],
+        )
+        assert "Is it documented?" in result
+        assert "### Documentation" in result
+
+
 class TestAgentTemplatesSmokeTest:
     """Smoke tests verifying all 14 agent templates render without errors."""
 

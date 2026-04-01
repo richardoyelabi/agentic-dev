@@ -17,3 +17,4 @@ constraints:
   - "Follow the tech stack from the backend spec"
   - "Write tests for all endpoints and services"
   - "Maintain GitHub Actions CI/CD pipeline"
+  - "Write and maintain project documentation (README.md and ARCHITECTURE.md) covering features implemented in the current sprint"

@@ -77,6 +77,30 @@ class TestAgentRegistry:
         assert "Bash" in frontend_dev.claude.allowed_tools
         assert frontend_dev.output_documents == []
 
+    def test_developer_agents_have_documentation_constraint(
+        self, registry: AgentRegistry
+    ):
+        for name in ["frontend_developer", "backend_developer"]:
+            agent = registry.get(name)
+            doc_constraints = [
+                c for c in agent.constraints if "documentation" in c.lower()
+            ]
+            assert len(doc_constraints) >= 1, (
+                f"{name} missing documentation constraint"
+            )
+
+    def test_qa_agents_have_documentation_constraint(
+        self, registry: AgentRegistry
+    ):
+        for name in ["frontend_qa", "backend_qa"]:
+            agent = registry.get(name)
+            doc_constraints = [
+                c for c in agent.constraints if "documentation" in c.lower()
+            ]
+            assert len(doc_constraints) >= 1, (
+                f"{name} missing documentation verification constraint"
+            )
+
     def test_invalid_definitions_dir_raises(self, tmp_path: Path):
         bad_yaml = tmp_path / "bad.yml"
         bad_yaml.write_text("name: 123\n")
