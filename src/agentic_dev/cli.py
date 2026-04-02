@@ -206,12 +206,6 @@ def new(
         project_dir = workspace_mgr.create_project(app_name)
         console.print(f"[green]Created project workspace at {project_dir}[/green]")
 
-        # Initialise git repos in frontend/ and backend/
-        from agentic_dev.workspace.git import init_repo  # noqa: WPS433
-
-        asyncio.run(init_repo(project_dir / "frontend"))
-        asyncio.run(init_repo(project_dir / "backend"))
-
         # Save initial pipeline state
         state_mgr = StateManager(project_dir)
         state = state_mgr.create_initial(app_name)

@@ -42,10 +42,19 @@ class WorkspaceManager:
         docs_dir.mkdir()
         (docs_dir / QA_REPORTS_DIR).mkdir()
 
-        (project_root / "frontend").mkdir()
-        (project_root / "backend").mkdir()
-
         return project_root
+
+    def create_code_dirs(self, app_name: str, project_type: str) -> None:
+        """Create code directories based on project type.
+
+        Raises WorkspaceError if the project directory does not exist.
+        """
+        project_root = self.get_project_dir(app_name)
+
+        if project_type in ("fullstack", "frontend_only"):
+            (project_root / "frontend").mkdir(exist_ok=True)
+        if project_type in ("fullstack", "backend_only"):
+            (project_root / "backend").mkdir(exist_ok=True)
 
     def get_project_dir(self, app_name: str) -> Path:
         """Return the project root path.

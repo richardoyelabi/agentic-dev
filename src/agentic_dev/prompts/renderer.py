@@ -49,6 +49,7 @@ class PromptRenderer:
         correction_mode: bool = False,
         previous_output: str | None = None,
         qa_feedback: str | None = None,
+        extra_context: dict | None = None,
     ) -> str:
         """Render an agent prompt from standard agent inputs.
 
@@ -60,6 +61,9 @@ class PromptRenderer:
             "constraints": constraints,
             "correction_mode": correction_mode,
         }
+
+        if extra_context:
+            context.update(extra_context)
 
         if correction_mode:
             context["previous_output"] = previous_output or ""

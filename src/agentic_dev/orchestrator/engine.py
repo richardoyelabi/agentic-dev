@@ -1,5 +1,6 @@
 """Pipeline engine: main coordinator that ties all phases together."""
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from agentic_dev.state.models import (
     AgentRunRecord,
     PipelinePhase,
     PipelineState,
+    ProjectType,
     SprintState,
     SprintStatus,
 )
@@ -49,12 +51,16 @@ class PipelineEngine:
         self._state_manager = state_manager
         self._checkpoint_config = checkpoint_config
         self._output_parser = OutputParser()
-        self._sprint_runner = SprintRunner(
-            claude=claude,
-            registry=registry,
-            doc_store=doc_store,
-            prompt_renderer=prompt_renderer,
-            project_dir=project_dir,
+
+    def _get_sprint_runner(self, project_type: str = "fullstack") -> SprintRunner:
+        """Create a SprintRunner configured for the given project type."""
+        return SprintRunner(
+            claude=self._claude,
+            registry=self._registry,
+            doc_store=self._doc_store,
+            prompt_renderer=self._prompt_renderer,
+            project_dir=self._project_dir,
+            project_type=project_type,
         )
 
     async def run(self) -> None:
@@ -120,7 +126,26 @@ class PipelineEngine:
         )
         self._doc_store.write("structured_input", output)
 
+        state.project_type = self._parse_project_type(output)
+
+        # Create code directories based on detected project type
+        if state.has_frontend:
+            (self._project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+        if state.has_backend:
+            (self._project_dir / "backend").mkdir(parents=True, exist_ok=True)
+
         return advance_phase(state, PipelinePhase.FEATURE_ANALYSIS)
+
+    @staticmethod
+    def _parse_project_type(structured_input: str) -> ProjectType:
+        """Extract the project type from the structured input document."""
+        match = re.search(
+            r"##\s*Project\s+Type\s*\n\s*(fullstack|frontend_only|backend_only)",
+            structured_input,
+        )
+        if match:
+            return ProjectType(match.group(1))
+        return ProjectType.FULLSTACK
 
     async def _run_feature_analysis(self, state: PipelineState) -> PipelineState:
         """Run feature_analyst + feature_analyst_qa via QA cycle."""
@@ -147,6 +172,8 @@ class PipelineEngine:
         """Run architect + architect_qa. Parse multi-document output."""
         features = self._doc_store.read("features")
         structured_input = self._doc_store.read("structured_input")
+        project_type_str = state.project_type.value if state.project_type else "fullstack"
+        extra_context = {"project_type": project_type_str}
 
         result = await run_qa_cycle(
             claude=self._claude,
@@ -160,12 +187,13 @@ class PipelineEngine:
             workspace=self._project_dir,
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
+            extra_context=extra_context,
         )
 
         # Split multi-document output into separate specs
         docs = self._output_parser.split_documents(
             result.output,
-            expected_documents=["frontend_spec", "backend_spec", "api_contract"],
+            expected_documents=state.expected_architecture_docs,
             agent_name="architect",
         )
         for doc_name, content in docs.items():
@@ -180,20 +208,25 @@ class PipelineEngine:
     async def _run_sprint_planning(self, state: PipelineState) -> PipelineState:
         """Run sprint_planner + sprint_planner_qa. Parse sprint plan."""
         features = self._doc_store.read("features")
-        frontend_spec = self._doc_store.read("frontend_spec")
-        backend_spec = self._doc_store.read("backend_spec")
-        api_contract = self._doc_store.read("api_contract")
+        input_docs: dict[str, str] = {"features": features}
+
+        if state.has_frontend:
+            input_docs["frontend_spec"] = self._doc_store.read("frontend_spec")
+        else:
+            input_docs["frontend_spec"] = ""
+
+        if state.has_backend:
+            input_docs["backend_spec"] = self._doc_store.read("backend_spec")
+            input_docs["api_contract"] = self._doc_store.read("api_contract")
+        else:
+            input_docs["backend_spec"] = ""
+            input_docs["api_contract"] = ""
 
         result = await run_qa_cycle(
             claude=self._claude,
             action_agent=self._registry.get("sprint_planner"),
             qa_agent=self._registry.get("sprint_planner_qa"),
-            input_docs={
-                "features": features,
-                "frontend_spec": frontend_spec,
-                "backend_spec": backend_spec,
-                "api_contract": api_contract,
-            },
+            input_docs=input_docs,
             output_doc_name="sprint_plan",
             workspace=self._project_dir,
             doc_store=self._doc_store,
@@ -229,6 +262,9 @@ class PipelineEngine:
 
     async def _run_sprints(self, state: PipelineState) -> PipelineState:
         """Run each sprint sequentially using SprintRunner."""
+        project_type_str = state.project_type.value if state.project_type else "fullstack"
+        sprint_runner = self._get_sprint_runner(project_type_str)
+
         for sprint in state.sprints:
             if sprint.status == SprintStatus.COMPLETE:
                 continue
@@ -247,7 +283,7 @@ class PipelineEngine:
                 f"sprint_{sprint.sprint_number}_integration_flag"
             )
 
-            result = await self._sprint_runner.run_sprint(
+            result = await sprint_runner.run_sprint(
                 sprint_number=sprint.sprint_number,
                 sprint_scope=sprint_scope,
                 needs_integration=needs_integration,

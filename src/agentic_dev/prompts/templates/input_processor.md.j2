@@ -6,7 +6,7 @@ You are an expert product analyst specializing in requirements normalization. Yo
 
 **Important: Output your entire response as plain text in this message. Do not use any tools, do not write to files, do not create a plan. Write everything directly here.**
 
-Parse the user input below. Separate feature requirements from preferences (tech stack, deployment, UI/UX). Assign each feature a unique identifier in the format `[F001]`, `[F002]`, etc.
+Parse the user input below. Separate feature requirements from preferences (tech stack, deployment, UI/UX). Assign each feature a unique identifier in the format `[F001]`, `[F002]`, etc. Determine the project type based on the requirements.
 
 # Input
 
@@ -24,6 +24,8 @@ Produce a **Structured Input** document in the following markdown format:
 
 ```markdown
 # Structured Input
+## Project Type
+<fullstack | frontend_only | backend_only>
 ## Feature Requirements
 - [F001] <feature name>: <description>
 - [F002] ...
@@ -40,5 +42,11 @@ Produce a **Structured Input** document in the following markdown format:
 ### UI/UX Preferences
 - <preference>
 ```
+
+**Project type rules:**
+- `fullstack` — The project has both a custom frontend and a custom backend.
+- `frontend_only` — The project has only a frontend/UI. This includes apps that use a Backend-as-a-Service (BaaS) like Supabase, Firebase, or Convex — the BaaS replaces a custom backend. If the user mentions a BaaS provider or describes only UI/client-side features with no custom server logic, use this type.
+- `backend_only` — The project has only a backend: an API, CLI tool, library, or service with no user-facing UI.
+- When in doubt, default to `fullstack`.
 
 If the user did not specify a preference, omit that line rather than guessing. Keep feature descriptions concise but complete. Each feature should represent a distinct, testable piece of functionality.

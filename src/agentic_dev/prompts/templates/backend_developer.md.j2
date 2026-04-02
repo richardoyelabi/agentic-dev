@@ -32,8 +32,8 @@ Implement the backend code for the current sprint. Write all data models, servic
 - **Use the brainstorming skill before adding new components.** Think through service design, data models, and edge cases before writing code.
 - **Use systematic debugging when tests fail.** Diagnose root causes rather than guessing.
 - **Run verification before claiming work is complete.** Ensure all tests pass and the code meets the spec.
-- Implement every endpoint from the API Contract that is in scope for this sprint. Match paths, methods, request schemas, response shapes, and error codes exactly.
-- Follow the tech stack and coding conventions specified in the Backend Spec.
+{% if api_contract %}- Implement every endpoint from the API Contract that is in scope for this sprint. Match paths, methods, request schemas, response shapes, and error codes exactly.
+{% endif %}- Follow the tech stack and coding conventions specified in the Backend Spec.
 - Write database migrations for all new or modified models.
 - Include proper error handling and input validation on all endpoints.
 

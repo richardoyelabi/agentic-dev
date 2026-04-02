@@ -85,6 +85,30 @@ def runner(claude, registry, doc_store, prompt_renderer, project_dir) -> SprintR
     )
 
 
+@pytest.fixture
+def frontend_only_runner(claude, registry, doc_store, prompt_renderer, project_dir) -> SprintRunner:
+    return SprintRunner(
+        claude=claude,
+        registry=registry,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        project_dir=project_dir,
+        project_type="frontend_only",
+    )
+
+
+@pytest.fixture
+def backend_only_runner(claude, registry, doc_store, prompt_renderer, project_dir) -> SprintRunner:
+    return SprintRunner(
+        claude=claude,
+        registry=registry,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        project_dir=project_dir,
+        project_type="backend_only",
+    )
+
+
 @pytest.mark.asyncio
 async def test_successful_sprint_backend_and_frontend(runner, claude):
     """A sprint without integration runs backend and frontend QA cycles."""
@@ -200,3 +224,76 @@ async def test_doc_store_reads_specs(runner, claude, doc_store):
     doc_store.read.assert_any_call("backend_spec")
     doc_store.read.assert_any_call("frontend_spec")
     doc_store.read.assert_any_call("api_contract")
+
+
+@pytest.mark.asyncio
+async def test_frontend_only_skips_backend_cycle(frontend_only_runner, claude, doc_store):
+    """frontend_only project type runs only the frontend QA cycle."""
+    claude.run.side_effect = [
+        _make_claude_result("frontend code", cost=0.25),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    result = await frontend_only_runner.run_sprint(sprint_number=1, sprint_scope="ui feature")
+
+    assert result.success is True
+    assert result.backend_result is None
+    assert result.frontend_result is not None
+    assert result.total_cost == pytest.approx(0.35)
+    assert claude.run.call_count == 2
+    # Should NOT read backend_spec
+    read_calls = [call.args[0] for call in doc_store.read.call_args_list]
+    assert "backend_spec" not in read_calls
+
+
+@pytest.mark.asyncio
+async def test_backend_only_skips_frontend_cycle(backend_only_runner, claude, doc_store):
+    """backend_only project type runs only the backend QA cycle."""
+    claude.run.side_effect = [
+        _make_claude_result("backend code", cost=0.20),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    result = await backend_only_runner.run_sprint(sprint_number=1, sprint_scope="api endpoint")
+
+    assert result.success is True
+    assert result.frontend_result is None
+    assert result.backend_result is not None
+    assert result.total_cost == pytest.approx(0.30)
+    assert claude.run.call_count == 2
+    # Should NOT read frontend_spec
+    read_calls = [call.args[0] for call in doc_store.read.call_args_list]
+    assert "frontend_spec" not in read_calls
+
+
+@pytest.mark.asyncio
+async def test_frontend_only_passes_empty_api_contract(frontend_only_runner, claude, prompt_renderer):
+    """frontend_only projects pass empty string for api_contract to templates."""
+    claude.run.side_effect = [
+        _make_claude_result("frontend code", cost=0.25),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    await frontend_only_runner.run_sprint(sprint_number=1, sprint_scope="ui feature")
+
+    # Check the input_docs passed to render_agent_prompt
+    action_call = prompt_renderer.render_agent_prompt.call_args_list[0]
+    input_docs = action_call.kwargs.get("input_documents") or action_call.args[1]
+    assert input_docs["api_contract"] == ""
+
+
+@pytest.mark.asyncio
+async def test_default_project_type_runs_both_cycles(runner, claude):
+    """Default (no project_type) runs both backend and frontend cycles."""
+    claude.run.side_effect = [
+        _make_claude_result("backend code", cost=0.20),
+        _make_claude_result("APPROVED", cost=0.10),
+        _make_claude_result("frontend code", cost=0.25),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    result = await runner.run_sprint(sprint_number=1, sprint_scope="auth feature")
+
+    assert result.backend_result is not None
+    assert result.frontend_result is not None
+    assert claude.run.call_count == 4

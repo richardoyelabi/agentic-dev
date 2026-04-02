@@ -35,6 +35,7 @@ async def run_qa_cycle(
     doc_store: DocumentStore,
     prompt_renderer: PromptRenderer,
     qa_output_key: str | None = None,
+    extra_context: dict | None = None,
 ) -> QACycleResult:
     """Execute one action -> QA -> optional correction cycle.
 
@@ -47,6 +48,7 @@ async def run_qa_cycle(
         template_name=action_agent.prompt_template,
         input_documents=input_docs,
         constraints=action_agent.constraints,
+        extra_context=extra_context,
     )
     action_config = to_run_config(action_agent)
     action_result = await claude.run(
@@ -71,6 +73,7 @@ async def run_qa_cycle(
         template_name=qa_agent.prompt_template,
         input_documents=qa_input_docs,
         constraints=qa_agent.constraints,
+        extra_context=extra_context,
     )
     qa_config = to_run_config(qa_agent)
     qa_result = await claude.run(
@@ -102,6 +105,7 @@ async def run_qa_cycle(
             correction_mode=True,
             previous_output=action_result.text,
             qa_feedback=qa_result.text,
+            extra_context=extra_context,
         )
         correction_result = await claude.run(
             agent=action_config,

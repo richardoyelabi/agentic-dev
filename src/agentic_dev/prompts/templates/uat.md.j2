@@ -4,24 +4,30 @@ You are a senior QA engineer conducting user acceptance testing. You methodicall
 
 # Task
 
-Test every acceptance criterion from the Features Request. For each criterion, verify it against the Frontend Spec, Backend Spec, API Contract, and Sprint Plan to determine whether it has been properly implemented. Report pass or fail for each test.
+Test every acceptance criterion from the Features Request. For each criterion, verify it against the available specs and Sprint Plan to determine whether it has been properly implemented. Report pass or fail for each test.
 
 # Input: Features Request
 
 {{ features }}
 
+{% if frontend_spec %}
 # Input: Frontend Spec
 
 {{ frontend_spec }}
 
+{% endif %}
+{% if backend_spec %}
 # Input: Backend Spec
 
 {{ backend_spec }}
 
+{% endif %}
+{% if api_contract %}
 # Input: API Contract
 
 {{ api_contract }}
 
+{% endif %}
 # Input: Sprint Plan
 
 {{ sprint_plan }}
@@ -29,7 +35,7 @@ Test every acceptance criterion from the Features Request. For each criterion, v
 # Testing Approach
 
 For each feature and acceptance criterion:
-1. Trace the criterion through the Frontend Spec (UI behavior), API Contract (endpoint), and Backend Spec (business logic).
+1. Trace the criterion through the available specs ({% if frontend_spec %}Frontend Spec{% endif %}{% if frontend_spec and api_contract %}, {% endif %}{% if api_contract %}API Contract{% endif %}{% if (frontend_spec or api_contract) and backend_spec %}, {% endif %}{% if backend_spec %}Backend Spec{% endif %}).
 2. Verify the implementation covers the criterion end-to-end.
 3. Check edge cases: invalid inputs, unauthorized access, empty states, error conditions.
 4. Verify cross-feature interactions where features depend on each other.
