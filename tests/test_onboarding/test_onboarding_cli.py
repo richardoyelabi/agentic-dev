@@ -414,6 +414,95 @@ class TestMultiSourceOnboarding:
         assert "Source: Figma Design - Design tokens" in content
 
     @patch("agentic_dev.cli._run_pipeline")
+    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
+    def test_design_analyses_document_created_with_figma(
+        self,
+        mock_analyze_figma,
+        mock_run_pipeline,
+        tmp_path: Path,
+    ) -> None:
+        mock_analyze_figma.return_value = _make_claude_result(
+            text="# Design Analysis\nTokens: blue-500",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "new", "my-app",
+                "--path", str(tmp_path),
+                "--from-figma", "https://figma.com/file/abc",
+            ],
+            input="Build a dashboard\n\n\n",
+        )
+
+        assert result.exit_code == 0, result.output
+        design_analyses_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_analyses_path.exists(), "design_analyses.md should be created"
+        content = design_analyses_path.read_text(encoding="utf-8")
+        assert "Tokens: blue-500" in content
+
+    @patch("agentic_dev.cli._run_pipeline")
+    @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
+    def test_design_analyses_not_created_without_figma(
+        self,
+        mock_analyze_codebase,
+        mock_run_pipeline,
+        tmp_path: Path,
+    ) -> None:
+        mock_analyze_codebase.return_value = _make_claude_result(
+            text="# Codebase Analysis\nDetected: Python",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "new", "my-app",
+                "--path", str(tmp_path),
+                "--from-codebase", "/some/path",
+            ],
+            input="Extend this app\n\n\n",
+        )
+
+        assert result.exit_code == 0, result.output
+        design_analyses_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert not design_analyses_path.exists(), "design_analyses.md should NOT be created without --from-figma"
+
+    @patch("agentic_dev.cli._run_pipeline")
+    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
+    def test_design_analyses_contains_all_sources_with_headers(
+        self,
+        mock_analyze_figma,
+        mock_run_pipeline,
+        tmp_path: Path,
+    ) -> None:
+        mock_analyze_figma.side_effect = [
+            _make_claude_result(text="# Design Analysis\nApp UI tokens"),
+            _make_claude_result(text="# Design Analysis\nAdmin Panel tokens"),
+        ]
+
+        result = runner.invoke(
+            app,
+            [
+                "new", "my-app",
+                "--path", str(tmp_path),
+                "--from-figma", "https://figma.com/file/a::App UI",
+                "--from-figma", "https://figma.com/file/b::Admin Panel",
+            ],
+            input="Build the app\n\n\n",
+        )
+
+        assert result.exit_code == 0, result.output
+        design_analyses_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_analyses_path.exists()
+        content = design_analyses_path.read_text(encoding="utf-8")
+        assert "Source: Figma Design - App UI" in content
+        assert "Source: Figma Design - Admin Panel" in content
+        assert "https://figma.com/file/a" in content
+        assert "https://figma.com/file/b" in content
+        assert "App UI tokens" in content
+        assert "Admin Panel tokens" in content
+
+    @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_backward_compat_single_codebase(
         self,

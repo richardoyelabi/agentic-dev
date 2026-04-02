@@ -172,6 +172,11 @@ class PipelineEngine:
         """Run architect + architect_qa. Parse multi-document output."""
         features = self._doc_store.read("features")
         structured_input = self._doc_store.read("structured_input")
+        design_analyses = (
+            self._doc_store.read("design_analyses")
+            if self._doc_store.exists("design_analyses")
+            else ""
+        )
         project_type_str = state.project_type.value if state.project_type else "fullstack"
         extra_context = {"project_type": project_type_str}
 
@@ -182,6 +187,7 @@ class PipelineEngine:
             input_docs={
                 "structured_input": structured_input,
                 "features": features,
+                "design_analyses": design_analyses,
             },
             output_doc_name="architecture",
             workspace=self._project_dir,

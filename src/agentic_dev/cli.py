@@ -307,12 +307,19 @@ def new(
             figma_results = asyncio.run(
                 analyze_figma_designs(ClaudeRunner(), figma_sources, project_dir)
             )
+            design_sections: list[str] = []
             for src, result in zip(figma_sources, figma_results):
                 header = "\n\n---\n## Source: Figma Design"
                 if src.annotation:
                     header += f" - {src.annotation}"
                 header += f"\n**URL:** `{src.value}`\n\n"
                 user_input = (user_input or "") + header + result.text
+
+                doc_header = "## Source: Figma Design"
+                if src.annotation:
+                    doc_header += f" - {src.annotation}"
+                doc_header += f"\n**URL:** `{src.value}`\n\n"
+                design_sections.append(doc_header + result.text)
 
         if not user_input:
             console.print("[bold red]No requirements provided. Aborting.[/bold red]")
@@ -322,6 +329,9 @@ def new(
         doc_store = DocumentStore(project_dir)
         doc_store.write("user_input", user_input)
         console.print("[green]Saved requirements to docs/user_input.md[/green]")
+
+        if figma_sources:
+            doc_store.write("design_analyses", "\n\n---\n".join(design_sections))
 
         _run_pipeline(project_dir, state)
 

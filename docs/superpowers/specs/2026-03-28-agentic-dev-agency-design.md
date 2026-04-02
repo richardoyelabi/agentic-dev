@@ -496,6 +496,7 @@ Onboarding uses a dedicated Claude agent (not a Python module) to analyze the ex
    - **Spacing:** <spacing scale>
    ```
 5. This feeds into the Input Processor alongside other context
+6. Design analyses are also stored as a separate `design_analyses` document and passed directly to the Architect, which incorporates design tokens, component names, page layouts, and navigation flows into the Frontend Spec
 
 Both are optional and additive — they enrich the Input Processor's context but don't replace user requirements.
 

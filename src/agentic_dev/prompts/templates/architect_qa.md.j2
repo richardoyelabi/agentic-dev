@@ -22,6 +22,12 @@ Review the Architecture document (containing the Frontend Spec, Backend Spec, an
 
 {{ structured_input }}
 
+{% if design_analyses %}
+# Input: Design Analyses (from Figma)
+
+{{ design_analyses }}
+{% endif %}
+
 # Input: Architecture
 {% if project_type == "frontend_only" %}
 (Frontend Spec)
@@ -53,6 +59,9 @@ Review the Architecture document (containing the Frontend Spec, Backend Spec, an
 3. **Is it reasonably well designed?** — No duplication across documents. API Contract is the single source of truth. Component decomposition is clean.
 4. **Is it safe?** — Authentication and authorization are properly specified. No endpoints are missing auth requirements. Input validation is addressed.
 5. **No obvious scaling issues?** — Data models support expected load. No N+1 query patterns. Pagination is specified where needed.
+{% endif %}
+{% if design_analyses %}
+6. **Does it reflect the designs?** — Design tokens (colors, typography, spacing) are incorporated. Component names from Figma are referenced. Page layouts match the design analyses.
 {% endif %}
 
 # Output Format

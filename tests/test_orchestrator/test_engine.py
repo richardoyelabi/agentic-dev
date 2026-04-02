@@ -484,6 +484,80 @@ class TestProjectTypeDetection:
         assert any_has_project_type
 
     @pytest.mark.asyncio
+    async def test_architecture_passes_design_analyses_when_exists(
+        self, engine, state_manager, claude, doc_store, prompt_renderer
+    ):
+        """When design_analyses exists, it is included in architect input_docs."""
+        state = _make_state(PipelinePhase.ARCHITECTURE)
+        state_manager.load = MagicMock(return_value=state)
+
+        def exists_side_effect(name):
+            return name == "design_analyses"
+
+        doc_store.exists = MagicMock(side_effect=exists_side_effect)
+
+        def read_side_effect(name):
+            if name == "design_analyses":
+                return "## Design Tokens\nColors: blue-500"
+            return "document content"
+
+        doc_store.read = MagicMock(side_effect=read_side_effect)
+
+        arch_output = (
+            "<!-- DOCUMENT: frontend_spec -->\n# Frontend Spec\nContent\n"
+            "<!-- DOCUMENT: backend_spec -->\n# Backend Spec\nContent\n"
+            "<!-- DOCUMENT: api_contract -->\n# API Contract\nContent"
+        )
+        claude.run.side_effect = [
+            _make_claude_result(arch_output, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        with patch.object(
+            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        render_calls = prompt_renderer.render_agent_prompt.call_args_list
+        arch_call = render_calls[0]
+        input_docs = arch_call.kwargs["input_documents"]
+        assert "design_analyses" in input_docs
+        assert "blue-500" in input_docs["design_analyses"]
+
+    @pytest.mark.asyncio
+    async def test_architecture_passes_empty_design_analyses_when_absent(
+        self, engine, state_manager, claude, doc_store, prompt_renderer
+    ):
+        """When design_analyses does not exist, empty string is passed."""
+        state = _make_state(PipelinePhase.ARCHITECTURE)
+        state_manager.load = MagicMock(return_value=state)
+
+        doc_store.exists = MagicMock(return_value=False)
+
+        arch_output = (
+            "<!-- DOCUMENT: frontend_spec -->\n# Frontend Spec\nContent\n"
+            "<!-- DOCUMENT: backend_spec -->\n# Backend Spec\nContent\n"
+            "<!-- DOCUMENT: api_contract -->\n# API Contract\nContent"
+        )
+        claude.run.side_effect = [
+            _make_claude_result(arch_output, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        with patch.object(
+            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        render_calls = prompt_renderer.render_agent_prompt.call_args_list
+        arch_call = render_calls[0]
+        input_docs = arch_call.kwargs["input_documents"]
+        assert "design_analyses" in input_docs
+        assert input_docs["design_analyses"] == ""
+
+    @pytest.mark.asyncio
     async def test_sprint_planning_reads_only_available_docs(
         self, engine, state_manager, claude, doc_store
     ):

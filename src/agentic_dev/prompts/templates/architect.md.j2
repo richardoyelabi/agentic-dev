@@ -37,6 +37,18 @@ The API Contract is the **single source of truth** for the frontend/backend inte
 
 {{ structured_input }}
 
+{% if design_analyses %}
+# Input: Design Analyses (from Figma)
+
+The following design analyses were extracted from Figma files. Incorporate these into the **Frontend Spec**:
+- Use the exact **design tokens** (colors, typography, spacing) in a Design Tokens subsection
+- Reference **component names** from the designs when defining Shared Components
+- Reflect **page layouts** in the Pages & Routes section
+- Map **navigation flows** to routes and transitions
+
+{{ design_analyses }}
+{% endif %}
+
 # Constraints
 
 {% for c in constraints %}

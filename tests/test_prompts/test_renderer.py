@@ -164,6 +164,7 @@ AGENT_TEMPLATES = {
     "architect.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
         "structured_input": "# Structured Input\n- [F001] Auth",
+        "design_analyses": "",
         "constraints": ["Minimalism first"],
         "correction_mode": False,
         "project_type": "fullstack",
@@ -171,6 +172,7 @@ AGENT_TEMPLATES = {
     "architect_qa.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
         "structured_input": "# Structured Input\n- [F001] Auth",
+        "design_analyses": "",
         "architecture": "# Frontend Spec\n## Pages\n# Backend Spec\n## Models\n# API Contract\n## Endpoints",
         "project_type": "fullstack",
     },
@@ -300,6 +302,7 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         result = real_renderer.render("architect.md.j2", {
             "features": f"Features: {self.MARKER}",
             "structured_input": "structured input content",
+            "design_analyses": "",
             "constraints": [],
             "correction_mode": False,
             "project_type": "fullstack",
@@ -314,6 +317,7 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         result = real_renderer.render("architect_qa.md.j2", {
             "features": f"Features: {self.MARKER}",
             "structured_input": "structured input",
+            "design_analyses": "",
             "architecture": f"Architecture: {self.MARKER}",
             "project_type": "fullstack",
         })
@@ -407,6 +411,54 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "integration_qa.md.j2 did not render 'sprint_scope' — "
             "likely still using 'sprint_plan'"
         )
+
+    def test_architect_renders_design_analyses_when_non_empty(self, real_renderer):
+        """When design_analyses is non-empty, the section renders in the template."""
+        result = real_renderer.render("architect.md.j2", {
+            "features": "# Features Request\n## Feature: [F001] Auth",
+            "structured_input": "# Structured Input\n- [F001] Auth",
+            "design_analyses": "## Design Tokens\nColors: blue-500, gray-100",
+            "constraints": [],
+            "correction_mode": False,
+            "project_type": "fullstack",
+        })
+        assert "Design Analyses (from Figma)" in result
+        assert "blue-500" in result
+
+    def test_architect_omits_design_analyses_when_empty(self, real_renderer):
+        """When design_analyses is empty string, no design section renders."""
+        result = real_renderer.render("architect.md.j2", {
+            "features": "# Features Request\n## Feature: [F001] Auth",
+            "structured_input": "# Structured Input\n- [F001] Auth",
+            "design_analyses": "",
+            "constraints": [],
+            "correction_mode": False,
+            "project_type": "fullstack",
+        })
+        assert "Design Analyses" not in result
+
+    def test_architect_qa_renders_design_analyses_when_non_empty(self, real_renderer):
+        """When design_analyses is non-empty, the section renders in the QA template."""
+        result = real_renderer.render("architect_qa.md.j2", {
+            "features": "# Features Request",
+            "structured_input": "# Structured Input",
+            "design_analyses": "## Components\nNavbar, Footer",
+            "architecture": "# Frontend Spec\n## Pages",
+            "project_type": "fullstack",
+        })
+        assert "Design Analyses (from Figma)" in result
+        assert "Navbar, Footer" in result
+
+    def test_architect_qa_omits_design_analyses_when_empty(self, real_renderer):
+        """When design_analyses is empty string, no design section renders in QA."""
+        result = real_renderer.render("architect_qa.md.j2", {
+            "features": "# Features Request",
+            "structured_input": "# Structured Input",
+            "design_analyses": "",
+            "architecture": "# Frontend Spec\n## Pages",
+            "project_type": "fullstack",
+        })
+        assert "Design Analyses" not in result
 
     def test_uat_receives_features(self, real_renderer):
         """engine.py passes 'features' key, not 'features_request'."""
