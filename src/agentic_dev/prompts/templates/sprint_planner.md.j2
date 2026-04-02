@@ -12,17 +12,24 @@ Break the features from the Features Request into feature-based sprints. Each sp
 
 {{ features }}
 
+{% if frontend_spec %}
 # Input: Frontend Spec
 
 {{ frontend_spec }}
 
+{% endif %}
+{% if backend_spec %}
 # Input: Backend Spec
 
 {{ backend_spec }}
 
+{% endif %}
+{% if api_contract %}
 # Input: API Contract
 
 {{ api_contract }}
+
+{% endif %}
 
 # Constraints
 

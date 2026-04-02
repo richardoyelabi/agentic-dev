@@ -31,14 +31,12 @@ def _make_claude_result(
 
 class TestOnboardingCLI:
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_from_codebase_and_figma_together(
         self,
         mock_analyze_codebase,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -74,12 +72,10 @@ class TestOnboardingCLI:
         assert codebase_pos < design_pos
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_from_figma_alone(
         self,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -106,12 +102,10 @@ class TestOnboardingCLI:
         assert "Build a landing page" in content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_from_codebase_with_empty_user_input(
         self,
         mock_analyze_codebase,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -135,12 +129,10 @@ class TestOnboardingCLI:
         assert "Codebase Analysis" in content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_from_figma_mcp_not_configured(
         self,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -159,12 +151,10 @@ class TestOnboardingCLI:
         assert result.exit_code == 1
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_from_codebase_analyzer_fails(
         self,
         mock_analyze_codebase,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -186,12 +176,10 @@ class TestOnboardingCLI:
         assert result.exit_code == 1
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_from_figma_agent_fails(
         self,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -213,14 +201,12 @@ class TestOnboardingCLI:
         assert result.exit_code == 1
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_both_flags_no_user_requirements(
         self,
         mock_analyze_codebase,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -253,12 +239,10 @@ class TestOnboardingCLI:
 
 class TestMultiSourceOnboarding:
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_multiple_codebases(
         self,
         mock_analyze_codebase,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -287,12 +271,10 @@ class TestMultiSourceOnboarding:
         assert "Backend: Django" in content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_multiple_figma(
         self,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -321,12 +303,10 @@ class TestMultiSourceOnboarding:
         assert "Admin Panel" in content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_codebase_with_annotation(
         self,
         mock_analyze_codebase,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -357,12 +337,10 @@ class TestMultiSourceOnboarding:
         assert annotation == "Frontend React app"
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_figma_with_annotation(
         self,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -393,14 +371,12 @@ class TestMultiSourceOnboarding:
         assert annotation == "Admin dashboard"
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_mixed_multiple_sources(
         self,
         mock_analyze_codebase,
         mock_analyze_figma,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
@@ -438,12 +414,10 @@ class TestMultiSourceOnboarding:
         assert "Source: Figma Design - Design tokens" in content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_backward_compat_single_codebase(
         self,
         mock_analyze_codebase,
-        mock_init_repo,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:

@@ -119,6 +119,32 @@ class TestRenderAgentPrompt:
                 constraints=[],
             )
 
+    def test_extra_context_merged_into_template(self, templates_dir, renderer):
+        """extra_context should be available as template variables."""
+        typed_template = templates_dir / "typed.md.j2"
+        typed_template.write_text(
+            "Type: {{ project_type }}\n"
+            "Input: {{ user_input }}\n"
+            "{% for c in constraints %}- {{ c }}\n{% endfor %}"
+        )
+        result = renderer.render_agent_prompt(
+            template_name="typed.md.j2",
+            input_documents={"user_input": "Build an app"},
+            constraints=["TDD"],
+            extra_context={"project_type": "frontend_only"},
+        )
+        assert "Type: frontend_only" in result
+        assert "Build an app" in result
+
+    def test_extra_context_none_does_not_break(self, renderer):
+        result = renderer.render_agent_prompt(
+            template_name="agent.md.j2",
+            input_documents={"user_input": "Build an app"},
+            constraints=[],
+            extra_context=None,
+        )
+        assert "Build an app" in result
+
 
 # Map each template to the context variables it requires.
 AGENT_TEMPLATES = {
@@ -140,11 +166,13 @@ AGENT_TEMPLATES = {
         "structured_input": "# Structured Input\n- [F001] Auth",
         "constraints": ["Minimalism first"],
         "correction_mode": False,
+        "project_type": "fullstack",
     },
     "architect_qa.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
         "structured_input": "# Structured Input\n- [F001] Auth",
         "architecture": "# Frontend Spec\n## Pages\n# Backend Spec\n## Models\n# API Contract\n## Endpoints",
+        "project_type": "fullstack",
     },
     "sprint_planner.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
@@ -274,6 +302,7 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "structured_input": "structured input content",
             "constraints": [],
             "correction_mode": False,
+            "project_type": "fullstack",
         })
         assert self.MARKER in result, (
             "architect.md.j2 did not render 'features' variable — "
@@ -286,6 +315,7 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "features": f"Features: {self.MARKER}",
             "structured_input": "structured input",
             "architecture": f"Architecture: {self.MARKER}",
+            "project_type": "fullstack",
         })
         assert self.MARKER in result, (
             "architect_qa.md.j2 did not render 'features' or 'architecture' — "

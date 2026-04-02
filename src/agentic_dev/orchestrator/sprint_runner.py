@@ -37,12 +37,15 @@ class SprintRunner:
         doc_store: DocumentStore,
         prompt_renderer: PromptRenderer,
         project_dir: Path,
+        project_type: str = "fullstack",
     ) -> None:
         self._claude = claude
         self._registry = registry
         self._doc_store = doc_store
         self._prompt_renderer = prompt_renderer
         self._project_dir = project_dir
+        self._has_backend = project_type in ("fullstack", "backend_only")
+        self._has_frontend = project_type in ("fullstack", "frontend_only")
 
     async def run_sprint(
         self,
@@ -86,9 +89,9 @@ class SprintRunner:
         partial_cost is a single-element list used as a mutable accumulator so
         the caller can recover cost even if this method raises AgentRunError.
         """
-        backend_spec = self._doc_store.read("backend_spec")
-        frontend_spec = self._doc_store.read("frontend_spec")
-        api_contract = self._doc_store.read("api_contract")
+        backend_spec = self._doc_store.read("backend_spec") if self._has_backend else ""
+        frontend_spec = self._doc_store.read("frontend_spec") if self._has_frontend else ""
+        api_contract = self._doc_store.read("api_contract") if self._has_backend else ""
 
         # Include checkpoint feedback as additional context if available
         extra_context: dict[str, str] = {}
@@ -96,46 +99,50 @@ class SprintRunner:
             extra_context["user_feedback"] = self._doc_store.read("checkpoint_feedback")
 
         # Backend QA cycle
-        backend_input_docs = {
-            "backend_spec": backend_spec,
-            "api_contract": api_contract,
-            "sprint_scope": sprint_scope,
-            **extra_context,
-        }
-        backend_result = await run_qa_cycle(
-            claude=self._claude,
-            action_agent=self._registry.get("backend_developer"),
-            qa_agent=self._registry.get("backend_qa"),
-            input_docs=backend_input_docs,
-            output_doc_name=f"sprint_{sprint_number}_backend",
-            workspace=self._project_dir / "backend",
-            doc_store=self._doc_store,
-            prompt_renderer=self._prompt_renderer,
-        )
-        partial_cost[0] += (
-            backend_result.action_cost + backend_result.qa_cost + backend_result.correction_cost
-        )
+        backend_result = None
+        if self._has_backend:
+            backend_input_docs = {
+                "backend_spec": backend_spec,
+                "api_contract": api_contract,
+                "sprint_scope": sprint_scope,
+                **extra_context,
+            }
+            backend_result = await run_qa_cycle(
+                claude=self._claude,
+                action_agent=self._registry.get("backend_developer"),
+                qa_agent=self._registry.get("backend_qa"),
+                input_docs=backend_input_docs,
+                output_doc_name=f"sprint_{sprint_number}_backend",
+                workspace=self._project_dir / "backend",
+                doc_store=self._doc_store,
+                prompt_renderer=self._prompt_renderer,
+            )
+            partial_cost[0] += (
+                backend_result.action_cost + backend_result.qa_cost + backend_result.correction_cost
+            )
 
         # Frontend QA cycle
-        frontend_input_docs = {
-            "frontend_spec": frontend_spec,
-            "api_contract": api_contract,
-            "sprint_scope": sprint_scope,
-            **extra_context,
-        }
-        frontend_result = await run_qa_cycle(
-            claude=self._claude,
-            action_agent=self._registry.get("frontend_developer"),
-            qa_agent=self._registry.get("frontend_qa"),
-            input_docs=frontend_input_docs,
-            output_doc_name=f"sprint_{sprint_number}_frontend",
-            workspace=self._project_dir / "frontend",
-            doc_store=self._doc_store,
-            prompt_renderer=self._prompt_renderer,
-        )
-        partial_cost[0] += (
-            frontend_result.action_cost + frontend_result.qa_cost + frontend_result.correction_cost
-        )
+        frontend_result = None
+        if self._has_frontend:
+            frontend_input_docs = {
+                "frontend_spec": frontend_spec,
+                "api_contract": api_contract,
+                "sprint_scope": sprint_scope,
+                **extra_context,
+            }
+            frontend_result = await run_qa_cycle(
+                claude=self._claude,
+                action_agent=self._registry.get("frontend_developer"),
+                qa_agent=self._registry.get("frontend_qa"),
+                input_docs=frontend_input_docs,
+                output_doc_name=f"sprint_{sprint_number}_frontend",
+                workspace=self._project_dir / "frontend",
+                doc_store=self._doc_store,
+                prompt_renderer=self._prompt_renderer,
+            )
+            partial_cost[0] += (
+                frontend_result.action_cost + frontend_result.qa_cost + frontend_result.correction_cost
+            )
 
         # Optional integration QA cycle
         integration_result = None

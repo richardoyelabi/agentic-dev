@@ -78,11 +78,10 @@ class TestHelpOutput:
 
 class TestNewCommand:
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     def test_creates_project_structure(
-        self, mock_init_repo, mock_run_pipeline, tmp_path: Path
+        self, mock_run_pipeline, tmp_path: Path
     ) -> None:
-        """The new command should create workspace, state, config, and docs."""
+        """The new command should create base workspace (no frontend/backend yet)."""
         result = runner.invoke(
             app,
             ["new", "my-app", "--path", str(tmp_path)],
@@ -94,13 +93,12 @@ class TestNewCommand:
         assert project_dir.is_dir()
         assert (project_dir / ".agentic-dev").is_dir()
         assert (project_dir / "docs").is_dir()
-        assert (project_dir / "frontend").is_dir()
-        assert (project_dir / "backend").is_dir()
+        assert not (project_dir / "frontend").exists()
+        assert not (project_dir / "backend").exists()
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     def test_saves_initial_state(
-        self, mock_init_repo, mock_run_pipeline, tmp_path: Path
+        self, mock_run_pipeline, tmp_path: Path
     ) -> None:
         result = runner.invoke(
             app,
@@ -115,9 +113,8 @@ class TestNewCommand:
         assert state.phase == PipelinePhase.IDLE
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     def test_saves_config(
-        self, mock_init_repo, mock_run_pipeline, tmp_path: Path
+        self, mock_run_pipeline, tmp_path: Path
     ) -> None:
         result = runner.invoke(
             app,
@@ -132,9 +129,8 @@ class TestNewCommand:
         assert data["after_design"] is True
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     def test_saves_user_input(
-        self, mock_init_repo, mock_run_pipeline, tmp_path: Path
+        self, mock_run_pipeline, tmp_path: Path
     ) -> None:
         result = runner.invoke(
             app,
@@ -148,9 +144,8 @@ class TestNewCommand:
         assert "todo" in user_input_path.read_text(encoding="utf-8").lower()
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     def test_calls_pipeline(
-        self, mock_init_repo, mock_run_pipeline, tmp_path: Path
+        self, mock_run_pipeline, tmp_path: Path
     ) -> None:
         result = runner.invoke(
             app,
@@ -162,24 +157,9 @@ class TestNewCommand:
         mock_run_pipeline.assert_called_once()
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
-    def test_init_git_repos(
-        self, mock_init_repo, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path)],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        assert mock_init_repo.call_count == 2
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.workspace.git.init_repo")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_from_codebase_runs_analyzer(
-        self, mock_analyze, mock_init_repo, mock_run_pipeline, tmp_path: Path
+        self, mock_analyze, mock_run_pipeline, tmp_path: Path
     ) -> None:
         from agentic_dev.claude.runner import ClaudeResult
 

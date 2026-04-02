@@ -2,14 +2,14 @@
 
 ## Overview
 
-A Python CLI tool (`agentic-dev`) that orchestrates Claude Code CLI sessions to function as an autonomous software development agency. Takes a product description as input and produces complete web/mobile applications with frontend and backend, including CI/CD pipelines.
+A Python CLI tool (`agentic-dev`) that orchestrates Claude Code CLI sessions to function as an autonomous software development agency. Takes a product description as input and produces complete applications — fullstack (frontend + backend), frontend-only (with optional BaaS), or backend-only (API/service/library) — including CI/CD pipelines.
 
 ## Architecture
 
 ### Platform & Tooling
 - **Orchestrator:** Python CLI using Typer, Pydantic, Jinja2, Rich, PyYAML
 - **Agents:** Claude Code CLI sessions, each defined by a YAML config + Jinja2 prompt template
-- **Output:** Separate git repos for frontend and backend, created in user-specified directories
+- **Output:** Git repos for frontend and/or backend (based on project type), created in user-specified directories
 - **State:** JSON-based pipeline state with atomic persistence and history
 
 ### Teams & Agents (14 total)
@@ -37,7 +37,7 @@ A Python CLI tool (`agentic-dev`) that orchestrates Claude Code CLI sessions to 
 User Input
     │
     ▼
-[Input Processor] → Structured Input
+[Input Processor] → Structured Input (includes detected project type)
     │
     ▼
 [Feature Analyst] → Features Request
@@ -46,7 +46,7 @@ User Input
 [Feature Analyst QA] → feedback → [Feature Analyst correction]
     │
     ▼
-[Architect] → Frontend Spec + Backend Spec + API Contract
+[Architect] → specs (varies by project type: see Project Types below)
     │
     ▼
 [Architect QA] → feedback → [Architect correction]
@@ -72,6 +72,24 @@ After all sprints:
     [UAT Agent] → UAT Report → User
 ```
 
+## Project Types
+
+The system supports three project types, auto-detected by the Input Processor from the user's natural language description:
+
+| Type | Detection Signal | Architecture Docs | Sprint Cycles | Code Dirs |
+|---|---|---|---|---|
+| `fullstack` | Default; describes both UI and custom backend | Frontend Spec + Backend Spec + API Contract | Backend → Frontend → Integration | `frontend/` + `backend/` |
+| `frontend_only` | Mentions BaaS (Supabase, Firebase, Convex) or describes UI with no custom backend | Frontend Spec (with embedded Backend Services section) | Frontend only | `frontend/` |
+| `backend_only` | Describes API, service, CLI, or library with no UI | Backend Spec + API Contract | Backend only | `backend/` |
+
+**Auto-detection:** The Input Processor includes a `## Project Type` section in the Structured Input document. The engine parses this after input processing and creates the appropriate code directories. No CLI flag is needed.
+
+**BaaS handling:** For `frontend_only` projects using a BaaS, the Frontend Spec includes a "Backend Services" section describing BaaS schema, security rules, and client SDK configuration. No separate Backend Spec is produced.
+
+**API Contract rules:** The API Contract exists only when there is a backend (`fullstack` and `backend_only`). For `frontend_only`, no API Contract is produced. For `backend_only`, the API Contract describes the interface for external consumers.
+
+**Template variable strategy:** Templates use `StrictUndefined` in Jinja2. All variables are always passed — absent documents use empty string `""`. Templates use truthy checks (`{% if api_contract %}`) to conditionally render sections.
+
 ## Document Taxonomy
 
 | Document | Producer | Consumers | Purpose |
@@ -86,7 +104,7 @@ After all sprints:
 | QA Reports | All QA agents | Corresponding action agents | Review feedback |
 | UAT Report | UAT Agent | User | Final acceptance test results |
 
-**No-duplication principle:** The API Contract is the single source of truth for the frontend/backend interface. Neither the Frontend Spec nor Backend Spec repeats endpoint details. The Sprint Plan references features by ID from the Features Request.
+**No-duplication principle:** For fullstack projects, the API Contract is the single source of truth for the frontend/backend interface. Neither the Frontend Spec nor Backend Spec repeats endpoint details. For backend_only projects, the API Contract describes the external interface. For frontend_only projects, BaaS configuration lives exclusively in the Frontend Spec. The Sprint Plan references features by ID from the Features Request.
 
 ## QA Pattern
 
@@ -110,6 +128,7 @@ QA evaluates against 6 criteria:
 - Feature-based: each sprint = one feature or small group of related features
 - Sequential sprints (each builds on prior work)
 - Within a sprint: backend first (so API exists), then frontend, then integration if needed
+- For `frontend_only`: only the frontend cycle runs; for `backend_only`: only the backend cycle runs
 - Sprint scope is extracted from the Sprint Plan and passed to dev agents as focused context
 
 ## Checkpoint System
@@ -201,9 +220,11 @@ Output feeds into the normal pipeline as additional context for the Input Proces
 ~/projects/<app-name>/
 ├── .agentic-dev/          # Agency metadata (state, config, history, logs)
 ├── docs/                  # All spec documents and QA reports
-├── frontend/              # Separate git repo with CLAUDE.md + CI/CD
-└── backend/               # Separate git repo with CLAUDE.md + CI/CD
+├── frontend/              # Git repo (fullstack + frontend_only)
+└── backend/               # Git repo (fullstack + backend_only)
 ```
+
+Code directories are created after the Input Processor detects the project type. The CLI creates only the base structure (`.agentic-dev/` + `docs/`); the engine creates code directories post-detection.
 
 Each generated repo gets a tailored `CLAUDE.md`, a `.github/workflows/ci.yml` for CI/CD, and developer-maintained documentation (`README.md` and `ARCHITECTURE.md`) that is updated incrementally each sprint.
 
@@ -284,6 +305,8 @@ Documents are markdown files with light structure. The orchestrator parses them 
 **Structured Input:**
 ```markdown
 # Structured Input
+## Project Type
+<fullstack | frontend_only | backend_only>
 ## Feature Requirements
 - [F001] <feature name>: <description>
 - [F002] ...

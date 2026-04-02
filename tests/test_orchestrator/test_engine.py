@@ -18,6 +18,7 @@ from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import (
     PipelinePhase,
     PipelineState,
+    ProjectType,
     SprintState,
     SprintStatus,
 )
@@ -374,3 +375,146 @@ class TestUATPhase:
 
         assert state.phase == PipelinePhase.COMPLETE
         doc_store.write.assert_any_call("uat_report", "uat passed")
+
+
+class TestProjectTypeDetection:
+    """Test that the engine parses project type from structured_input."""
+
+    @pytest.mark.asyncio
+    async def test_input_processing_parses_project_type(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """Project type is parsed from structured_input after input processing."""
+        state = _make_state(PipelinePhase.INPUT_PROCESSING)
+        state_manager.load = MagicMock(return_value=state)
+
+        structured_output = (
+            "# Structured Input\n"
+            "## Project Type\nfrontend_only\n"
+            "## Feature Requirements\n- Build a React app"
+        )
+        claude.run.return_value = _make_claude_result(structured_output, cost=0.05)
+
+        with patch.object(
+            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        assert state.project_type == ProjectType.FRONTEND_ONLY
+
+    @pytest.mark.asyncio
+    async def test_input_processing_defaults_to_fullstack(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """When no project type is found in structured_input, default to fullstack."""
+        state = _make_state(PipelinePhase.INPUT_PROCESSING)
+        state_manager.load = MagicMock(return_value=state)
+
+        structured_output = "# Structured Input\n## Feature Requirements\n- Build an app"
+        claude.run.return_value = _make_claude_result(structured_output, cost=0.05)
+
+        with patch.object(
+            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        assert state.project_type == ProjectType.FULLSTACK
+
+    @pytest.mark.asyncio
+    async def test_architecture_uses_expected_docs_for_frontend_only(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """Architecture phase uses state.expected_architecture_docs for splitting."""
+        state = _make_state(
+            PipelinePhase.ARCHITECTURE,
+            project_type=ProjectType.FRONTEND_ONLY,
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        arch_output = "<!-- DOCUMENT: frontend_spec -->\n# Frontend Spec\nContent here"
+        claude.run.side_effect = [
+            _make_claude_result(arch_output, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        # Should succeed with just frontend_spec (not expecting 3 docs)
+        with patch.object(
+            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
+        ):
+            # It will advance through ARCHITECTURE_QA to SPRINT_PLANNING, then fail
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        doc_store.write.assert_any_call("frontend_spec", "# Frontend Spec\nContent here")
+
+    @pytest.mark.asyncio
+    async def test_architecture_passes_project_type_as_extra_context(
+        self, engine, state_manager, claude, doc_store, prompt_renderer
+    ):
+        """Architecture QA cycle receives project_type via extra_context."""
+        state = _make_state(
+            PipelinePhase.ARCHITECTURE,
+            project_type=ProjectType.BACKEND_ONLY,
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        arch_output = (
+            "<!-- DOCUMENT: backend_spec -->\n# Backend Spec\nModels\n"
+            "<!-- DOCUMENT: api_contract -->\n# API Contract\nEndpoints"
+        )
+        claude.run.side_effect = [
+            _make_claude_result(arch_output, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        with patch.object(
+            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        # Verify extra_context was passed to run_qa_cycle
+        render_calls = prompt_renderer.render_agent_prompt.call_args_list
+        any_has_project_type = any(
+            call.kwargs.get("extra_context", {}).get("project_type") == "backend_only"
+            for call in render_calls
+        )
+        assert any_has_project_type
+
+    @pytest.mark.asyncio
+    async def test_sprint_planning_reads_only_available_docs(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """For frontend_only, sprint planning reads frontend_spec but not backend_spec."""
+        state = _make_state(
+            PipelinePhase.SPRINT_PLANNING,
+            project_type=ProjectType.FRONTEND_ONLY,
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        # Track which doc names are read
+        read_docs = []
+        original_exists = doc_store.exists
+
+        def mock_read(name):
+            read_docs.append(name)
+            return f"content of {name}"
+
+        doc_store.read = MagicMock(side_effect=mock_read)
+
+        claude.run.side_effect = [
+            _make_claude_result("# Sprint Plan\n## Sprint 1: UI", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+        ]
+
+        with patch.object(
+            engine, "_advance_past_checkpoint", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        assert "frontend_spec" in read_docs
+        assert "backend_spec" not in read_docs
+        assert "api_contract" not in read_docs

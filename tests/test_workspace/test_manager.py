@@ -15,7 +15,7 @@ def workspace(tmp_path: Path) -> WorkspaceManager:
 
 
 class TestCreateProject:
-    def test_creates_all_directories(self, workspace: WorkspaceManager) -> None:
+    def test_creates_base_directories_only(self, workspace: WorkspaceManager) -> None:
         project_root = workspace.create_project("my-app")
 
         assert project_root.is_dir()
@@ -25,8 +25,8 @@ class TestCreateProject:
         assert (project_root / ".agentic-dev" / "sessions").is_dir()
         assert (project_root / "docs").is_dir()
         assert (project_root / "docs" / "qa_reports").is_dir()
-        assert (project_root / "frontend").is_dir()
-        assert (project_root / "backend").is_dir()
+        assert not (project_root / "frontend").exists()
+        assert not (project_root / "backend").exists()
 
     def test_returns_project_root_path(self, workspace: WorkspaceManager) -> None:
         project_root = workspace.create_project("my-app")
@@ -40,6 +40,33 @@ class TestCreateProject:
 
         with pytest.raises(WorkspaceError, match="already exists"):
             workspace.create_project("my-app")
+
+
+class TestCreateCodeDirs:
+    def test_fullstack_creates_both_dirs(self, workspace: WorkspaceManager) -> None:
+        project_root = workspace.create_project("my-app")
+        workspace.create_code_dirs("my-app", "fullstack")
+
+        assert (project_root / "frontend").is_dir()
+        assert (project_root / "backend").is_dir()
+
+    def test_frontend_only_creates_frontend_dir(self, workspace: WorkspaceManager) -> None:
+        project_root = workspace.create_project("my-app")
+        workspace.create_code_dirs("my-app", "frontend_only")
+
+        assert (project_root / "frontend").is_dir()
+        assert not (project_root / "backend").exists()
+
+    def test_backend_only_creates_backend_dir(self, workspace: WorkspaceManager) -> None:
+        project_root = workspace.create_project("my-app")
+        workspace.create_code_dirs("my-app", "backend_only")
+
+        assert not (project_root / "frontend").exists()
+        assert (project_root / "backend").is_dir()
+
+    def test_raises_for_missing_project(self, workspace: WorkspaceManager) -> None:
+        with pytest.raises(WorkspaceError, match="does not exist"):
+            workspace.create_code_dirs("nonexistent", "fullstack")
 
 
 class TestGetProjectDir:

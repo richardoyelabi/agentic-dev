@@ -7,6 +7,14 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class ProjectType(StrEnum):
+    """Type of project being developed."""
+
+    FULLSTACK = "fullstack"
+    FRONTEND_ONLY = "frontend_only"
+    BACKEND_ONLY = "backend_only"
+
+
 class PipelinePhase(StrEnum):
     """Finite state machine phases for the development pipeline."""
 
@@ -71,6 +79,7 @@ class PipelineState(BaseModel):
     """Top-level pipeline state persisted to disk."""
 
     project_name: str
+    project_type: ProjectType | None = None
     phase: PipelinePhase = PipelinePhase.IDLE
     mode: Literal["new", "update", "remediate"] = "new"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -83,3 +92,26 @@ class PipelineState(BaseModel):
     total_cost_usd: float = 0.0
     remediation_cycle: int = 0
     agent_runs: list[AgentRunRecord] = Field(default_factory=list)
+
+    @property
+    def has_frontend(self) -> bool:
+        """Whether this project includes a frontend."""
+        return self.project_type in (
+            None, ProjectType.FULLSTACK, ProjectType.FRONTEND_ONLY
+        )
+
+    @property
+    def has_backend(self) -> bool:
+        """Whether this project includes a backend."""
+        return self.project_type in (
+            None, ProjectType.FULLSTACK, ProjectType.BACKEND_ONLY
+        )
+
+    @property
+    def expected_architecture_docs(self) -> list[str]:
+        """Architecture documents expected based on project type."""
+        if self.project_type == ProjectType.FRONTEND_ONLY:
+            return ["frontend_spec"]
+        if self.project_type == ProjectType.BACKEND_ONLY:
+            return ["backend_spec", "api_contract"]
+        return ["frontend_spec", "backend_spec", "api_contract"]
