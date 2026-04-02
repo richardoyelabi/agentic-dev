@@ -3,7 +3,11 @@
 from datetime import datetime, timezone
 
 from agentic_dev.exceptions import InvalidTransitionError
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import PhaseTransitionEvent
 from agentic_dev.state.models import PipelinePhase, PipelineState
+
+_event_log = get_event_logger("transitions")
 
 VALID_TRANSITIONS: dict[PipelinePhase, list[PipelinePhase]] = {
     PipelinePhase.IDLE: [PipelinePhase.INPUT_PROCESSING],
@@ -36,8 +40,14 @@ def advance_phase(
 ) -> PipelineState:
     """Validate the transition and return a new state with the updated phase."""
     validate_transition(state.phase, to_phase)
+    old_phase = state.phase
     state.phase = to_phase
     state.updated_at = datetime.now(timezone.utc)
+    emit(_event_log, PhaseTransitionEvent(
+        from_phase=str(old_phase),
+        to_phase=str(to_phase),
+        message=f"{old_phase} -> {to_phase}",
+    ))
     return state
 
 

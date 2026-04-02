@@ -2,15 +2,18 @@
 
 import asyncio
 import json
-import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from agentic_dev.config import DEFAULT_MAX_TURNS, MODELS
 from agentic_dev.exceptions import AgentRunError
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.context import get_run_context
+from agentic_dev.logging.events import AgentStartEvent, AgentCompleteEvent, AgentFailedEvent
 
-logger = logging.getLogger(__name__)
+_event_log = get_event_logger("runner")
 
 
 @runtime_checkable
@@ -131,13 +134,18 @@ class ClaudeRunner:
             extra_add_dirs=extra_add_dirs,
         )
 
-        logger.info(
-            "Running agent '%s' (model=%s) in %s [prompt=%d chars]",
-            agent.name,
-            agent.model,
-            working_dir,
-            len(prompt),
-        )
+        ctx = get_run_context()
+        sprint = ctx.sprint_number if ctx else None
+        start_time = datetime.now(timezone.utc)
+
+        emit(_event_log, AgentStartEvent(
+            agent_name=agent.name,
+            model=agent.model,
+            prompt_length=len(prompt),
+            working_dir=str(working_dir),
+            sprint=sprint,
+            message=f"Running agent '{agent.name}' (model={agent.model}) in {working_dir} [prompt={len(prompt)} chars]",
+        ))
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -155,12 +163,17 @@ class ClaudeRunner:
 
         if exit_code != 0:
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            logger.error(
-                "Agent '%s' failed (exit=%d): %s",
-                agent.name,
-                exit_code,
-                stderr_text[:500],
-            )
+            duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+            emit(_event_log, AgentFailedEvent(
+                agent_name=agent.name,
+                model=agent.model,
+                duration_s=duration_s,
+                exit_code=exit_code,
+                error=stderr_text[:500],
+                sprint=sprint,
+                level="ERROR",
+                message=f"Agent '{agent.name}' failed (exit={exit_code}): {stderr_text[:200]}",
+            ))
             raise AgentRunError(
                 agent_name=agent.name,
                 message=f"CLI exited with code {exit_code}: {stderr_text}",
@@ -183,8 +196,24 @@ class ClaudeRunner:
             raw_json=raw_json,
         )
 
-        if not result.text.strip():
-            logger.warning("Agent '%s' returned empty result text", agent.name)
+        duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+        level = "WARNING" if not result.text.strip() else "INFO"
+        msg = (
+            f"Agent '{agent.name}' returned empty result text"
+            if not result.text.strip()
+            else f"Agent '{agent.name}' complete ({duration_s:.1f}s, ${result.cost_usd:.4f})"
+        )
+        emit(_event_log, AgentCompleteEvent(
+            agent_name=agent.name,
+            model=agent.model,
+            duration_s=duration_s,
+            cost_usd=result.cost_usd,
+            result_length=len(result.text),
+            session_id=result.session_id,
+            sprint=sprint,
+            level=level,
+            message=msg,
+        ))
 
         self._save_log(agent, prompt, result)
 
@@ -197,12 +226,11 @@ class ClaudeRunner:
         if self._log_dir is None:
             return
 
-        from datetime import datetime, timezone
-
-        self._log_dir.mkdir(parents=True, exist_ok=True)
+        dump_dir = self._log_dir / "agent_dumps"
+        dump_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        log_file = self._log_dir / f"{agent.name}_{timestamp}.json"
+        log_file = dump_dir / f"{agent.name}_{timestamp}.json"
 
         entry = {
             "agent_name": agent.name,
@@ -221,4 +249,4 @@ class ClaudeRunner:
                 json.dumps(entry, indent=2, default=str), encoding="utf-8"
             )
         except OSError:
-            logger.warning("Failed to write log to %s", log_file)
+            pass

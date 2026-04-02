@@ -6,6 +6,10 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFo
 
 from agentic_dev.config import PROMPT_TEMPLATES_DIR
 from agentic_dev.exceptions import AgenticDevError
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import PromptRenderedEvent
+
+_event_log = get_event_logger("prompts")
 
 
 class TemplateRenderError(AgenticDevError):
@@ -69,4 +73,12 @@ class PromptRenderer:
             context["previous_output"] = previous_output or ""
             context["qa_feedback"] = qa_feedback or ""
 
-        return self.render(template_name, context)
+        result = self.render(template_name, context)
+        emit(_event_log, PromptRenderedEvent(
+            template_name=template_name,
+            context_keys=list(input_documents.keys()),
+            output_length=len(result),
+            correction_mode=correction_mode,
+            message=f"Rendered {template_name} ({len(result)} chars, correction={correction_mode})",
+        ))
+        return result

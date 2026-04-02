@@ -11,7 +11,11 @@ from agentic_dev.config import (
     STATE_FILE,
 )
 from agentic_dev.exceptions import StateError
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import StateSaveEvent, StateLoadEvent
 from agentic_dev.state.models import PipelineState
+
+_event_log = get_event_logger("state")
 
 
 class StateManager:
@@ -34,7 +38,13 @@ class StateManager:
                 "Have you initialized a project?"
             )
         data = json.loads(self.state_file.read_text(encoding="utf-8"))
-        return PipelineState.model_validate(data)
+        state = PipelineState.model_validate(data)
+        emit(_event_log, StateLoadEvent(
+            phase=str(state.phase),
+            total_cost_usd=state.total_cost_usd,
+            message=f"State loaded (phase={state.phase}, cost=${state.total_cost_usd:.4f})",
+        ))
+        return state
 
     def save(self, state: PipelineState) -> None:
         """Atomically save pipeline state.
@@ -55,6 +65,12 @@ class StateManager:
             encoding="utf-8",
         )
         shutil.move(str(tmp_path), str(self.state_file))
+        emit(_event_log, StateSaveEvent(
+            phase=str(state.phase),
+            total_cost_usd=state.total_cost_usd,
+            sprint_count=len(state.sprints),
+            message=f"State saved (phase={state.phase}, cost=${state.total_cost_usd:.4f})",
+        ))
 
     def exists(self) -> bool:
         """Check whether a state file already exists."""
