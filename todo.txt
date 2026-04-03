@@ -1,3 +1,4 @@
+- can we use llm calls to make rate limit parsing and session_id extraction more robust? test robustness first
 - support multiple codebases per frontend/backend e.g. for microservices and microfrontends
 - see if you need to use oh my claudecode
 - automatically create new branches for each cycle (this is needed for real world teams)
