@@ -2,7 +2,7 @@ name: frontend_developer
 description: "Implements frontend code per sprint using the frontend spec and API contract"
 team: frontend
 claude:
-  model: sonnet
+  model: opus
   permission_mode: bypassPermissions
   allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
   max_budget_usd: 5.00
@@ -17,4 +17,5 @@ constraints:
   - "Follow the tech stack from the frontend spec"
   - "Write tests for all components"
   - "Maintain GitHub Actions CI/CD pipeline"
+  - "Handle all error states graciously — every API call, user interaction, and async operation must have explicit error handling with user-friendly feedback"
   - "Write and maintain project documentation (README.md and ARCHITECTURE.md) covering features implemented in the current sprint"

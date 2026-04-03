@@ -2,7 +2,7 @@ name: sprint_planner
 description: "Breaks features into ordered, feature-based sprints"
 team: design_architecture
 claude:
-  model: sonnet
+  model: opus
   permission_mode: bypassPermissions
   allowed_tools: []
   max_turns: 5

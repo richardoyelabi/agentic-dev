@@ -2,7 +2,7 @@ name: input_processor
 description: "Normalizes user input, separates feature requirements from preferences"
 team: design_architecture
 claude:
-  model: sonnet
+  model: opus
   permission_mode: bypassPermissions
   allowed_tools: []
   max_turns: 5

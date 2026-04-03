@@ -2,7 +2,7 @@ name: integration
 description: "Connects third-party services via MCPs and official SDKs"
 team: integration
 claude:
-  model: sonnet
+  model: opus
   permission_mode: bypassPermissions
   allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
   max_budget_usd: 3.00
@@ -16,3 +16,4 @@ constraints:
   - "Write integration code using official SDKs"
   - "Produce manual configuration guide for steps that cannot be automated"
   - "Include verification steps in the guide"
+  - "All third-party interactions must be wrapped with error handling — external service failures must never crash the application or expose raw error details"

@@ -2,7 +2,7 @@ name: backend_developer
 description: "Implements backend code per sprint using the backend spec and API contract"
 team: backend
 claude:
-  model: sonnet
+  model: opus
   permission_mode: bypassPermissions
   allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
   max_budget_usd: 5.00
@@ -17,4 +17,5 @@ constraints:
   - "Follow the tech stack from the backend spec"
   - "Write tests for all endpoints and services"
   - "Maintain GitHub Actions CI/CD pipeline"
+  - "Use a consistent error response schema across all endpoints. Validate inputs at the boundary, handle all expected failure cases with appropriate status codes, and never expose internal details in error responses"
   - "Write and maintain project documentation (README.md and ARCHITECTURE.md) covering features implemented in the current sprint"
