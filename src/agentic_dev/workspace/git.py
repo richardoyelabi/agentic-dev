@@ -40,6 +40,12 @@ async def commit(path: Path, message: str, add_all: bool = True) -> None:
     await _run_git(path, "commit", "-m", message)
 
 
+async def has_changes(path: Path) -> bool:
+    """Return True if there are staged, unstaged, or untracked changes."""
+    output = await _run_git(path, "status", "--porcelain")
+    return len(output) > 0
+
+
 async def get_current_branch(path: Path) -> str:
     """Return the name of the current branch."""
     return await _run_git(path, "rev-parse", "--abbrev-ref", "HEAD")

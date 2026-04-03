@@ -1,5 +1,6 @@
 """Generator for CLAUDE.md files tailored to frontend and backend repos."""
 
+import re
 from pathlib import Path
 
 
@@ -91,6 +92,38 @@ def generate_backend_claude_md(
 - Use systematic debugging when tests fail
 - Run verification before claiming work is complete
 """
+
+
+def parse_tech_stack(spec_text: str) -> dict[str, str]:
+    """Extract tech stack key-value pairs from an architecture spec.
+
+    Looks for a ``## Tech Stack`` section with bold-labeled bullet lines
+    like ``- **Framework:** Next.js`` and returns them as a dict with
+    lower-cased, underscored keys (e.g. ``{"framework": "Next.js"}``).
+    """
+    tech_stack: dict[str, str] = {}
+
+    in_section = False
+    for line in spec_text.splitlines():
+        stripped = line.strip()
+
+        if re.match(r"^##\s+Tech\s+Stack", stripped, re.IGNORECASE):
+            in_section = True
+            continue
+
+        if in_section and re.match(r"^##\s+", stripped):
+            break
+
+        if in_section:
+            match = re.match(
+                r"-\s+\*\*(.+?):\*\*\s*(.+)", stripped
+            )
+            if match:
+                key = match.group(1).strip().lower().replace(" ", "_")
+                value = match.group(2).strip()
+                tech_stack[key] = value
+
+    return tech_stack
 
 
 def write_claude_md(project_dir: Path, content: str) -> None:

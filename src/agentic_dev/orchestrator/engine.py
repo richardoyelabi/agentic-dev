@@ -28,6 +28,13 @@ from agentic_dev.state.models import (
     SprintStatus,
 )
 from agentic_dev.state.transitions import advance_phase
+from agentic_dev.workspace.claude_md import (
+    generate_backend_claude_md,
+    generate_frontend_claude_md,
+    parse_tech_stack,
+    write_claude_md,
+)
+from agentic_dev.workspace.git import commit, has_changes, init_repo
 
 
 class PipelineEngine:
@@ -264,7 +271,53 @@ class PipelineEngine:
         if state.checkpoint_feedback:
             self._doc_store.write("checkpoint_feedback", state.checkpoint_feedback)
             state.checkpoint_feedback = None
+
+        await self._setup_workspaces(state)
+
         return advance_phase(state, PipelinePhase.SPRINTING)
+
+    async def _setup_workspaces(self, state: PipelineState) -> None:
+        """Initialize git repos and generate CLAUDE.md for code directories."""
+        project_name = state.project_name
+
+        if state.has_frontend:
+            frontend_dir = self._project_dir / "frontend"
+            tech_stack = self._read_tech_stack("frontend_spec")
+            content = generate_frontend_claude_md(project_name, tech_stack)
+            write_claude_md(frontend_dir, content)
+            await init_repo(frontend_dir)
+            await commit(frontend_dir, "Initial commit: project scaffold and CLAUDE.md")
+
+        if state.has_backend:
+            backend_dir = self._project_dir / "backend"
+            tech_stack = self._read_tech_stack("backend_spec")
+            content = generate_backend_claude_md(project_name, tech_stack)
+            write_claude_md(backend_dir, content)
+            await init_repo(backend_dir)
+            await commit(backend_dir, "Initial commit: project scaffold and CLAUDE.md")
+
+    async def _commit_sprint_changes(
+        self, state: PipelineState, sprint: SprintState
+    ) -> None:
+        """Commit changes in code directories after a successful sprint."""
+        message = f"Sprint {sprint.sprint_number}: {sprint.name}"
+        dirs = []
+        if state.has_frontend:
+            dirs.append(self._project_dir / "frontend")
+        if state.has_backend:
+            dirs.append(self._project_dir / "backend")
+
+        for code_dir in dirs:
+            if await has_changes(code_dir):
+                await commit(code_dir, message)
+
+    def _read_tech_stack(self, doc_name: str) -> dict[str, str]:
+        """Read a spec document and parse its tech stack, returning defaults on failure."""
+        try:
+            spec_text = self._doc_store.read(doc_name)
+            return parse_tech_stack(spec_text)
+        except Exception:
+            return {}
 
     async def _run_sprints(self, state: PipelineState) -> PipelineState:
         """Run each sprint sequentially using SprintRunner."""
@@ -298,6 +351,9 @@ class PipelineEngine:
             sprint.status = SprintStatus.COMPLETE if result.success else SprintStatus.FAILED
             sprint.completed_at = datetime.now(timezone.utc)
             state.total_cost_usd += result.total_cost
+
+            if result.success:
+                await self._commit_sprint_changes(state, sprint)
 
             self._state_manager.save(state)
 

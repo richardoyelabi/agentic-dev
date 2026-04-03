@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -175,9 +175,13 @@ class TestCheckpointPause:
         state_manager.save.assert_called()
 
     @pytest.mark.asyncio
-    async def test_no_pause_when_checkpoint_disabled(self, engine, state_manager, claude):
+    async def test_no_pause_when_checkpoint_disabled(
+        self, engine, state_manager, claude, project_dir
+    ):
         """Pipeline does not pause at DESIGN_CHECKPOINT when after_design is False."""
         # engine fixture has after_design=False
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
@@ -200,7 +204,18 @@ class TestCheckpointPause:
             _make_claude_result("uat report", cost=0.10),
         ]
 
-        await engine.run()
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ), patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            await engine.run()
 
         assert state.phase == PipelinePhase.COMPLETE
 
@@ -321,8 +336,12 @@ class TestSprintPhase:
     """Test the sprinting phase."""
 
     @pytest.mark.asyncio
-    async def test_sprints_run_sequentially(self, engine, state_manager, claude):
+    async def test_sprints_run_sequentially(
+        self, engine, state_manager, claude, project_dir
+    ):
         """Each sprint runs in order and updates state."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.SPRINTING,
             sprints=[
@@ -351,7 +370,14 @@ class TestSprintPhase:
             _make_claude_result("uat report", cost=0.10),
         ]
 
-        await engine.run()
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ):
+            await engine.run()
 
         assert state.phase == PipelinePhase.COMPLETE
         assert state.sprints[0].status == SprintStatus.COMPLETE
@@ -592,3 +618,369 @@ class TestProjectTypeDetection:
         assert "frontend_spec" in read_docs
         assert "backend_spec" not in read_docs
         assert "api_contract" not in read_docs
+
+
+class TestWorkspaceSetup:
+    """Test that _advance_past_checkpoint sets up git repos and CLAUDE.md."""
+
+    @pytest.mark.asyncio
+    async def test_inits_git_repos_for_fullstack(
+        self, engine, state_manager, project_dir
+    ):
+        """Git repos are initialized for both frontend and backend."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.FULLSTACK,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ) as mock_init, patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ), patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        init_paths = [c.args[0] for c in mock_init.call_args_list]
+        assert project_dir / "frontend" in init_paths
+        assert project_dir / "backend" in init_paths
+
+    @pytest.mark.asyncio
+    async def test_generates_claude_md(
+        self, engine, state_manager, project_dir, doc_store
+    ):
+        """CLAUDE.md is written to each code directory."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.FULLSTACK,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        doc_store.read = MagicMock(return_value="## Tech Stack\n- **Framework:** Next.js")
+        doc_store.exists = MagicMock(return_value=False)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ) as mock_write, patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        write_dirs = [c.args[0] for c in mock_write.call_args_list]
+        assert project_dir / "frontend" in write_dirs
+        assert project_dir / "backend" in write_dirs
+
+    @pytest.mark.asyncio
+    async def test_makes_initial_commit(
+        self, engine, state_manager, project_dir, doc_store
+    ):
+        """An initial commit is made in each repo after setup."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.FULLSTACK,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit, patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ), patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        commit_paths = [c.args[0] for c in mock_commit.call_args_list]
+        assert project_dir / "frontend" in commit_paths
+        assert project_dir / "backend" in commit_paths
+        for c in mock_commit.call_args_list:
+            assert "Initial commit" in c.args[1]
+
+    @pytest.mark.asyncio
+    async def test_frontend_only_skips_backend(
+        self, engine, state_manager, project_dir
+    ):
+        """Only frontend is set up for frontend_only projects."""
+        (project_dir / "frontend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.FRONTEND_ONLY,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ) as mock_init, patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ), patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        init_paths = [c.args[0] for c in mock_init.call_args_list]
+        assert project_dir / "frontend" in init_paths
+        assert project_dir / "backend" not in init_paths
+
+    @pytest.mark.asyncio
+    async def test_backend_only_skips_frontend(
+        self, engine, state_manager, project_dir
+    ):
+        """Only backend is set up for backend_only projects."""
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.BACKEND_ONLY,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ) as mock_init, patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ), patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        init_paths = [c.args[0] for c in mock_init.call_args_list]
+        assert project_dir / "frontend" not in init_paths
+        assert project_dir / "backend" in init_paths
+
+    @pytest.mark.asyncio
+    async def test_handles_missing_spec_gracefully(
+        self, engine, state_manager, project_dir, doc_store
+    ):
+        """Uses defaults when spec docs are unavailable."""
+        (project_dir / "frontend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.FRONTEND_ONLY,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(side_effect=FileNotFoundError("not found"))
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ), patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ) as mock_write, patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        # Should still write CLAUDE.md with defaults
+        assert mock_write.call_count == 1
+
+
+class TestPostSprintCommits:
+    """Test that git commits happen after successful sprints."""
+
+    @pytest.mark.asyncio
+    async def test_commits_after_successful_sprint(
+        self, engine, state_manager, claude, project_dir
+    ):
+        """Git commit is called for frontend and backend after a successful sprint."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[SprintState(sprint_number=1, name="Core Features")],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        claude.run.side_effect = [
+            _make_claude_result("backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("frontend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat report", cost=0.10),
+        ]
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit:
+            await engine.run()
+
+        commit_paths = [c.args[0] for c in mock_commit.call_args_list]
+        assert project_dir / "frontend" in commit_paths
+        assert project_dir / "backend" in commit_paths
+
+    @pytest.mark.asyncio
+    async def test_commit_message_includes_sprint_info(
+        self, engine, state_manager, claude, project_dir
+    ):
+        """Commit message references sprint number and name."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[SprintState(sprint_number=1, name="Core Features")],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        claude.run.side_effect = [
+            _make_claude_result("backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("frontend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat report", cost=0.10),
+        ]
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit:
+            await engine.run()
+
+        for c in mock_commit.call_args_list:
+            assert "Sprint 1" in c.args[1]
+            assert "Core Features" in c.args[1]
+
+    @pytest.mark.asyncio
+    async def test_failed_sprint_does_not_commit(
+        self, engine, state_manager, claude, project_dir
+    ):
+        """No commit when sprint fails."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        claude.run.side_effect = AgentRunError("backend_developer", "failed")
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit:
+            await engine.run()
+
+        mock_commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_commit_when_no_changes(
+        self, engine, state_manager, claude, project_dir
+    ):
+        """No commit attempted when has_changes returns False."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        claude.run.side_effect = [
+            _make_claude_result("backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("frontend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat report", cost=0.10),
+        ]
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit:
+            await engine.run()
+
+        mock_commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_frontend_only_commits_only_frontend(
+        self, engine, state_manager, claude, project_dir
+    ):
+        """Only frontend dir is committed for frontend_only projects."""
+        (project_dir / "frontend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            project_type=ProjectType.FRONTEND_ONLY,
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        claude.run.side_effect = [
+            _make_claude_result("frontend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat report", cost=0.10),
+        ]
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit:
+            await engine.run()
+
+        commit_paths = [c.args[0] for c in mock_commit.call_args_list]
+        assert project_dir / "frontend" in commit_paths
+        assert project_dir / "backend" not in commit_paths
