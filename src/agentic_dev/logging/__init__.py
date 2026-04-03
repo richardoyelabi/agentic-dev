@@ -12,7 +12,6 @@ Public API
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,7 +20,11 @@ from agentic_dev.logging.context import RunContext, get_run_context, set_run_con
 from agentic_dev.logging.events import LogEvent
 
 if TYPE_CHECKING:
+    import contextvars
+
     from rich.console import Console
+
+    from agentic_dev.logging.dashboard import PipelineDashboard
 
 EVENT_LOGGER_ROOT = "agentic_dev.events"
 
@@ -35,7 +38,7 @@ _LEVEL_MAP = {
 # Module-level state for the current logging session
 _dashboard: "PipelineDashboard | None" = None
 _handlers: list[logging.Handler] = []
-_context_token: object | None = None
+_context_token: contextvars.Token[RunContext | None] | None = None
 
 
 def generate_run_id() -> str:

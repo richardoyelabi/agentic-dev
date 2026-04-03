@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from agentic_dev.config import AGENTIC_DEV_METADATA_DIR
 from agentic_dev.exceptions import WorkspaceError
 from agentic_dev.workspace.manager import WorkspaceManager
 

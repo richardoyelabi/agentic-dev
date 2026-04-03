@@ -6,7 +6,7 @@ from pathlib import Path
 from agentic_dev.agents.base import AgentDefinition
 
 
-@dataclass(frozen=True)
+@dataclass
 class AgentRunConfig:
     """Flat configuration that satisfies the AgentConfig protocol.
 

@@ -45,7 +45,7 @@ async def run_qa_cycle(
     doc_store: DocumentStore,
     prompt_renderer: PromptRenderer,
     qa_output_key: str | None = None,
-    extra_context: dict | None = None,
+    extra_context: dict[str, str] | None = None,
 ) -> QACycleResult:
     """Execute one action -> QA -> optional correction cycle.
 

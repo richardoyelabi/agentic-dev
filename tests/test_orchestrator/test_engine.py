@@ -1,8 +1,7 @@
 """Tests for the pipeline engine."""
 
-from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -596,7 +595,6 @@ class TestProjectTypeDetection:
 
         # Track which doc names are read
         read_docs = []
-        original_exists = doc_store.exists
 
         def mock_read(name):
             read_docs.append(name)

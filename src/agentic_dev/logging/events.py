@@ -33,7 +33,7 @@ class PipelineStartEvent(LogEvent):
     event_type: str = "pipeline_start"
     mode: str
     phase: str
-    command_args: dict
+    command_args: dict[str, object]
 
 
 class PipelineCompleteEvent(LogEvent):
@@ -297,4 +297,4 @@ class CheckpointDecisionEvent(LogEvent):
     event_type: str = "checkpoint_decision"
     phase: str
     should_pause: bool
-    config_snapshot: dict
+    config_snapshot: dict[str, object]

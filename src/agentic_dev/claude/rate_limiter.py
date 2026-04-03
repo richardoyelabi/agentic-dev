@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -189,7 +189,7 @@ class UsageApiClient:
                 return None
 
             body = resp.json()
-            new_access = body.get("access_token")
+            new_access: str | None = body.get("access_token")
             new_refresh = body.get("refresh_token", refresh_token)
             expires_in = body.get("expires_in", 14400)
 

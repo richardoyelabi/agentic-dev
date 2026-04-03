@@ -1,7 +1,6 @@
 """Tests for rate limit detection, usage API client, and wait strategy."""
 
 import json
-import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -55,4 +55,5 @@ class SessionStore:
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data.get("session_id")
+        result: str | None = data.get("session_id")
+        return result

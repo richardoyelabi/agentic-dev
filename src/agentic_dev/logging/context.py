@@ -22,7 +22,7 @@ class RunContext:
     sprint_number: int | None = None
 
 
-def set_run_context(ctx: RunContext) -> contextvars.Token:
+def set_run_context(ctx: RunContext) -> contextvars.Token[RunContext | None]:
     """Set the current run context. Returns a token for resetting."""
     return _run_context.set(ctx)
 
@@ -32,6 +32,6 @@ def get_run_context() -> RunContext | None:
     return _run_context.get()
 
 
-def clear_run_context(token: contextvars.Token) -> None:
+def clear_run_context(token: contextvars.Token[RunContext | None]) -> None:
     """Reset the run context to its previous value."""
     _run_context.reset(token)

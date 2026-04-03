@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -17,7 +17,7 @@ from agentic_dev.logging import (
     setup_logging,
     teardown_logging,
 )
-from agentic_dev.logging.context import get_run_context, RunContext, set_run_context, clear_run_context
+from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import LogEvent
 
 

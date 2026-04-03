@@ -7,7 +7,6 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from agentic_dev.logging.events import LogEvent, AgentStartEvent
 from agentic_dev.logging.handlers import (

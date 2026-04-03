@@ -12,7 +12,7 @@ from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, CONFIG_FILE
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.state.manager import StateManager
-from agentic_dev.state.models import PipelinePhase, PipelineState
+from agentic_dev.state.models import PipelinePhase
 
 
 runner = CliRunner()

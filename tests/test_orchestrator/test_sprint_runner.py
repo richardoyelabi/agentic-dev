@@ -10,7 +10,6 @@ from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
-from agentic_dev.orchestrator.qa_cycle import QACycleResult
 from agentic_dev.orchestrator.sprint_runner import SprintResult, SprintRunner
 from agentic_dev.prompts.renderer import PromptRenderer
 

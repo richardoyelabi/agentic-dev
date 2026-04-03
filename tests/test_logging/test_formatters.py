@@ -6,7 +6,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-import pytest
 
 from agentic_dev.logging.events import LogEvent, AgentStartEvent
 from agentic_dev.logging.formatters import (

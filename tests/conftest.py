@@ -1,6 +1,5 @@
 """Shared test fixtures for agentic-dev tests."""
 
-import tempfile
 from pathlib import Path
 
 import pytest

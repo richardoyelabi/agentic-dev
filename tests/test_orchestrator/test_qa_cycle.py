@@ -9,7 +9,7 @@ from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
-from agentic_dev.orchestrator.qa_cycle import QACycleResult, run_qa_cycle
+from agentic_dev.orchestrator.qa_cycle import run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
 
 

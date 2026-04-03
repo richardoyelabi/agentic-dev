@@ -1,6 +1,6 @@
 """Sprint runner: executes a single sprint through backend -> frontend -> integration."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.logging import get_event_logger, emit
-from agentic_dev.logging.context import get_run_context, set_run_context
+from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import (
     SprintStartEvent,
     SprintPhaseEvent,

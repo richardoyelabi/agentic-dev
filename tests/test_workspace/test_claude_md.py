@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 
 from agentic_dev.workspace.claude_md import (
     generate_backend_claude_md,

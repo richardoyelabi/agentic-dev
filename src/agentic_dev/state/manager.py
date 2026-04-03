@@ -4,6 +4,7 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from agentic_dev.config import (
     AGENTIC_DEV_METADATA_DIR,
@@ -77,7 +78,7 @@ class StateManager:
         return self.state_file.exists()
 
     def create_initial(
-        self, project_name: str, mode: str = "new"
+        self, project_name: str, mode: Literal["new", "update", "remediate"] = "new"
     ) -> PipelineState:
         """Create and persist a fresh initial pipeline state."""
         state = PipelineState(project_name=project_name, mode=mode)

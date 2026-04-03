@@ -154,7 +154,7 @@ class PipelineDashboard:
                 completed=state.sprint_current,
                 width=20,
             )
-            sprint_renderable = Group(sprint_text, progress_bar)
+            sprint_renderable: Text | Group = Group(sprint_text, progress_bar)
         elif state.sprint_current is not None:
             sprint_renderable = Text(f"Sprint {state.sprint_current}")
         else:

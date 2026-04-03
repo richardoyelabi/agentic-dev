@@ -1,6 +1,5 @@
 """Tests for the checkpoint system."""
 
-import pytest
 
 from agentic_dev.orchestrator.checkpoint import (
     CheckpointConfig,

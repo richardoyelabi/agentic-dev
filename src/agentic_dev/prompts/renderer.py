@@ -33,7 +33,7 @@ class PromptRenderer:
             lstrip_blocks=True,
         )
 
-    def render(self, template_name: str, context: dict) -> str:
+    def render(self, template_name: str, context: dict[str, object]) -> str:
         """Render a template with the given context dictionary."""
         try:
             template = self._env.get_template(template_name)
@@ -53,14 +53,14 @@ class PromptRenderer:
         correction_mode: bool = False,
         previous_output: str | None = None,
         qa_feedback: str | None = None,
-        extra_context: dict | None = None,
+        extra_context: dict[str, str] | None = None,
     ) -> str:
         """Render an agent prompt from standard agent inputs.
 
         Builds a context dictionary from the input documents, constraints,
         and optional correction-mode fields, then delegates to render().
         """
-        context: dict = {
+        context: dict[str, object] = {
             **input_documents,
             "constraints": constraints,
             "correction_mode": correction_mode,

@@ -51,7 +51,7 @@ class ClaudeResult:
     session_id: str | None
     cost_usd: float
     exit_code: int
-    raw_json: dict = field(default_factory=dict)
+    raw_json: dict[str, object] = field(default_factory=dict)
 
 
 class ClaudeRunner:
@@ -145,7 +145,8 @@ class ClaudeRunner:
         """Try to extract session_id from potentially partial JSON output."""
         try:
             data = json.loads(stdout)
-            return data.get("session_id")
+            result: str | None = data.get("session_id")
+            return result
         except (json.JSONDecodeError, ValueError):
             return None
 
@@ -189,7 +190,6 @@ class ClaudeRunner:
         ))
 
         resume_session_id = session_id
-        last_stderr = ""
         exit_code = 0
         stdout_text = ""
 
@@ -265,9 +265,11 @@ class ClaudeRunner:
                     exit_code=exit_code,
                 )
 
-            wait_seconds, wait_source = await self._wait_strategy.determine_wait(
+            wait_result = await self._wait_strategy.determine_wait(
                 stderr_text, attempt, return_source=True,
             )
+            assert isinstance(wait_result, tuple)
+            wait_seconds, wait_source = wait_result
 
             emit(_event_log, AgentRetryEvent(
                 agent_name=agent.name,
