@@ -33,6 +33,10 @@ Connect the third-party services required for the current sprint.
 - Use environment variables for all API keys and secrets — never hardcode credentials.
 - Create configuration files following each service's best practices.
 - Test integrations with mock/sandbox environments where available.
+- **Wrap all third-party SDK calls with error handling** — never let external service failures crash the application.
+- **Implement circuit breaker patterns** for services with known reliability issues.
+- **Log all integration failures** with service name, operation, and sanitised request context.
+- **Provide meaningful fallback behavior** when a third-party service is unavailable.
 
 # Output Format
 

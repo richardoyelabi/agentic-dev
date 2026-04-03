@@ -42,6 +42,12 @@ def generate_frontend_claude_md(
 - Use a shared API client module for all backend requests
 - Never hardcode endpoint URLs — reference the API Contract for paths and schemas
 
+## Error Handling
+- Handle all error states graciously with user-friendly messages
+- Never display raw error objects, stack traces, or technical details to users
+- Use error boundaries to prevent full-app crashes
+- Every loading state must have a corresponding error state
+
 ## Superpowers
 - Always practise test-driven development
 - Use the brainstorming skill before adding new components
@@ -85,6 +91,12 @@ def generate_backend_claude_md(
 - All endpoints must conform to the API Contract in `../docs/api_contract.md`
 - The API Contract is the single source of truth for request/response schemas
 - Never deviate from the contracted endpoint paths or payload shapes
+
+## Error Handling
+- Use a consistent error response schema across all endpoints
+- Never expose internal error details (stack traces, database errors) in API responses
+- Validate all inputs at the boundary with clear error messages
+- Handle expected failure cases explicitly with appropriate HTTP status codes
 
 ## Superpowers
 - Always practise test-driven development

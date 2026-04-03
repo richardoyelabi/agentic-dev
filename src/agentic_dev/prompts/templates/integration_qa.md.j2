@@ -21,7 +21,7 @@ Review the integration work for the current sprint. Verify that all required ser
 # Evaluation Criteria
 
 1. **Does it do what it is supposed to do?** — All required third-party services for this sprint are integrated. The Integration Guide lists every service.
-2. **Does it work well?** — Integration code has proper error handling, retries, and timeouts. SDK usage follows best practices.
+2. **Does it work well?** — Integration code has proper error handling, retries, and timeouts. SDK usage follows best practices. Specifically verify: third-party SDK failures are caught and handled graciously; the application does not crash when an external service is unavailable; integration failures are logged with sufficient context (service name, operation, sanitised request details).
 3. **Is it reasonably well designed?** — Integration code is cleanly separated from business logic. Configuration is externalized. SDK clients are properly initialized and reused.
 4. **Is it safe?** — No hardcoded credentials. API keys use environment variables. Webhook endpoints validate signatures. OAuth flows are correctly implemented.
 5. **No obvious scaling issues?** — Connection pooling where appropriate. Rate limiting respected. No unbounded retries.

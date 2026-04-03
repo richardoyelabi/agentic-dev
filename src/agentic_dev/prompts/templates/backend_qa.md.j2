@@ -23,7 +23,7 @@ Review the backend code produced for the current sprint against the Backend Spec
 # Evaluation Criteria
 
 1. **Does it do what it is supposed to do?** — All data models, services, and endpoints from the Backend Spec for this sprint are implemented.{% if api_contract %} Endpoints match the API Contract exactly.{% endif %}
-2. **Does it work well?** — Error handling is comprehensive. Edge cases are covered. Database queries are correct. Migrations are reversible.
+2. **Does it work well?** — Error handling is comprehensive. Edge cases are covered. Database queries are correct. Migrations are reversible. Specifically verify: all endpoints return a consistent error response schema; error paths have test coverage (not just happy paths); no internal details (stack traces, database errors, file paths) leak in error responses; input validation is present on all endpoints with clear error messages; expected failure cases (404, 409, 401, 403) are handled explicitly, not via generic 500.
 3. **Is it reasonably well designed?** — Code is clean and follows project conventions. Services are properly separated. No business logic in views/controllers.
 4. **Is it safe?** — Authentication and authorization enforced on all endpoints. SQL injection prevented. Input validation present. Sensitive data encrypted or hashed. No secrets in code.
 5. **No obvious scaling issues?** — No N+1 query patterns. Pagination on list endpoints. Proper database indexing. No unbounded queries.
@@ -47,6 +47,8 @@ Review the backend code produced for the current sprint against the Backend Spec
 <findings>
 ### Performance
 <findings>
+### Robustness
+<findings — consistent error schema, error path test coverage, no leaked internals, input validation, explicit failure handling>
 ### Documentation
 <findings>
 ## Issues

@@ -33,6 +33,12 @@ class TestGenerateFrontendClaudeMd:
         content = generate_frontend_claude_md("MyApp", {})
         assert "api_contract" in content
 
+    def test_includes_error_handling_section(self) -> None:
+        content = generate_frontend_claude_md("MyApp", {})
+        assert "## Error Handling" in content
+        assert "error boundaries" in content
+        assert "user-friendly messages" in content
+
 
 class TestGenerateBackendClaudeMd:
     def test_includes_project_name(self) -> None:
@@ -54,6 +60,12 @@ class TestGenerateBackendClaudeMd:
     def test_includes_api_contract_reference(self) -> None:
         content = generate_backend_claude_md("MyApp", {})
         assert "api_contract" in content
+
+    def test_includes_error_handling_section(self) -> None:
+        content = generate_backend_claude_md("MyApp", {})
+        assert "## Error Handling" in content
+        assert "consistent error response schema" in content
+        assert "internal error details" in content
 
 
 class TestWriteClaudeMd:

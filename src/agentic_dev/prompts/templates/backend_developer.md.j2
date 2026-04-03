@@ -35,7 +35,12 @@ Implement the backend code for the current sprint. Write all data models, servic
 {% if api_contract %}- Implement every endpoint from the API Contract that is in scope for this sprint. Match paths, methods, request schemas, response shapes, and error codes exactly.
 {% endif %}- Follow the tech stack and coding conventions specified in the Backend Spec.
 - Write database migrations for all new or modified models.
-- Include proper error handling and input validation on all endpoints.
+- **Use a consistent error response schema** across all endpoints (e.g. `{"error": {"code": "...", "message": "...", "details": ...}}`).
+- **Validate all inputs at the boundary** — reject bad data early with clear error messages.
+- **Never expose internal error details** (stack traces, database errors, file paths) in API responses.
+- **Log errors with sufficient context** for debugging (request ID, user context, sanitised input summary).
+- **Handle expected failure cases explicitly** (not found, conflict, unauthorized) with appropriate HTTP status codes — do not let them fall through to generic 500 errors.
+- **Write tests for error paths**, not just happy paths.
 
 # Documentation Requirements
 

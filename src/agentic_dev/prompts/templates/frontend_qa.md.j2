@@ -23,7 +23,7 @@ Review the frontend code produced for the current sprint against the Frontend Sp
 # Evaluation Criteria
 
 1. **Does it do what it is supposed to do?** — All pages, components, and behaviors from the Frontend Spec for this sprint are implemented.{% if api_contract %} API calls match the API Contract exactly.{% endif %}
-2. **Does it work well?** — Components handle loading states, error states, and edge cases. State management is correct. Navigation works as specified.
+2. **Does it work well?** — Components handle loading states, error states, and edge cases. State management is correct. Navigation works as specified. Specifically verify: error boundaries are in place at page/feature level; all API calls have error handling with user-friendly messages; no raw error objects, stack traces, or "undefined" are shown to users; loading and error states exist for all async operations; form validation provides clear, specific feedback.
 3. **Is it reasonably well designed?** — Code is clean and follows project conventions. Components are properly decomposed. No unnecessary complexity.
 4. **Is it safe?** — No XSS vulnerabilities. Auth tokens handled securely. Sensitive data not exposed in client-side state. Input validation on forms.
 5. **No obvious scaling issues?** — No unnecessary re-renders. Large lists are virtualized or paginated. API calls are not duplicated.
@@ -47,6 +47,8 @@ Review the frontend code produced for the current sprint against the Frontend Sp
 <findings>
 ### Performance
 <findings>
+### Robustness
+<findings — error boundaries, error states for async operations, form validation feedback, gracious failure handling>
 ### Documentation
 <findings>
 ## Issues

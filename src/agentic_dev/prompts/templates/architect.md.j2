@@ -87,6 +87,12 @@ Produce the document with the following section marker:
 - <global state shape and management approach>
 ## Authentication & Authorization
 - <how auth is handled on the frontend>
+## Error Handling
+- **Error boundary strategy:** <where error boundaries are placed — page-level, feature-level, or both>
+- **User-facing error messages:** <how errors are presented to users — toast notifications, inline messages, error pages>
+- **Network error handling:** <how API failures, timeouts, and offline states are handled>
+- **Fallback UI states:** <what users see when data fails to load or an action fails>
+- **Form validation approach:** <client-side validation strategy and how validation errors are displayed>
 ## Backend Services
 - **Provider:** <e.g. Supabase, Firebase, Convex>
 - **Database schema:** <tables/collections, fields, relationships>
@@ -120,6 +126,11 @@ Produce both documents separated by section markers. Follow these schemas exactl
 ### [J001] <job name> (if applicable)
 - **Trigger:** <what triggers it>
 - **Purpose:** <what it does>
+## Error Handling
+- **Error response schema:** <consistent JSON shape for all error responses, e.g. {"error": {"code": "...", "message": "...", "details": ...}}>
+- **Exception hierarchy:** <how application exceptions map to HTTP status codes>
+- **Validation approach:** <where and how inputs are validated, and how validation errors are returned>
+- **Logging strategy:** <what context is logged with errors — request ID, user ID, sanitised inputs>
 ## Infrastructure
 - Database migrations strategy
 - Environment variables required
@@ -131,12 +142,14 @@ Produce both documents separated by section markers. Follow these schemas exactl
 # API Contract
 ## Authentication
 <auth scheme>
+## Error Response Schema
+<define the consistent error response shape used across all endpoints — every error response must follow this schema>
 ## Endpoints
 ### [E001] <METHOD> <path>
 - **Feature:** [F001]
 - **Request:** <schema or example>
 - **Response:** <schema or example>
-- **Errors:** <error codes and meanings>
+- **Errors:** <error codes and meanings, using the standard error response schema>
 ```
 
 Use the exact `<!-- DOCUMENT: name -->` markers shown above. Do not omit any marker.
@@ -166,6 +179,12 @@ Produce all three documents separated by section markers. Follow these schemas e
 - <global state shape and management approach>
 ## Authentication & Authorization
 - <how auth is handled on the frontend — references API Contract for endpoints>
+## Error Handling
+- **Error boundary strategy:** <where error boundaries are placed — page-level, feature-level, or both>
+- **User-facing error messages:** <how errors are presented to users — toast notifications, inline messages, error pages>
+- **Network error handling:** <how API failures, timeouts, and offline states are handled>
+- **Fallback UI states:** <what users see when data fails to load or an action fails>
+- **Form validation approach:** <client-side validation strategy and how validation errors are displayed>
 ```
 
 <!-- DOCUMENT: backend_spec -->
@@ -189,6 +208,11 @@ Produce all three documents separated by section markers. Follow these schemas e
 ### [J001] <job name> (if applicable)
 - **Trigger:** <what triggers it>
 - **Purpose:** <what it does>
+## Error Handling
+- **Error response schema:** <consistent JSON shape for all error responses, e.g. {"error": {"code": "...", "message": "...", "details": ...}}>
+- **Exception hierarchy:** <how application exceptions map to HTTP status codes>
+- **Validation approach:** <where and how inputs are validated, and how validation errors are returned>
+- **Logging strategy:** <what context is logged with errors — request ID, user ID, sanitised inputs>
 ## Infrastructure
 - Database migrations strategy
 - Environment variables required
@@ -200,12 +224,14 @@ Produce all three documents separated by section markers. Follow these schemas e
 # API Contract
 ## Authentication
 <auth scheme>
+## Error Response Schema
+<define the consistent error response shape used across all endpoints — every error response must follow this schema>
 ## Endpoints
 ### [E001] <METHOD> <path>
 - **Feature:** [F001]
 - **Request:** <schema or example>
 - **Response:** <schema or example>
-- **Errors:** <error codes and meanings>
+- **Errors:** <error codes and meanings, using the standard error response schema>
 ```
 
 Use the exact `<!-- DOCUMENT: name -->` markers shown above. Do not omit any marker.

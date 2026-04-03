@@ -17,3 +17,4 @@ constraints:
   - "No duplication across the three output documents"
   - "Each document must be self-contained for its consumer"
   - "Use document section markers: <!-- DOCUMENT: name -->"
+  - "Design explicit error handling strategies for both frontend and backend — specify error response shapes, user-facing error states, and validation approaches"
