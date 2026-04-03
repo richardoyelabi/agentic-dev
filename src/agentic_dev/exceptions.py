@@ -55,5 +55,19 @@ class CheckpointPause(AgenticDevError):
         super().__init__(message or f"Pipeline paused at checkpoint: {phase}")
 
 
+class RateLimitError(AgentRunError):
+    """Raised when rate limit retries are exhausted."""
+
+    def __init__(
+        self,
+        agent_name: str,
+        message: str,
+        attempts: int,
+        exit_code: int | None = None,
+    ):
+        self.attempts = attempts
+        super().__init__(agent_name=agent_name, message=message, exit_code=exit_code)
+
+
 class DocumentError(AgenticDevError):
     """Raised for document read/write errors."""

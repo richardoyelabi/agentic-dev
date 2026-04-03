@@ -7,11 +7,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from agentic_dev.claude.rate_limiter import (
+    RateLimitDetector,
+    UsageApiClient,
+    WaitStrategy,
+)
 from agentic_dev.config import DEFAULT_MAX_TURNS, MODELS
-from agentic_dev.exceptions import AgentRunError
+from agentic_dev.exceptions import AgentRunError, RateLimitError
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
-from agentic_dev.logging.events import AgentStartEvent, AgentCompleteEvent, AgentFailedEvent
+from agentic_dev.logging.events import (
+    AgentStartEvent,
+    AgentCompleteEvent,
+    AgentFailedEvent,
+    AgentRetryEvent,
+)
 
 _event_log = get_event_logger("runner")
 
@@ -50,10 +60,29 @@ class ClaudeRunner:
     Prompts are piped via stdin (``claude -p - ...``) rather than passed as
     CLI arguments.  This avoids OS-level ``ARG_MAX`` limits and shell-escaping
     issues with long or special-character-heavy prompts.
+
+    Rate-limited invocations are retried with a layered wait strategy:
+    1. Parse explicit wait time from stderr
+    2. Poll the Anthropic usage API
+    3. Exponential backoff as fallback
+
+    When a failed run produces a ``session_id``, subsequent retries use
+    ``--resume`` to continue the session rather than starting fresh.
     """
 
-    def __init__(self, log_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        log_dir: Path | None = None,
+        max_retries: int = 5,
+        base_delay: float = 30.0,
+        enable_usage_api: bool = True,
+    ) -> None:
         self._log_dir = log_dir
+        self._max_retries = max_retries
+        usage_client = UsageApiClient() if enable_usage_api else None
+        self._wait_strategy = WaitStrategy(
+            usage_client=usage_client, base_delay=base_delay,
+        )
 
     def _resolve_model(self, model_alias: str) -> str:
         """Resolve a short model alias (e.g. 'opus') to a full model ID."""
@@ -111,6 +140,15 @@ class ClaudeRunner:
 
         return cmd
 
+    @staticmethod
+    def _extract_session_id(stdout: str) -> str | None:
+        """Try to extract session_id from potentially partial JSON output."""
+        try:
+            data = json.loads(stdout)
+            return data.get("session_id")
+        except (json.JSONDecodeError, ValueError):
+            return None
+
     async def run(
         self,
         agent: AgentConfig,
@@ -121,11 +159,14 @@ class ClaudeRunner:
     ) -> ClaudeResult:
         """Invoke the Claude CLI and return the parsed result.
 
-        The prompt is piped to the process via stdin.
+        The prompt is piped to the process via stdin.  Rate-limited
+        invocations are retried automatically using a layered wait
+        strategy.  When a failed run yields a ``session_id``,
+        subsequent retries use ``--resume`` to continue the session.
 
         Raises:
-            AgentRunError: If the CLI exits with a non-zero code or produces
-                unparseable output.
+            AgentRunError: If the CLI exits with a non-rate-limit error.
+            RateLimitError: If all rate-limit retries are exhausted.
         """
         cmd = self.build_command(
             agent=agent,
@@ -147,38 +188,107 @@ class ClaudeRunner:
             message=f"Running agent '{agent.name}' (model={agent.model}) in {working_dir} [prompt={len(prompt)} chars]",
         ))
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(working_dir),
-        )
+        resume_session_id = session_id
+        last_stderr = ""
+        exit_code = 0
+        stdout_text = ""
 
-        stdout_bytes, stderr_bytes = await process.communicate(
-            input=prompt.encode("utf-8")
-        )
-        exit_code = process.returncode or 0
-        stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+        for attempt in range(self._max_retries + 1):
+            if attempt > 0 and resume_session_id:
+                cmd = self.build_command(
+                    agent=agent,
+                    working_dir=working_dir,
+                    session_id=resume_session_id,
+                    extra_add_dirs=extra_add_dirs,
+                )
 
-        if exit_code != 0:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(working_dir),
+            )
+
+            stdout_bytes, stderr_bytes = await process.communicate(
+                input=prompt.encode("utf-8")
+            )
+            exit_code = process.returncode or 0
+            stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+
+            if exit_code == 0:
+                break
+
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
-            emit(_event_log, AgentFailedEvent(
+
+            # Try to extract session_id for resume on retry
+            extracted_sid = self._extract_session_id(stdout_text)
+            if extracted_sid:
+                resume_session_id = extracted_sid
+
+            # Only retry rate limits — other errors raise immediately
+            if not RateLimitDetector.is_rate_limit(stderr_text):
+                duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+                emit(_event_log, AgentFailedEvent(
+                    agent_name=agent.name,
+                    model=agent.model,
+                    duration_s=duration_s,
+                    exit_code=exit_code,
+                    error=stderr_text[:500],
+                    sprint=sprint,
+                    level="ERROR",
+                    message=f"Agent '{agent.name}' failed (exit={exit_code}): {stderr_text[:200]}",
+                ))
+                raise AgentRunError(
+                    agent_name=agent.name,
+                    message=f"CLI exited with code {exit_code}: {stderr_text}",
+                    exit_code=exit_code,
+                )
+
+            # Exhausted retries — raise immediately
+            if attempt >= self._max_retries:
+                duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+                emit(_event_log, AgentFailedEvent(
+                    agent_name=agent.name,
+                    model=agent.model,
+                    duration_s=duration_s,
+                    exit_code=exit_code,
+                    error=stderr_text[:500],
+                    sprint=sprint,
+                    level="ERROR",
+                    message=f"Agent '{agent.name}' rate limited after {self._max_retries + 1} attempts",
+                ))
+                raise RateLimitError(
+                    agent_name=agent.name,
+                    message=f"Rate limited after {self._max_retries + 1} attempts: {stderr_text}",
+                    attempts=self._max_retries + 1,
+                    exit_code=exit_code,
+                )
+
+            wait_seconds, wait_source = await self._wait_strategy.determine_wait(
+                stderr_text, attempt, return_source=True,
+            )
+
+            emit(_event_log, AgentRetryEvent(
                 agent_name=agent.name,
                 model=agent.model,
-                duration_s=duration_s,
-                exit_code=exit_code,
-                error=stderr_text[:500],
+                attempt=attempt + 1,
+                max_retries=self._max_retries,
+                wait_seconds=wait_seconds,
+                wait_source=wait_source,
+                reason=stderr_text[:200],
+                will_resume_session=resume_session_id is not None,
                 sprint=sprint,
-                level="ERROR",
-                message=f"Agent '{agent.name}' failed (exit={exit_code}): {stderr_text[:200]}",
+                message=(
+                    f"Agent '{agent.name}' rate limited, waiting {wait_seconds:.0f}s "
+                    f"(attempt {attempt + 1}/{self._max_retries}, source={wait_source})"
+                    + (f" [resuming session {resume_session_id}]" if resume_session_id else "")
+                ),
             ))
-            raise AgentRunError(
-                agent_name=agent.name,
-                message=f"CLI exited with code {exit_code}: {stderr_text}",
-                exit_code=exit_code,
-            )
+
+            await asyncio.sleep(wait_seconds)
+
+        # --- Success path (unchanged) ---
 
         try:
             raw_json = json.loads(stdout_text)

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
-from agentic_dev.exceptions import AgentRunError
+from agentic_dev.exceptions import AgentRunError, RateLimitError
 
 
 @dataclass
@@ -252,3 +252,114 @@ class TestLogging:
             result = await runner.run(agent, "prompt", tmp_path)
 
         assert result.text == "ok"
+
+
+class TestRetry:
+    """Tests for rate limit retry logic in ClaudeRunner.run()."""
+
+    @staticmethod
+    def _make_mock_process(stdout: str, returncode: int = 0, stderr: str = ""):
+        return TestRun._make_mock_process(stdout, returncode, stderr)
+
+    async def test_retries_on_rate_limit_then_succeeds(self, tmp_path: Path):
+        """First 2 calls rate-limited, 3rd succeeds."""
+        runner = ClaudeRunner(max_retries=5, base_delay=30.0, enable_usage_api=False)
+        agent = FakeAgentConfig()
+        success_json = json.dumps({"result": "done", "total_cost_usd": 0.5})
+
+        fail1 = self._make_mock_process("", returncode=1, stderr="rate limit exceeded")
+        fail2 = self._make_mock_process("", returncode=1, stderr="rate limit exceeded")
+        success = self._make_mock_process(success_json)
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return fail1 if call_count == 1 else fail2
+            return success
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", side_effect=mock_exec):
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "done"
+        assert call_count == 3
+        assert mock_sleep.call_count == 2
+
+    async def test_no_retry_on_non_rate_limit_error(self, tmp_path: Path):
+        """Non-rate-limit errors raise immediately without retrying."""
+        runner = ClaudeRunner(max_retries=5, enable_usage_api=False)
+        agent = FakeAgentConfig(name="architect")
+        mock_proc = self._make_mock_process("", returncode=1, stderr="Segmentation fault")
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_proc):
+            with pytest.raises(AgentRunError, match="architect"):
+                await runner.run(agent, "prompt", tmp_path)
+
+    async def test_exhausts_retries_raises_rate_limit_error(self, tmp_path: Path):
+        """When all retries are exhausted, raises RateLimitError."""
+        runner = ClaudeRunner(max_retries=2, base_delay=10.0, enable_usage_api=False)
+        agent = FakeAgentConfig(name="planner")
+        mock_proc = self._make_mock_process("", returncode=1, stderr="rate limit exceeded")
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_proc):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                with pytest.raises(RateLimitError) as exc_info:
+                    await runner.run(agent, "prompt", tmp_path)
+
+        assert exc_info.value.attempts == 3  # initial + 2 retries
+
+    async def test_session_resume_on_retry(self, tmp_path: Path):
+        """Extracts session_id from failed run and uses --resume on retry."""
+        runner = ClaudeRunner(max_retries=3, enable_usage_api=False)
+        agent = FakeAgentConfig()
+
+        fail_json = json.dumps({"session_id": "sess-abc-123"})
+        fail_proc = self._make_mock_process(fail_json, returncode=1, stderr="rate limit exceeded")
+        success_json = json.dumps({"result": "ok", "total_cost_usd": 0.1})
+        success_proc = self._make_mock_process(success_json)
+
+        call_count = 0
+        captured_cmds: list[list[str]] = []
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            captured_cmds.append(list(args))
+            if call_count == 1:
+                return fail_proc
+            return success_proc
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", side_effect=mock_exec):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "ok"
+        assert call_count == 2
+        # Second call should include --resume with the extracted session_id
+        second_cmd = captured_cmds[1]
+        assert "--resume" in second_cmd
+        resume_idx = second_cmd.index("--resume")
+        assert second_cmd[resume_idx + 1] == "sess-abc-123"
+
+    async def test_custom_max_retries(self, tmp_path: Path):
+        """max_retries=2 means at most 3 total attempts."""
+        runner = ClaudeRunner(max_retries=2, enable_usage_api=False)
+        agent = FakeAgentConfig()
+        mock_proc = self._make_mock_process("", returncode=1, stderr="429 too many requests")
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return mock_proc
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", side_effect=mock_exec):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                with pytest.raises(RateLimitError):
+                    await runner.run(agent, "prompt", tmp_path)
+
+        assert call_count == 3  # 1 initial + 2 retries

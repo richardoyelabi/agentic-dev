@@ -117,6 +117,21 @@ class AgentFailedEvent(LogEvent):
     sprint: int | None = None
 
 
+class AgentRetryEvent(LogEvent):
+    """Emitted when an agent invocation is retried due to rate limiting."""
+
+    event_type: str = "agent_retry"
+    agent_name: str
+    model: str
+    attempt: int
+    max_retries: int
+    wait_seconds: float
+    wait_source: str
+    reason: str
+    will_resume_session: bool
+    sprint: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # QA cycle
 # ---------------------------------------------------------------------------
