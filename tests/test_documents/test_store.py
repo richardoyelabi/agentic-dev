@@ -1,7 +1,13 @@
 """Tests for the DocumentStore."""
 
+import multiprocessing
+import os
+import time
+from pathlib import Path
+
 import pytest
 
+from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, DOCS_LOCK_FILE
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import DocumentError
 
@@ -159,3 +165,62 @@ class TestAutoMdExtension:
         assert store.read("qa_reports/sprint_1_backend") == "report"
         result = store.list_qa_reports()
         assert "sprint_1_backend.md" in result
+
+
+def _write_doc(project_dir_str: str, doc_name: str, content: str, ready_fd: int) -> None:
+    """Helper: write a document and signal readiness."""
+    store = DocumentStore(project_dir=Path(project_dir_str))
+    os.write(ready_fd, b"r")
+    time.sleep(0.05)
+    store.write(doc_name, content)
+
+
+class TestDocumentLocking:
+    def test_write_creates_lock_file(self, store: DocumentStore, tmp_path: Path) -> None:
+        store.write("test.md", "content")
+        lock_path = tmp_path / AGENTIC_DEV_METADATA_DIR / DOCS_LOCK_FILE
+        assert lock_path.exists()
+
+    def test_read_creates_lock_file(self, store: DocumentStore, tmp_path: Path) -> None:
+        store.write("test.md", "content")
+        lock_path = tmp_path / AGENTIC_DEV_METADATA_DIR / DOCS_LOCK_FILE
+        # Remove lock to verify read recreates it
+        lock_path.unlink()
+        store.read("test.md")
+        assert lock_path.exists()
+
+    def test_concurrent_writes_serialized(
+        self, store: DocumentStore, tmp_path: Path
+    ) -> None:
+        """Two concurrent writes should not corrupt documents."""
+        ready_r1, ready_w1 = os.pipe()
+        ready_r2, ready_w2 = os.pipe()
+
+        p1 = multiprocessing.Process(
+            target=_write_doc,
+            args=(str(tmp_path), "shared_doc", "content from p1", ready_w1),
+        )
+        p2 = multiprocessing.Process(
+            target=_write_doc,
+            args=(str(tmp_path), "shared_doc", "content from p2", ready_w2),
+        )
+
+        p1.start()
+        p2.start()
+        os.close(ready_w1)
+        os.close(ready_w2)
+
+        os.read(ready_r1, 1)
+        os.read(ready_r2, 1)
+        os.close(ready_r1)
+        os.close(ready_r2)
+
+        p1.join(timeout=5)
+        p2.join(timeout=5)
+
+        assert p1.exitcode == 0
+        assert p2.exitcode == 0
+
+        # Document should contain one complete write, not corrupted data
+        content = store.read("shared_doc")
+        assert content in ("content from p1", "content from p2")

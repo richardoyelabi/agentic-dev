@@ -6,10 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from agentic_dev.concurrency import file_lock
 from agentic_dev.config import (
     AGENTIC_DEV_METADATA_DIR,
     HISTORY_DIR,
     STATE_FILE,
+    STATE_LOCK_FILE,
 )
 from agentic_dev.exceptions import StateError
 from agentic_dev.logging import get_event_logger, emit
@@ -27,6 +29,7 @@ class StateManager:
         self.metadata_dir = project_dir / AGENTIC_DEV_METADATA_DIR
         self.state_file = self.metadata_dir / STATE_FILE
         self.history_dir = self.metadata_dir / HISTORY_DIR
+        self.lock_file = self.metadata_dir / STATE_LOCK_FILE
 
     def load(self) -> PipelineState:
         """Load pipeline state from disk.
@@ -38,7 +41,8 @@ class StateManager:
                 f"State file not found: {self.state_file}. "
                 "Have you initialized a project?"
             )
-        data = json.loads(self.state_file.read_text(encoding="utf-8"))
+        with file_lock(self.lock_file, shared=True):
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
         state = PipelineState.model_validate(data)
         emit(_event_log, StateLoadEvent(
             phase=str(state.phase),
@@ -52,20 +56,22 @@ class StateManager:
 
         Writes to a temporary file then renames to avoid corruption on crash.
         Archives the previous state file to history/ with an ISO timestamp.
+        Acquires an exclusive file lock to prevent concurrent writes.
         """
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
 
-        # Archive existing state before overwriting
-        if self.state_file.exists():
-            self._archive_current_state()
+        with file_lock(self.lock_file):
+            # Archive existing state before overwriting
+            if self.state_file.exists():
+                self._archive_current_state()
 
-        tmp_path = self.state_file.with_suffix(".json.tmp")
-        state.updated_at = datetime.now(timezone.utc)
-        tmp_path.write_text(
-            state.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        shutil.move(str(tmp_path), str(self.state_file))
+            tmp_path = self.state_file.with_suffix(".json.tmp")
+            state.updated_at = datetime.now(timezone.utc)
+            tmp_path.write_text(
+                state.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            shutil.move(str(tmp_path), str(self.state_file))
         emit(_event_log, StateSaveEvent(
             phase=str(state.phase),
             total_cost_usd=state.total_cost_usd,

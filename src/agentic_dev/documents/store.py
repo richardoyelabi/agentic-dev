@@ -3,6 +3,8 @@
 import shutil
 from pathlib import Path
 
+from agentic_dev.concurrency import file_lock
+from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, DOCS_LOCK_FILE
 from agentic_dev.exceptions import DocumentError
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.events import DocumentWriteEvent, DocumentReadEvent, DocumentArchiveEvent
@@ -16,6 +18,7 @@ class DocumentStore:
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = project_dir
         self.docs_dir = project_dir / "docs"
+        self.lock_file = project_dir / AGENTIC_DEV_METADATA_DIR / DOCS_LOCK_FILE
 
     def _resolve(self, doc_name: str) -> Path:
         """Resolve a document name to a path, auto-appending .md if needed."""
@@ -32,7 +35,8 @@ class DocumentStore:
         """
         target = self._resolve(doc_name)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        with file_lock(self.lock_file):
+            target.write_text(content, encoding="utf-8")
         emit(_event_log, DocumentWriteEvent(
             doc_name=doc_name,
             content_length=len(content),
@@ -49,7 +53,8 @@ class DocumentStore:
         target = self._resolve(doc_name)
         if not target.exists():
             raise DocumentError(f"Document not found: {target}")
-        content = target.read_text(encoding="utf-8")
+        with file_lock(self.lock_file, shared=True):
+            content = target.read_text(encoding="utf-8")
         emit(_event_log, DocumentReadEvent(
             doc_name=doc_name,
             content_length=len(content),
@@ -87,14 +92,15 @@ class DocumentStore:
         if not self.docs_dir.exists():
             return archive_dir
 
-        for item in self.docs_dir.iterdir():
-            if item.name == "archive":
-                continue
-            dest = archive_dir / item.name
-            if item.is_dir():
-                shutil.copytree(item, dest, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, dest)
+        with file_lock(self.lock_file):
+            for item in self.docs_dir.iterdir():
+                if item.name == "archive":
+                    continue
+                dest = archive_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dest)
 
         emit(_event_log, DocumentArchiveEvent(
             cycle_label=cycle_label,
