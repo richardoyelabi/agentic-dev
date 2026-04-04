@@ -12,7 +12,7 @@ from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, CONFIG_FILE
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.state.manager import StateManager
-from agentic_dev.state.models import PipelinePhase
+from agentic_dev.state.models import PipelinePhase, SprintState, SprintStatus
 
 
 runner = CliRunner()
@@ -304,6 +304,64 @@ class TestResumeCommand:
         state_mgr = StateManager(project_with_state / "test-app")
         state = state_mgr.load()
         assert state.checkpoint_feedback == "Please add dark mode"
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_skip_sprint_marks_sprint_complete(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        """--skip-sprint N marks sprint N as complete before resuming."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.FAILED
+        state.failed_at_phase = PipelinePhase.SPRINTING
+        state.sprints = [
+            SprintState(sprint_number=1, name="Foundation", status=SprintStatus.COMPLETE),
+            SprintState(sprint_number=2, name="Auth", status=SprintStatus.COMPLETE),
+            SprintState(sprint_number=3, name="Overdue Detection", status=SprintStatus.FAILED),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            [
+                "resume", "test-app",
+                "--skip-sprint", "3",
+                "--path", str(project_with_state),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Skipped sprint 3" in result.output
+
+        updated_state = state_mgr.load()
+        skipped = next(s for s in updated_state.sprints if s.sprint_number == 3)
+        assert skipped.status == SprintStatus.COMPLETE
+        assert skipped.completed_at is not None
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_skip_sprint_invalid_number_fails(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        """--skip-sprint with a non-existent sprint number exits with code 1."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.FAILED
+        state.failed_at_phase = PipelinePhase.SPRINTING
+        state.sprints = [
+            SprintState(sprint_number=1, name="Foundation", status=SprintStatus.FAILED),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            [
+                "resume", "test-app",
+                "--skip-sprint", "99",
+                "--path", str(project_with_state),
+            ],
+        )
+
+        assert result.exit_code == 1
 
 
 class TestCostCommand:

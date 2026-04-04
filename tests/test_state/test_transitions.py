@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from agentic_dev.exceptions import InvalidTransitionError
-from agentic_dev.state.models import PipelinePhase, PipelineState
+from agentic_dev.state.models import PipelinePhase, PipelineState, SprintState, SprintStatus
 from agentic_dev.state.transitions import (
     VALID_TRANSITIONS,
     advance_phase,
@@ -149,3 +149,47 @@ class TestResumeFromFailure:
         )
         with pytest.raises(InvalidTransitionError):
             resume_from_failure(state)
+
+    def test_resume_resets_failed_sprint_to_pending(self) -> None:
+        failed_sprint = SprintState(
+            sprint_number=3,
+            name="Overdue Invoice Detection",
+            status=SprintStatus.FAILED,
+            completed_at=datetime(2026, 4, 4, 16, 0, 48, tzinfo=timezone.utc),
+        )
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.FAILED,
+            failed_at_phase=PipelinePhase.SPRINTING,
+            sprints=[failed_sprint],
+        )
+        resumed = resume_from_failure(state)
+
+        assert resumed.sprints[0].status == SprintStatus.PENDING
+        assert resumed.sprints[0].completed_at is None
+
+    def test_resume_preserves_complete_sprints(self) -> None:
+        complete_sprint = SprintState(
+            sprint_number=1,
+            name="Foundation",
+            status=SprintStatus.COMPLETE,
+            completed_at=datetime(2026, 4, 4, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        failed_sprint = SprintState(
+            sprint_number=2,
+            name="Invoice Ingestion",
+            status=SprintStatus.FAILED,
+            completed_at=datetime(2026, 4, 4, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.FAILED,
+            failed_at_phase=PipelinePhase.SPRINTING,
+            sprints=[complete_sprint, failed_sprint],
+        )
+        resumed = resume_from_failure(state)
+
+        assert resumed.sprints[0].status == SprintStatus.COMPLETE
+        assert resumed.sprints[0].completed_at is not None
+        assert resumed.sprints[1].status == SprintStatus.PENDING
+        assert resumed.sprints[1].completed_at is None

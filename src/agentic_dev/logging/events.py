@@ -132,6 +132,17 @@ class AgentRetryEvent(LogEvent):
     sprint: int | None = None
 
 
+class AgentEmptyRetryEvent(LogEvent):
+    """Emitted when an agent invocation is retried due to empty output."""
+
+    event_type: str = "agent_empty_retry"
+    agent_name: str
+    attempt: int
+    max_retries: int
+    wait_seconds: float
+    sprint: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # QA cycle
 # ---------------------------------------------------------------------------

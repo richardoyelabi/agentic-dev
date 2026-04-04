@@ -402,6 +402,50 @@ class TestUATPhase:
         doc_store.write.assert_any_call("uat_report", "uat passed")
 
 
+class TestSingleAgentRetry:
+    """Test the empty-output retry in _run_single_agent (used by UAT and input processing)."""
+
+    @pytest.mark.asyncio
+    async def test_single_agent_retries_empty_output_then_succeeds(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """When _run_single_agent gets empty output once, it retries and succeeds."""
+        state = _make_state(PipelinePhase.UAT)
+        state_manager.load = MagicMock(return_value=state)
+        doc_store.exists = MagicMock(return_value=True)
+        doc_store.read = MagicMock(return_value="spec content")
+        claude.run.side_effect = [
+            _make_claude_result("", cost=0.01),       # empty — triggers retry
+            _make_claude_result("uat passed", cost=0.20),  # retry succeeds
+        ]
+
+        with patch("agentic_dev.orchestrator.engine.asyncio.sleep"):
+            await engine.run()
+
+        assert state.phase == PipelinePhase.COMPLETE
+        assert claude.run.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_single_agent_raises_after_retry_exhausted(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """When both the initial and retry calls return empty, AgentRunError is raised."""
+        state = _make_state(PipelinePhase.UAT)
+        state_manager.load = MagicMock(return_value=state)
+        doc_store.exists = MagicMock(return_value=True)
+        doc_store.read = MagicMock(return_value="spec content")
+        claude.run.side_effect = [
+            _make_claude_result("", cost=0.01),
+            _make_claude_result("", cost=0.01),  # retry also empty
+        ]
+
+        with patch("agentic_dev.orchestrator.engine.asyncio.sleep"):
+            with pytest.raises(AgentRunError, match="empty output"):
+                await engine.run()
+
+        assert claude.run.call_count == 2
+
+
 class TestProjectTypeDetection:
     """Test that the engine parses project type from structured_input."""
 

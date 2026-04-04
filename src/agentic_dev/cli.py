@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -24,7 +25,7 @@ from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgenticDevError, CheckpointPause
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig, from_autonomy_level
 from agentic_dev.state.manager import StateManager
-from agentic_dev.state.models import PipelinePhase, PipelineState
+from agentic_dev.state.models import PipelinePhase, PipelineState, SprintStatus
 from agentic_dev.workspace.manager import WorkspaceManager
 
 console = Console()
@@ -344,6 +345,9 @@ def new(
 def resume(
     app_name: str | None = typer.Argument(None, help="Name of the application to resume"),
     feedback: str | None = typer.Option(None, help="Feedback to inject into the next agent"),
+    skip_sprint: int | None = typer.Option(
+        None, "--skip-sprint", help="Skip the given sprint number (mark as complete)"
+    ),
     path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
     """Resume a paused or failed pipeline."""
@@ -366,6 +370,19 @@ def resume(
             console.print(
                 f"[yellow]Recovering from failure. Restarting at phase: {state.phase}[/yellow]"
             )
+
+        if skip_sprint is not None:
+            matched = [s for s in state.sprints if s.sprint_number == skip_sprint]
+            if not matched:
+                console.print(
+                    f"[bold red]Sprint {skip_sprint} not found.[/bold red]"
+                )
+                raise typer.Exit(code=1)
+            for sprint in matched:
+                sprint.status = SprintStatus.COMPLETE
+                sprint.completed_at = datetime.now(timezone.utc)
+            state_mgr.save(state)
+            console.print(f"[yellow]Skipped sprint {skip_sprint} (marked as complete).[/yellow]")
 
         if feedback:
             state.checkpoint_feedback = feedback

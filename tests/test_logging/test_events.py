@@ -8,6 +8,7 @@ import pytest
 
 from agentic_dev.logging.events import (
     AgentCompleteEvent,
+    AgentEmptyRetryEvent,
     AgentFailedEvent,
     AgentStartEvent,
     CheckpointDecisionEvent,
@@ -107,6 +108,10 @@ _SUBCLASS_CASES: list[tuple[type[LogEvent], str, dict]] = [
     (AgentFailedEvent, "agent_failed", {
         "agent_name": "be_dev", "model": "opus", "duration_s": 5.0,
         "exit_code": 1, "error": "timeout",
+    }),
+    (AgentEmptyRetryEvent, "agent_empty_retry", {
+        "agent_name": "backend_developer", "attempt": 1, "max_retries": 1,
+        "wait_seconds": 5.0,
     }),
     (QACycleStartEvent, "qa_cycle_start", {
         "action_agent": "be_dev", "qa_agent": "be_qa", "output_doc_name": "doc",

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from agentic_dev.exceptions import InvalidTransitionError
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.events import PhaseTransitionEvent
-from agentic_dev.state.models import PipelinePhase, PipelineState
+from agentic_dev.state.models import PipelinePhase, PipelineState, SprintStatus
 
 _event_log = get_event_logger("transitions")
 
@@ -94,5 +94,11 @@ def resume_from_failure(state: PipelineState) -> PipelineState:
     state.phase = target_phase
     state.error = None
     state.failed_at_phase = None
+
+    for sprint in state.sprints:
+        if sprint.status == SprintStatus.FAILED:
+            sprint.status = SprintStatus.PENDING
+            sprint.completed_at = None
+
     state.updated_at = datetime.now(timezone.utc)
     return state

@@ -1,5 +1,6 @@
 """Pipeline engine: main coordinator that ties all phases together."""
 
+import asyncio
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -406,6 +407,14 @@ class PipelineEngine:
             prompt=prompt,
             working_dir=self._project_dir,
         )
+
+        if not result.text.strip():
+            await asyncio.sleep(5.0)
+            result = await self._claude.run(
+                agent=config,
+                prompt=prompt,
+                working_dir=self._project_dir,
+            )
 
         if not result.text.strip():
             raise AgentRunError(

@@ -1,15 +1,17 @@
 """Reusable QA cycle: action agent -> QA agent -> correction loop with re-review."""
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from agentic_dev.agents.base import AgentDefinition
-from agentic_dev.claude.runner import ClaudeRunner
+from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import (
+    AgentEmptyRetryEvent,
     QACycleStartEvent,
     QACycleVerdictEvent,
     QACycleCorrectionEvent,
@@ -22,6 +24,48 @@ from agentic_dev.prompts.renderer import PromptRenderer
 _event_log = get_event_logger("qa_cycle")
 
 ISSUES_FOUND_MARKER = "ISSUES_FOUND"
+
+
+async def _run_with_empty_retry(
+    claude: ClaudeRunner,
+    agent_config: AgentRunConfig,
+    prompt: str,
+    workspace: Path,
+    agent_name: str,
+    error_message: str,
+    sprint: int | None = None,
+    max_empty_retries: int = 1,
+    empty_retry_delay: float = 5.0,
+) -> ClaudeResult:
+    """Run an agent and retry once if it returns empty output.
+
+    Raises AgentRunError when all attempts produce empty output.
+    """
+    result = await claude.run(agent=agent_config, prompt=prompt, working_dir=workspace)
+
+    for attempt in range(1, max_empty_retries + 1):
+        if result.text.strip():
+            return result
+
+        emit(_event_log, AgentEmptyRetryEvent(
+            agent_name=agent_name,
+            attempt=attempt,
+            max_retries=max_empty_retries,
+            wait_seconds=empty_retry_delay,
+            sprint=sprint,
+            level="WARNING",
+            message=(
+                f"Agent '{agent_name}' returned empty output — "
+                f"retrying (attempt {attempt}/{max_empty_retries})"
+            ),
+        ))
+        await asyncio.sleep(empty_retry_delay)
+        result = await claude.run(agent=agent_config, prompt=prompt, working_dir=workspace)
+
+    if not result.text.strip():
+        raise AgentRunError(agent_name=agent_name, message=error_message)
+
+    return result
 
 
 @dataclass(frozen=True)
@@ -76,6 +120,9 @@ async def _run_qa_review(
     prompt_renderer: PromptRenderer,
     workspace: Path,
     extra_context: dict[str, str] | None = None,
+    sprint: int | None = None,
+    max_empty_retries: int = 1,
+    empty_retry_delay: float = 5.0,
 ) -> tuple[str, float]:
     """Run QA agent and return (report_text, cost). Raises on empty output."""
     qa_input_docs = {**input_docs, qa_key: output_text}
@@ -85,17 +132,17 @@ async def _run_qa_review(
         constraints=qa_agent.constraints,
         extra_context=extra_context,
     )
-    qa_result = await claude.run(
-        agent=qa_config,
+    qa_result = await _run_with_empty_retry(
+        claude=claude,
+        agent_config=qa_config,
         prompt=qa_prompt,
-        working_dir=workspace,
+        workspace=workspace,
+        agent_name=qa_agent.name,
+        error_message="QA agent returned empty output",
+        sprint=sprint,
+        max_empty_retries=max_empty_retries,
+        empty_retry_delay=empty_retry_delay,
     )
-
-    if not qa_result.text.strip():
-        raise AgentRunError(
-            agent_name=qa_agent.name,
-            message="QA agent returned empty output",
-        )
 
     return qa_result.text, qa_result.cost_usd
 
@@ -112,6 +159,8 @@ async def run_qa_cycle(
     qa_output_key: str | None = None,
     extra_context: dict[str, str] | None = None,
     max_corrections: int = 1,
+    max_empty_retries: int = 1,
+    empty_retry_delay: float = 5.0,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -142,17 +191,17 @@ async def run_qa_cycle(
         extra_context=extra_context,
     )
     action_config = to_run_config(action_agent)
-    action_result = await claude.run(
-        agent=action_config,
+    action_result = await _run_with_empty_retry(
+        claude=claude,
+        agent_config=action_config,
         prompt=action_prompt,
-        working_dir=workspace,
+        workspace=workspace,
+        agent_name=action_agent.name,
+        error_message="Agent returned empty output",
+        sprint=sprint,
+        max_empty_retries=max_empty_retries,
+        empty_retry_delay=empty_retry_delay,
     )
-
-    if not action_result.text.strip():
-        raise AgentRunError(
-            agent_name=action_agent.name,
-            message="Agent returned empty output",
-        )
 
     # 2. Save the action output
     doc_store.write(output_doc_name, action_result.text)
@@ -171,6 +220,9 @@ async def run_qa_cycle(
         prompt_renderer=prompt_renderer,
         workspace=workspace,
         extra_context=extra_context,
+        sprint=sprint,
+        max_empty_retries=max_empty_retries,
+        empty_retry_delay=empty_retry_delay,
     )
 
     # 4. Save the initial QA report
@@ -211,17 +263,17 @@ async def run_qa_cycle(
             qa_feedback=latest_qa_report,
             extra_context=extra_context,
         )
-        correction_result = await claude.run(
-            agent=action_config,
+        correction_result = await _run_with_empty_retry(
+            claude=claude,
+            agent_config=action_config,
             prompt=correction_prompt,
-            working_dir=workspace,
+            workspace=workspace,
+            agent_name=action_agent.name,
+            error_message="Agent returned empty output after correction",
+            sprint=sprint,
+            max_empty_retries=max_empty_retries,
+            empty_retry_delay=empty_retry_delay,
         )
-
-        if not correction_result.text.strip():
-            raise AgentRunError(
-                agent_name=action_agent.name,
-                message="Agent returned empty output after correction",
-            )
 
         latest_output = correction_result.text
         doc_store.write(output_doc_name, latest_output)
@@ -248,6 +300,9 @@ async def run_qa_cycle(
             prompt_renderer=prompt_renderer,
             workspace=workspace,
             extra_context=extra_context,
+            sprint=sprint,
+            max_empty_retries=max_empty_retries,
+            empty_retry_delay=empty_retry_delay,
         )
 
         re_review_issues = ISSUES_FOUND_MARKER in re_review_report

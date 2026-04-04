@@ -595,9 +595,10 @@ async def test_max_corrections_exhausted_with_issues_remaining(
 async def test_empty_action_output_raises_error(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """An empty result from the action agent should raise AgentRunError."""
+    """An empty result from the action agent raises AgentRunError after retry."""
     claude.run.side_effect = [
         _make_claude_result("", cost=0.10),
+        _make_claude_result("", cost=0.10),  # retry also empty
     ]
 
     with pytest.raises(AgentRunError, match="empty output"):
@@ -610,6 +611,7 @@ async def test_empty_action_output_raises_error(
             workspace=Path("/tmp/ws"),
             doc_store=doc_store,
             prompt_renderer=prompt_renderer,
+            empty_retry_delay=0.0,
         )
 
 
@@ -617,11 +619,12 @@ async def test_empty_action_output_raises_error(
 async def test_empty_correction_output_raises_error(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """An empty result from the correction run should raise AgentRunError."""
+    """An empty result from the correction run raises AgentRunError after retry."""
     claude.run.side_effect = [
         _make_claude_result("initial output", cost=0.15),
         _make_claude_result("ISSUES_FOUND: fix it", cost=0.10),
         _make_claude_result("   ", cost=0.20),
+        _make_claude_result("   ", cost=0.20),  # retry also empty
     ]
 
     with pytest.raises(AgentRunError, match="empty output after correction"):
@@ -634,6 +637,7 @@ async def test_empty_correction_output_raises_error(
             workspace=Path("/tmp/ws"),
             doc_store=doc_store,
             prompt_renderer=prompt_renderer,
+            empty_retry_delay=0.0,
         )
 
 
@@ -641,10 +645,11 @@ async def test_empty_correction_output_raises_error(
 async def test_empty_qa_output_raises_error(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """An empty result from the QA agent should raise AgentRunError."""
+    """An empty result from the QA agent raises AgentRunError after retry."""
     claude.run.side_effect = [
         _make_claude_result("valid action output", cost=0.15),
         _make_claude_result("", cost=0.10),
+        _make_claude_result("", cost=0.10),  # retry also empty
     ]
 
     with pytest.raises(AgentRunError, match="QA agent returned empty output"):
@@ -657,6 +662,7 @@ async def test_empty_qa_output_raises_error(
             workspace=Path("/tmp/ws"),
             doc_store=doc_store,
             prompt_renderer=prompt_renderer,
+            empty_retry_delay=0.0,
         )
 
 
@@ -664,10 +670,11 @@ async def test_empty_qa_output_raises_error(
 async def test_whitespace_only_qa_output_raises_error(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """Whitespace-only QA output should also raise AgentRunError."""
+    """Whitespace-only QA output raises AgentRunError after retry."""
     claude.run.side_effect = [
         _make_claude_result("valid action output", cost=0.15),
         _make_claude_result("   \n  ", cost=0.10),
+        _make_claude_result("   \n  ", cost=0.10),  # retry also whitespace
     ]
 
     with pytest.raises(AgentRunError, match="QA agent returned empty output"):
@@ -680,6 +687,7 @@ async def test_whitespace_only_qa_output_raises_error(
             workspace=Path("/tmp/ws"),
             doc_store=doc_store,
             prompt_renderer=prompt_renderer,
+            empty_retry_delay=0.0,
         )
 
 
@@ -687,12 +695,13 @@ async def test_whitespace_only_qa_output_raises_error(
 async def test_empty_re_review_output_raises_error(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """An empty result from the re-review QA run should raise AgentRunError."""
+    """An empty result from the re-review QA run raises AgentRunError after retry."""
     claude.run.side_effect = [
         _make_claude_result("v1", cost=0.10),
         _make_claude_result("ISSUES_FOUND: fix", cost=0.05),
         _make_claude_result("v2", cost=0.10),
         _make_claude_result("", cost=0.05),
+        _make_claude_result("", cost=0.05),  # retry also empty
     ]
 
     with pytest.raises(AgentRunError, match="QA agent returned empty output"):
@@ -705,6 +714,7 @@ async def test_empty_re_review_output_raises_error(
             workspace=Path("/tmp/ws"),
             doc_store=doc_store,
             prompt_renderer=prompt_renderer,
+            empty_retry_delay=0.0,
         )
 
 
@@ -808,3 +818,120 @@ async def test_qa_output_key_used_in_re_review(
     assert "integration_guide" in re_review_input_docs
     assert re_review_input_docs["integration_guide"] == "v2"
     assert "sprint_1_integration" not in re_review_input_docs
+
+
+# ---------------------------------------------------------------------------
+# Empty-output retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_action_output_retries_then_succeeds(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When the action agent returns empty output once, it is retried and succeeds."""
+    claude.run.side_effect = [
+        _make_claude_result("", cost=0.05),          # empty — triggers retry
+        _make_claude_result("real output", cost=0.15),  # retry succeeds
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        empty_retry_delay=0.0,
+    )
+
+    assert result.output == "real output"
+    assert result.corrected is False
+    assert claude.run.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_empty_action_output_retries_exhausted_raises(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When both the initial and retry action calls return empty, AgentRunError is raised."""
+    claude.run.side_effect = [
+        _make_claude_result("", cost=0.05),
+        _make_claude_result("", cost=0.05),
+    ]
+
+    with pytest.raises(AgentRunError, match="empty output"):
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            empty_retry_delay=0.0,
+        )
+
+    assert claude.run.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_qa_output_retries_then_succeeds(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When the QA agent returns empty output once, it is retried and succeeds."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("", cost=0.05),           # empty QA — triggers retry
+        _make_claude_result("APPROVED", cost=0.10),   # retry succeeds
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        empty_retry_delay=0.0,
+    )
+
+    assert result.output == "action output"
+    assert result.corrected is False
+    assert claude.run.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_empty_correction_output_retries_then_succeeds(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When the correction agent returns empty output once, it is retried and succeeds."""
+    claude.run.side_effect = [
+        _make_claude_result("v1", cost=0.15),
+        _make_claude_result("ISSUES_FOUND: fix it", cost=0.10),
+        _make_claude_result("", cost=0.05),           # empty correction — triggers retry
+        _make_claude_result("v2", cost=0.20),         # retry succeeds
+        _make_claude_result("APPROVED", cost=0.08),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        empty_retry_delay=0.0,
+    )
+
+    assert result.output == "v2"
+    assert result.corrected is True
+    assert claude.run.call_count == 5
