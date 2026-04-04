@@ -167,6 +167,7 @@ async def run_qa_cycle(
     max_empty_retries: int = 1,
     empty_retry_delay: float = 5.0,
     session_id: str | None = None,
+    allow_empty_action_output: bool = False,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -197,18 +198,24 @@ async def run_qa_cycle(
         extra_context=extra_context,
     )
     action_config = to_run_config(action_agent)
-    action_result = await _run_with_empty_retry(
-        claude=claude,
-        agent_config=action_config,
-        prompt=action_prompt,
-        workspace=workspace,
-        agent_name=action_agent.name,
-        error_message="Agent returned empty output",
-        sprint=sprint,
-        max_empty_retries=max_empty_retries,
-        empty_retry_delay=empty_retry_delay,
-        session_id=session_id,
-    )
+    if allow_empty_action_output:
+        action_result = await claude.run(
+            agent=action_config, prompt=action_prompt, working_dir=workspace,
+            session_id=session_id,
+        )
+    else:
+        action_result = await _run_with_empty_retry(
+            claude=claude,
+            agent_config=action_config,
+            prompt=action_prompt,
+            workspace=workspace,
+            agent_name=action_agent.name,
+            error_message="Agent returned empty output",
+            sprint=sprint,
+            max_empty_retries=max_empty_retries,
+            empty_retry_delay=empty_retry_delay,
+            session_id=session_id,
+        )
 
     # 2. Save the action output
     doc_store.write(output_doc_name, action_result.text)
