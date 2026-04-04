@@ -71,3 +71,7 @@ class RateLimitError(AgentRunError):
 
 class DocumentError(AgenticDevError):
     """Raised for document read/write errors."""
+
+
+class LockError(AgenticDevError):
+    """Raised for file locking failures."""

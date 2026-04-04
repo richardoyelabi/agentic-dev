@@ -21,6 +21,10 @@ RUNS_DIR = "runs"
 LATEST_SYMLINK = "latest"
 SESSIONS_DIR = "sessions"
 
+STATE_LOCK_FILE = ".state.lock"
+DOCS_LOCK_FILE = ".docs.lock"
+SESSIONS_LOCK_FILE = ".sessions.lock"
+
 DOCS_DIR = "docs"
 QA_REPORTS_DIR = "qa_reports"
 

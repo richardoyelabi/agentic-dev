@@ -3,7 +3,8 @@
 import json
 from pathlib import Path
 
-from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, SESSIONS_DIR
+from agentic_dev.concurrency import file_lock
+from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, SESSIONS_DIR, SESSIONS_LOCK_FILE
 
 
 class SessionStore:
@@ -21,6 +22,11 @@ class SessionStore:
         return sessions_dir / f"{agent_name}{suffix}.json"
 
     @staticmethod
+    def _lock_file(project_dir: Path) -> Path:
+        """Build the path to the sessions lock file."""
+        return project_dir / AGENTIC_DEV_METADATA_DIR / SESSIONS_LOCK_FILE
+
+    @staticmethod
     def save_session(
         agent_name: str,
         sprint: int | None,
@@ -30,6 +36,7 @@ class SessionStore:
         """Persist a session ID for later resumption.
 
         Creates the sessions directory if it does not exist.
+        Acquires an exclusive file lock to prevent concurrent writes.
         """
         path = SessionStore._session_file(agent_name, sprint, project_dir)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,7 +45,8 @@ class SessionStore:
             "sprint": sprint,
             "session_id": session_id,
         }
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        with file_lock(SessionStore._lock_file(project_dir)):
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     @staticmethod
     def load_session(
@@ -54,6 +62,7 @@ class SessionStore:
         path = SessionStore._session_file(agent_name, sprint, project_dir)
         if not path.exists():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with file_lock(SessionStore._lock_file(project_dir), shared=True):
+            data = json.loads(path.read_text(encoding="utf-8"))
         result: str | None = data.get("session_id")
         return result
