@@ -1,3 +1,4 @@
+- treat docs as a git repo too and make it possible to have everything in the same repo using git submodules (debate what the best approach for this monorepo actually is)
 - can we use llm calls to make rate limit parsing and session_id extraction more robust? test robustness first
 - support multiple codebases per frontend/backend e.g. for microservices and microfrontends
 - see if you need to use oh my claudecode
