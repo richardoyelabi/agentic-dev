@@ -1,5 +1,7 @@
 """Sprint runner: executes a single sprint through backend -> frontend -> integration."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +20,31 @@ from agentic_dev.logging.events import (
 )
 from agentic_dev.orchestrator.qa_cycle import QACycleResult, run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
+from agentic_dev.state.manager import StateManager
+from agentic_dev.state.models import PipelineState, SprintState, SprintStatus
+
+# Maps each SprintStatus to its "phase group" index for skip comparison.
+# Sub-steps within the same QA cycle (dev -> qa -> correction) share a group
+# because the QA cycle is atomic — if any part fails, the whole cycle re-runs.
+_STEP_GROUP: dict[SprintStatus, int] = {
+    SprintStatus.PENDING: 0,
+    SprintStatus.BACKEND_DEV: 1,
+    SprintStatus.BACKEND_QA: 1,
+    SprintStatus.BACKEND_CORRECTION: 1,
+    SprintStatus.FRONTEND_DEV: 2,
+    SprintStatus.FRONTEND_QA: 2,
+    SprintStatus.FRONTEND_CORRECTION: 2,
+    SprintStatus.INTEGRATION: 3,
+    SprintStatus.INTEGRATION_QA: 3,
+    SprintStatus.INTEGRATION_CORRECTION: 3,
+    SprintStatus.COMPLETE: 4,
+    SprintStatus.FAILED: 0,
+}
+
+
+def _should_skip(current_status: SprintStatus, step: SprintStatus) -> bool:
+    """Return True if ``step`` was already completed based on ``current_status``."""
+    return _STEP_GROUP[current_status] > _STEP_GROUP[step]
 
 _event_log = get_event_logger("sprint_runner")
 
@@ -46,6 +73,8 @@ class SprintRunner:
         prompt_renderer: PromptRenderer,
         project_dir: Path,
         project_type: str = "fullstack",
+        state_manager: StateManager | None = None,
+        pipeline_state: PipelineState | None = None,
     ) -> None:
         self._claude = claude
         self._registry = registry
@@ -54,11 +83,19 @@ class SprintRunner:
         self._project_dir = project_dir
         self._has_backend = project_type in ("fullstack", "backend_only")
         self._has_frontend = project_type in ("fullstack", "frontend_only")
+        self._state_manager = state_manager
+        self._pipeline_state = pipeline_state
+
+    def _save_state(self) -> None:
+        """Save pipeline state if state_manager is configured."""
+        if self._state_manager is not None and self._pipeline_state is not None:
+            self._state_manager.save(self._pipeline_state)
 
     async def run_sprint(
         self,
         sprint_number: int,
         sprint_scope: str,
+        sprint_state: SprintState | None = None,
         needs_integration: bool = False,
     ) -> SprintResult:
         """Run a complete sprint: backend -> frontend -> optional integration.
@@ -87,7 +124,8 @@ class SprintRunner:
                 ctx.sprint_number = sprint_number
 
             result = await self._execute_sprint(
-                sprint_number, sprint_scope, needs_integration, partial_cost
+                sprint_number, sprint_scope, needs_integration, partial_cost,
+                sprint_state,
             )
 
             duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -129,24 +167,34 @@ class SprintRunner:
         sprint_scope: str,
         needs_integration: bool,
         partial_cost: list[float],
+        sprint_state: SprintState | None = None,
     ) -> SprintResult:
         """Run the backend, frontend, and optional integration QA cycles.
 
         partial_cost is a single-element list used as a mutable accumulator so
         the caller can recover cost even if this method raises AgentRunError.
+
+        When sprint_state is provided, sub-step progress is checkpointed to
+        disk after each QA cycle completes. On resume, completed sub-steps
+        are skipped based on the sprint's current status.
         """
+        current_status = sprint_state.status if sprint_state else SprintStatus.PENDING
+
         backend_spec = self._doc_store.read("backend_spec") if self._has_backend else ""
         frontend_spec = self._doc_store.read("frontend_spec") if self._has_frontend else ""
         api_contract = self._doc_store.read("api_contract") if self._has_backend else ""
 
-        # Include checkpoint feedback as additional context if available
         extra_context: dict[str, str] = {}
         if self._doc_store.exists("checkpoint_feedback"):
             extra_context["user_feedback"] = self._doc_store.read("checkpoint_feedback")
 
         # Backend QA cycle
         backend_result = None
-        if self._has_backend:
+        if self._has_backend and not _should_skip(current_status, SprintStatus.BACKEND_DEV):
+            if sprint_state is not None:
+                sprint_state.status = SprintStatus.BACKEND_DEV
+                self._save_state()
+
             emit(_event_log, SprintPhaseEvent(sprint_number=sprint_number, sub_phase="backend_dev", message=f"Sprint {sprint_number}: backend development"))
             backend_input_docs = {
                 "backend_spec": backend_spec,
@@ -163,12 +211,25 @@ class SprintRunner:
                 workspace=self._project_dir / "backend",
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
+                session_id=sprint_state.backend_session_id if sprint_state else None,
             )
             partial_cost[0] += backend_result.total_cost
 
+            if sprint_state is not None:
+                sprint_state.backend_session_id = backend_result.session_id
+                sprint_state.status = SprintStatus.FRONTEND_DEV if self._has_frontend else (
+                    SprintStatus.INTEGRATION if needs_integration else SprintStatus.COMPLETE
+                )
+                self._save_state()
+                current_status = sprint_state.status
+
         # Frontend QA cycle
         frontend_result = None
-        if self._has_frontend:
+        if self._has_frontend and not _should_skip(current_status, SprintStatus.FRONTEND_DEV):
+            if sprint_state is not None:
+                sprint_state.status = SprintStatus.FRONTEND_DEV
+                self._save_state()
+
             emit(_event_log, SprintPhaseEvent(sprint_number=sprint_number, sub_phase="frontend_dev", message=f"Sprint {sprint_number}: frontend development"))
             frontend_input_docs = {
                 "frontend_spec": frontend_spec,
@@ -185,12 +246,23 @@ class SprintRunner:
                 workspace=self._project_dir / "frontend",
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
+                session_id=sprint_state.frontend_session_id if sprint_state else None,
             )
             partial_cost[0] += frontend_result.total_cost
 
+            if sprint_state is not None:
+                sprint_state.frontend_session_id = frontend_result.session_id
+                sprint_state.status = SprintStatus.INTEGRATION if needs_integration else SprintStatus.COMPLETE
+                self._save_state()
+                current_status = sprint_state.status
+
         # Optional integration QA cycle
         integration_result = None
-        if needs_integration:
+        if needs_integration and not _should_skip(current_status, SprintStatus.INTEGRATION):
+            if sprint_state is not None:
+                sprint_state.status = SprintStatus.INTEGRATION
+                self._save_state()
+
             emit(_event_log, SprintPhaseEvent(sprint_number=sprint_number, sub_phase="integration", message=f"Sprint {sprint_number}: integration"))
             integration_input_docs = {
                 "backend_spec": backend_spec,
@@ -209,8 +281,14 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
                 qa_output_key="integration_guide",
+                session_id=sprint_state.integration_session_id if sprint_state else None,
             )
             partial_cost[0] += integration_result.total_cost
+
+            if sprint_state is not None:
+                sprint_state.integration_session_id = integration_result.session_id
+                sprint_state.status = SprintStatus.COMPLETE
+                self._save_state()
 
         return SprintResult(
             sprint_number=sprint_number,

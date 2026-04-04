@@ -22,7 +22,7 @@ from agentic_dev.config import (
     RUNS_DIR,
 )
 from agentic_dev.documents.store import DocumentStore
-from agentic_dev.exceptions import AgenticDevError, CheckpointPause
+from agentic_dev.exceptions import AgenticDevError, CheckpointPause, GracefulShutdown
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig, from_autonomy_level
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import PipelinePhase, PipelineState, SprintStatus
@@ -228,6 +228,13 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
         ))
         teardown_logging()
         _display_checkpoint(current_state, project_dir)
+    except GracefulShutdown:
+        current_state = state_manager.load()
+        teardown_logging()
+        console.print("[yellow]Shutdown requested. State saved.[/yellow]")
+        console.print(
+            f"  Resume with: agentic-dev resume {current_state.project_name}"
+        )
     except AgenticDevError as exc:
         duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
         emit(_event_log, PipelineFailedEvent(

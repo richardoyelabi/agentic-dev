@@ -97,7 +97,8 @@ def resume_from_failure(state: PipelineState) -> PipelineState:
 
     for sprint in state.sprints:
         if sprint.status == SprintStatus.FAILED:
-            sprint.status = SprintStatus.PENDING
+            sprint.status = sprint.failed_at_step or SprintStatus.PENDING
+            sprint.failed_at_step = None
             sprint.completed_at = None
 
     state.updated_at = datetime.now(timezone.utc)

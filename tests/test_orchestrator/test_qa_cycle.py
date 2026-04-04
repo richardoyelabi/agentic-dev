@@ -935,3 +935,83 @@ async def test_empty_correction_output_retries_then_succeeds(
     assert result.output == "v2"
     assert result.corrected is True
     assert claude.run.call_count == 5
+
+
+# ---------------------------------------------------------------------------
+# Session ID propagation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_id_captured_on_result(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """QACycleResult.session_id captures the action agent's session ID."""
+    claude.run.side_effect = [
+        ClaudeResult(text="output", session_id="action-sess-42", cost_usd=0.10, exit_code=0),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    assert result.session_id == "action-sess-42"
+
+
+@pytest.mark.asyncio
+async def test_session_id_forwarded_to_runner(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When session_id is passed, it is forwarded to claude.run()."""
+    claude.run.side_effect = [
+        _make_claude_result("output", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        session_id="resume-sess-99",
+    )
+
+    # First claude.run call (action agent) should have session_id
+    first_call = claude.run.call_args_list[0]
+    assert first_call.kwargs.get("session_id") == "resume-sess-99"
+
+
+@pytest.mark.asyncio
+async def test_session_id_none_by_default(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When no session_id passed, claude.run() is called without it."""
+    claude.run.side_effect = [
+        _make_claude_result("output", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    assert result.session_id == "sess-123"  # from _make_claude_result default

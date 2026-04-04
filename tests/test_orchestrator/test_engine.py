@@ -9,7 +9,7 @@ from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
-from agentic_dev.exceptions import AgentRunError, CheckpointPause, OutputParseError
+from agentic_dev.exceptions import AgentRunError, CheckpointPause, GracefulShutdown, OutputParseError
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.orchestrator.engine import PipelineEngine
 from agentic_dev.prompts.renderer import PromptRenderer
@@ -1026,3 +1026,147 @@ class TestPostSprintCommits:
         commit_paths = [c.args[0] for c in mock_commit.call_args_list]
         assert project_dir / "frontend" in commit_paths
         assert project_dir / "backend" not in commit_paths
+
+
+class TestCrashResilience:
+    """Tests for crash resilience: conditional status, failed_at_step, shutdown."""
+
+    @pytest.mark.asyncio
+    async def test_conditional_status_only_sets_backend_dev_when_pending(
+        self, engine, state_manager, claude, project_dir
+    ):
+        """_run_sprints only sets BACKEND_DEV when sprint status is PENDING."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        sprint = SprintState(
+            sprint_number=1, name="Sprint 1",
+            status=SprintStatus.FRONTEND_DEV,
+        )
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[sprint],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        # Only frontend + QA + UAT needed (backend skipped)
+        claude.run.side_effect = [
+            _make_claude_result("frontend code", cost=0.25),
+            _make_claude_result("APPROVED", cost=0.10),
+            _make_claude_result("uat report", cost=0.10),
+        ]
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ):
+            await engine.run()
+
+        assert state.phase == PipelinePhase.COMPLETE
+        assert sprint.status == SprintStatus.COMPLETE
+
+    @pytest.mark.asyncio
+    async def test_failed_sprint_captures_failed_at_step(
+        self, engine, state_manager, claude, project_dir
+    ):
+        """When a sprint fails, failed_at_step records the sub-step."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        sprint = SprintState(sprint_number=1, name="Sprint 1")
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[sprint],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        # Backend succeeds, frontend fails
+        claude.run.side_effect = [
+            _make_claude_result("backend code", cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+            AgentRunError("frontend_developer", "crashed"),
+        ]
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ):
+            await engine.run()
+
+        assert state.phase == PipelinePhase.FAILED
+        assert sprint.status == SprintStatus.FAILED
+        assert sprint.failed_at_step == SprintStatus.FRONTEND_DEV
+
+    @pytest.mark.asyncio
+    async def test_shutdown_event_saves_state_and_raises(
+        self, engine, state_manager
+    ):
+        """When shutdown event is set, engine saves state and raises GracefulShutdown."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS)
+        state_manager.load = MagicMock(return_value=state)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.get_shutdown_event"
+        ) as mock_get_event, patch(
+            "agentic_dev.orchestrator.engine.install_signal_handlers"
+        ):
+            mock_event = MagicMock()
+            mock_event.is_set.return_value = True
+            mock_get_event.return_value = mock_event
+
+            with pytest.raises(GracefulShutdown):
+                await engine.run()
+
+            state_manager.save.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_feature_analysis_passes_active_session_id(
+        self, engine, claude, doc_store
+    ):
+        """Feature analysis passes state.active_session_id to run_qa_cycle."""
+        state = _make_state(
+            PipelinePhase.FEATURE_ANALYSIS,
+            active_session_id="prev-sess-42",
+        )
+        doc_store.read = MagicMock(return_value="structured input")
+
+        claude.run.side_effect = [
+            _make_claude_result("features", cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        await engine._run_feature_analysis(state)
+
+        first_call = claude.run.call_args_list[0]
+        assert first_call.kwargs.get("session_id") == "prev-sess-42"
+
+    @pytest.mark.asyncio
+    async def test_feature_analysis_clears_session_id_on_success(
+        self, engine, claude, doc_store
+    ):
+        """Feature analysis clears active_session_id after successful phase."""
+        state = _make_state(
+            PipelinePhase.FEATURE_ANALYSIS,
+            active_session_id="old-sess",
+        )
+        doc_store.read = MagicMock(return_value="structured input")
+
+        claude.run.side_effect = [
+            ClaudeResult(text="features", session_id="new-sess-77", cost_usd=0.20, exit_code=0),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        await engine._run_feature_analysis(state)
+
+        assert state.active_session_id is None

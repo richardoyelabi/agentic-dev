@@ -10,8 +10,10 @@ from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
-from agentic_dev.orchestrator.sprint_runner import SprintResult, SprintRunner
+from agentic_dev.orchestrator.sprint_runner import SprintResult, SprintRunner, _should_skip
 from agentic_dev.prompts.renderer import PromptRenderer
+from agentic_dev.state.manager import StateManager
+from agentic_dev.state.models import PipelineState, SprintState, SprintStatus
 
 
 def _make_agent(name: str, template: str = "tpl.md.j2") -> AgentDefinition:
@@ -297,3 +299,183 @@ async def test_default_project_type_runs_both_cycles(runner, claude):
     assert result.backend_result is not None
     assert result.frontend_result is not None
     assert claude.run.call_count == 4
+
+
+class TestShouldSkip:
+    """Tests for the _should_skip function used in sub-step checkpointing."""
+
+    def test_pending_skips_nothing(self):
+        assert _should_skip(SprintStatus.PENDING, SprintStatus.BACKEND_DEV) is False
+        assert _should_skip(SprintStatus.PENDING, SprintStatus.FRONTEND_DEV) is False
+        assert _should_skip(SprintStatus.PENDING, SprintStatus.INTEGRATION) is False
+
+    def test_backend_dev_skips_nothing(self):
+        """BACKEND_DEV is group 1 — same group as the step, so no skip."""
+        assert _should_skip(SprintStatus.BACKEND_DEV, SprintStatus.BACKEND_DEV) is False
+
+    def test_backend_qa_skips_nothing(self):
+        """BACKEND_QA is group 1 — still in backend group, backend not complete."""
+        assert _should_skip(SprintStatus.BACKEND_QA, SprintStatus.BACKEND_DEV) is False
+
+    def test_backend_correction_skips_nothing(self):
+        """BACKEND_CORRECTION is group 1 — still in backend group."""
+        assert _should_skip(SprintStatus.BACKEND_CORRECTION, SprintStatus.BACKEND_DEV) is False
+
+    def test_frontend_dev_skips_backend(self):
+        """FRONTEND_DEV is group 2 — backend (group 1) is done."""
+        assert _should_skip(SprintStatus.FRONTEND_DEV, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.FRONTEND_DEV, SprintStatus.FRONTEND_DEV) is False
+
+    def test_frontend_qa_skips_backend(self):
+        """FRONTEND_QA is group 2 — backend (group 1) is done."""
+        assert _should_skip(SprintStatus.FRONTEND_QA, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.FRONTEND_QA, SprintStatus.FRONTEND_DEV) is False
+
+    def test_frontend_correction_skips_backend(self):
+        assert _should_skip(SprintStatus.FRONTEND_CORRECTION, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.FRONTEND_CORRECTION, SprintStatus.FRONTEND_DEV) is False
+
+    def test_integration_skips_backend_and_frontend(self):
+        """INTEGRATION is group 3 — both backend and frontend done."""
+        assert _should_skip(SprintStatus.INTEGRATION, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.INTEGRATION, SprintStatus.FRONTEND_DEV) is True
+        assert _should_skip(SprintStatus.INTEGRATION, SprintStatus.INTEGRATION) is False
+
+    def test_integration_qa_skips_backend_and_frontend(self):
+        assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.FRONTEND_DEV) is True
+        assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION) is False
+
+    def test_integration_correction_skips_backend_and_frontend(self):
+        assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.FRONTEND_DEV) is True
+        assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.INTEGRATION) is False
+
+    def test_complete_skips_everything(self):
+        assert _should_skip(SprintStatus.COMPLETE, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.COMPLETE, SprintStatus.FRONTEND_DEV) is True
+        assert _should_skip(SprintStatus.COMPLETE, SprintStatus.INTEGRATION) is True
+
+    def test_failed_skips_nothing(self):
+        """FAILED is group 0 — resume logic restores the sub-step first."""
+        assert _should_skip(SprintStatus.FAILED, SprintStatus.BACKEND_DEV) is False
+        assert _should_skip(SprintStatus.FAILED, SprintStatus.FRONTEND_DEV) is False
+        assert _should_skip(SprintStatus.FAILED, SprintStatus.INTEGRATION) is False
+
+
+class TestSubStepCheckpointing:
+    """Tests for sub-step state saves and skip-on-resume in SprintRunner."""
+
+    @pytest.fixture
+    def state_manager(self):
+        mgr = MagicMock(spec=StateManager)
+        return mgr
+
+    @pytest.fixture
+    def pipeline_state(self):
+        return PipelineState(project_name="test")
+
+    @pytest.fixture
+    def checkpointing_runner(
+        self, claude, registry, doc_store, prompt_renderer, project_dir,
+        state_manager, pipeline_state,
+    ):
+        return SprintRunner(
+            claude=claude,
+            registry=registry,
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            project_dir=project_dir,
+            state_manager=state_manager,
+            pipeline_state=pipeline_state,
+        )
+
+    @pytest.fixture
+    def claude(self):
+        runner = MagicMock(spec=ClaudeRunner)
+        runner.run = AsyncMock()
+        return runner
+
+    @pytest.fixture
+    def registry(self):
+        reg = MagicMock(spec=AgentRegistry)
+        reg.get = MagicMock(side_effect=lambda name: _make_agent(name))
+        return reg
+
+    @pytest.fixture
+    def doc_store(self):
+        store = MagicMock(spec=DocumentStore)
+        store.read = MagicMock(side_effect=lambda name: f"content of {name}")
+        return store
+
+    @pytest.fixture
+    def prompt_renderer(self):
+        renderer = MagicMock(spec=PromptRenderer)
+        renderer.render_agent_prompt = MagicMock(return_value="rendered prompt")
+        return renderer
+
+    @pytest.fixture
+    def project_dir(self, tmp_path):
+        return tmp_path / "project"
+
+    @pytest.mark.asyncio
+    async def test_state_saved_after_backend_completes(
+        self, checkpointing_runner, claude, state_manager,
+    ):
+        """State is saved after backend QA cycle completes."""
+        claude.run.side_effect = [
+            _make_claude_result("backend code", cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+            _make_claude_result("frontend code", cost=0.25),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+        sprint_state = SprintState(sprint_number=1, name="Sprint 1")
+
+        await checkpointing_runner.run_sprint(
+            sprint_number=1, sprint_scope="scope", sprint_state=sprint_state,
+        )
+
+        assert state_manager.save.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_session_id_saved_on_sprint_state(
+        self, checkpointing_runner, claude, state_manager,
+    ):
+        """Session IDs from QA cycles are saved to sprint state."""
+        claude.run.side_effect = [
+            ClaudeResult(text="backend code", session_id="be-sess", cost_usd=0.20, exit_code=0),
+            _make_claude_result("APPROVED", cost=0.10),
+            ClaudeResult(text="frontend code", session_id="fe-sess", cost_usd=0.25, exit_code=0),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+        sprint_state = SprintState(sprint_number=1, name="Sprint 1")
+
+        await checkpointing_runner.run_sprint(
+            sprint_number=1, sprint_scope="scope", sprint_state=sprint_state,
+        )
+
+        assert sprint_state.backend_session_id == "be-sess"
+        assert sprint_state.frontend_session_id == "fe-sess"
+
+    @pytest.mark.asyncio
+    async def test_skips_backend_when_status_is_frontend_dev(
+        self, checkpointing_runner, claude, state_manager,
+    ):
+        """When sprint status is FRONTEND_DEV, backend QA cycle is skipped."""
+        claude.run.side_effect = [
+            _make_claude_result("frontend code", cost=0.25),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+        sprint_state = SprintState(
+            sprint_number=1, name="Sprint 1",
+            status=SprintStatus.FRONTEND_DEV,
+        )
+
+        result = await checkpointing_runner.run_sprint(
+            sprint_number=1, sprint_scope="scope", sprint_state=sprint_state,
+        )
+
+        assert result.success is True
+        assert result.backend_result is None
+        assert result.frontend_result is not None
+        assert claude.run.call_count == 2

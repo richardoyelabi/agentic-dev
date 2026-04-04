@@ -12,11 +12,13 @@ from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import (
     AgentRunError,
     CheckpointPause,
+    GracefulShutdown,
     OutputParseError,
 )
 from agentic_dev.orchestrator.agent_bridge import to_run_config
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig, should_pause
 from agentic_dev.orchestrator.qa_cycle import run_qa_cycle
+from agentic_dev.orchestrator.shutdown import get_shutdown_event, install_signal_handlers
 from agentic_dev.orchestrator.sprint_runner import SprintRunner
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
@@ -60,7 +62,9 @@ class PipelineEngine:
         self._checkpoint_config = checkpoint_config
         self._output_parser = OutputParser()
 
-    def _get_sprint_runner(self, project_type: str = "fullstack") -> SprintRunner:
+    def _get_sprint_runner(
+        self, project_type: str = "fullstack", state: PipelineState | None = None,
+    ) -> SprintRunner:
         """Create a SprintRunner configured for the given project type."""
         return SprintRunner(
             claude=self._claude,
@@ -69,16 +73,25 @@ class PipelineEngine:
             prompt_renderer=self._prompt_renderer,
             project_dir=self._project_dir,
             project_type=project_type,
+            state_manager=self._state_manager,
+            pipeline_state=state,
         )
 
     async def run(self) -> None:
         """Main loop: load state, execute current phase, advance, persist.
 
         Raises CheckpointPause when the pipeline should pause for human review.
+        Raises GracefulShutdown when a SIGINT/SIGTERM signal is received.
         """
+        install_signal_handlers()
         state = self._state_manager.load()
+        shutdown_event = get_shutdown_event()
 
         while state.phase not in (PipelinePhase.COMPLETE, PipelinePhase.FAILED):
+            if shutdown_event.is_set():
+                self._state_manager.save(state)
+                raise GracefulShutdown(phase=state.phase)
+
             try:
                 state = await self._execute_phase(state)
             except (AgentRunError, OutputParseError) as exc:
@@ -168,10 +181,12 @@ class PipelineEngine:
             workspace=self._project_dir,
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
+            session_id=state.active_session_id,
         )
 
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
+        state.active_session_id = None
         self._record_agent_run(state, "feature_analyst", total_cost)
 
         return advance_phase(state, PipelinePhase.FEATURE_ANALYSIS_QA)
@@ -202,6 +217,7 @@ class PipelineEngine:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             extra_context=extra_context,
+            session_id=state.active_session_id,
         )
 
         # Split multi-document output into separate specs
@@ -215,6 +231,7 @@ class PipelineEngine:
 
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
+        state.active_session_id = None
         self._record_agent_run(state, "architect", total_cost)
 
         return advance_phase(state, PipelinePhase.ARCHITECTURE_QA)
@@ -245,6 +262,7 @@ class PipelineEngine:
             workspace=self._project_dir,
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
+            session_id=state.active_session_id,
         )
 
         # Populate sprint states from the plan output
@@ -259,6 +277,7 @@ class PipelineEngine:
 
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
+        state.active_session_id = None
         self._record_agent_run(state, "sprint_planner", total_cost)
 
         return advance_phase(state, PipelinePhase.SPRINT_PLANNING_QA)
@@ -323,14 +342,15 @@ class PipelineEngine:
     async def _run_sprints(self, state: PipelineState) -> PipelineState:
         """Run each sprint sequentially using SprintRunner."""
         project_type_str = state.project_type.value if state.project_type else "fullstack"
-        sprint_runner = self._get_sprint_runner(project_type_str)
+        sprint_runner = self._get_sprint_runner(project_type_str, state=state)
 
         for sprint in state.sprints:
             if sprint.status == SprintStatus.COMPLETE:
                 continue
 
-            sprint.status = SprintStatus.BACKEND_DEV
-            sprint.started_at = datetime.now(timezone.utc)
+            if sprint.status == SprintStatus.PENDING:
+                sprint.status = SprintStatus.BACKEND_DEV
+            sprint.started_at = sprint.started_at or datetime.now(timezone.utc)
             state.current_sprint = sprint.sprint_number
 
             sprint_scope = self._doc_store.read(
@@ -346,15 +366,19 @@ class PipelineEngine:
             result = await sprint_runner.run_sprint(
                 sprint_number=sprint.sprint_number,
                 sprint_scope=sprint_scope,
+                sprint_state=sprint,
                 needs_integration=needs_integration,
             )
 
-            sprint.status = SprintStatus.COMPLETE if result.success else SprintStatus.FAILED
             sprint.completed_at = datetime.now(timezone.utc)
             state.total_cost_usd += result.total_cost
 
             if result.success:
+                sprint.status = SprintStatus.COMPLETE
                 await self._commit_sprint_changes(state, sprint)
+            else:
+                sprint.failed_at_step = sprint.status
+                sprint.status = SprintStatus.FAILED
 
             self._state_manager.save(state)
 

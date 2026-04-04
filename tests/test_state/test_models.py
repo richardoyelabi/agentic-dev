@@ -2,7 +2,12 @@
 
 import pytest
 
-from agentic_dev.state.models import PipelineState, ProjectType
+from agentic_dev.state.models import (
+    PipelineState,
+    ProjectType,
+    SprintState,
+    SprintStatus,
+)
 
 
 class TestProjectType:
@@ -128,3 +133,92 @@ class TestPipelineStateHelpers:
         assert state.expected_architecture_docs == [
             "frontend_spec", "backend_spec", "api_contract"
         ]
+
+
+class TestSprintStateNewFields:
+    """Tests for new crash-resilience fields on SprintState."""
+
+    def test_integration_session_id_defaults_to_none(self):
+        sprint = SprintState(sprint_number=1, name="Sprint 1")
+        assert sprint.integration_session_id is None
+
+    def test_failed_at_step_defaults_to_none(self):
+        sprint = SprintState(sprint_number=1, name="Sprint 1")
+        assert sprint.failed_at_step is None
+
+    def test_integration_session_id_set_explicitly(self):
+        sprint = SprintState(
+            sprint_number=1,
+            name="Sprint 1",
+            integration_session_id="sess-123",
+        )
+        assert sprint.integration_session_id == "sess-123"
+
+    def test_failed_at_step_set_explicitly(self):
+        sprint = SprintState(
+            sprint_number=1,
+            name="Sprint 1",
+            failed_at_step=SprintStatus.FRONTEND_DEV,
+        )
+        assert sprint.failed_at_step == SprintStatus.FRONTEND_DEV
+
+    def test_sprint_state_serializes_new_fields(self):
+        sprint = SprintState(
+            sprint_number=1,
+            name="Sprint 1",
+            integration_session_id="sess-456",
+            failed_at_step=SprintStatus.BACKEND_DEV,
+        )
+        data = sprint.model_dump()
+        assert data["integration_session_id"] == "sess-456"
+        assert data["failed_at_step"] == "backend_dev"
+
+    def test_sprint_state_deserializes_new_fields(self):
+        data = {
+            "sprint_number": 1,
+            "name": "Sprint 1",
+            "integration_session_id": "sess-789",
+            "failed_at_step": "frontend_dev",
+        }
+        sprint = SprintState.model_validate(data)
+        assert sprint.integration_session_id == "sess-789"
+        assert sprint.failed_at_step == SprintStatus.FRONTEND_DEV
+
+    def test_sprint_state_backward_compat_missing_new_fields(self):
+        data = {"sprint_number": 1, "name": "Sprint 1", "status": "pending"}
+        sprint = SprintState.model_validate(data)
+        assert sprint.integration_session_id is None
+        assert sprint.failed_at_step is None
+
+
+class TestPipelineStateNewFields:
+    """Tests for new crash-resilience fields on PipelineState."""
+
+    def test_active_session_id_defaults_to_none(self):
+        state = PipelineState(project_name="test")
+        assert state.active_session_id is None
+
+    def test_active_session_id_set_explicitly(self):
+        state = PipelineState(
+            project_name="test",
+            active_session_id="sess-abc",
+        )
+        assert state.active_session_id == "sess-abc"
+
+    def test_active_session_id_serializes(self):
+        state = PipelineState(
+            project_name="test",
+            active_session_id="sess-def",
+        )
+        data = state.model_dump()
+        assert data["active_session_id"] == "sess-def"
+
+    def test_active_session_id_deserializes(self):
+        data = {"project_name": "test", "active_session_id": "sess-ghi"}
+        state = PipelineState.model_validate(data)
+        assert state.active_session_id == "sess-ghi"
+
+    def test_pipeline_state_backward_compat_missing_active_session_id(self):
+        data = {"project_name": "test"}
+        state = PipelineState.model_validate(data)
+        assert state.active_session_id is None

@@ -55,6 +55,14 @@ class CheckpointPause(AgenticDevError):
         super().__init__(message or f"Pipeline paused at checkpoint: {phase}")
 
 
+class GracefulShutdown(AgenticDevError):
+    """Raised when a shutdown signal (SIGINT/SIGTERM) is received."""
+
+    def __init__(self, phase: str, message: str = ""):
+        self.phase = phase
+        super().__init__(message or f"Graceful shutdown at phase: {phase}")
+
+
 class RateLimitError(AgentRunError):
     """Raised when rate limit retries are exhausted."""
 

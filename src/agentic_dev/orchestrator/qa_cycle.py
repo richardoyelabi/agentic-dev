@@ -36,12 +36,16 @@ async def _run_with_empty_retry(
     sprint: int | None = None,
     max_empty_retries: int = 1,
     empty_retry_delay: float = 5.0,
+    session_id: str | None = None,
 ) -> ClaudeResult:
     """Run an agent and retry once if it returns empty output.
 
     Raises AgentRunError when all attempts produce empty output.
     """
-    result = await claude.run(agent=agent_config, prompt=prompt, working_dir=workspace)
+    result = await claude.run(
+        agent=agent_config, prompt=prompt, working_dir=workspace,
+        session_id=session_id,
+    )
 
     for attempt in range(1, max_empty_retries + 1):
         if result.text.strip():
@@ -87,6 +91,7 @@ class QACycleResult:
     corrections: list[CorrectionRound] = field(default_factory=list)
     action_cost: float = 0.0
     initial_qa_cost: float = 0.0
+    session_id: str | None = None
 
     @property
     def corrected(self) -> bool:
@@ -161,6 +166,7 @@ async def run_qa_cycle(
     max_corrections: int = 1,
     max_empty_retries: int = 1,
     empty_retry_delay: float = 5.0,
+    session_id: str | None = None,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -201,6 +207,7 @@ async def run_qa_cycle(
         sprint=sprint,
         max_empty_retries=max_empty_retries,
         empty_retry_delay=empty_retry_delay,
+        session_id=session_id,
     )
 
     # 2. Save the action output
@@ -341,6 +348,7 @@ async def run_qa_cycle(
         corrections=corrections,
         action_cost=action_result.cost_usd,
         initial_qa_cost=initial_qa_cost,
+        session_id=action_result.session_id,
     )
 
     emit(_event_log, QACycleCompleteEvent(

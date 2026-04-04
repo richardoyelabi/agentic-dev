@@ -58,6 +58,8 @@ class SprintState(BaseModel):
     status: SprintStatus = SprintStatus.PENDING
     backend_session_id: str | None = None
     frontend_session_id: str | None = None
+    integration_session_id: str | None = None
+    failed_at_step: SprintStatus | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -92,6 +94,7 @@ class PipelineState(BaseModel):
     total_cost_usd: float = 0.0
     remediation_cycle: int = 0
     agent_runs: list[AgentRunRecord] = Field(default_factory=list)
+    active_session_id: str | None = None
 
     @property
     def has_frontend(self) -> bool:

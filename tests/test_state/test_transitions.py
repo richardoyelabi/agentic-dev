@@ -150,7 +150,8 @@ class TestResumeFromFailure:
         with pytest.raises(InvalidTransitionError):
             resume_from_failure(state)
 
-    def test_resume_resets_failed_sprint_to_pending(self) -> None:
+    def test_resume_resets_failed_sprint_to_pending_when_no_failed_at_step(self) -> None:
+        """FAILED sprint with no failed_at_step falls back to PENDING."""
         failed_sprint = SprintState(
             sprint_number=3,
             name="Overdue Invoice Detection",
@@ -168,6 +169,47 @@ class TestResumeFromFailure:
         assert resumed.sprints[0].status == SprintStatus.PENDING
         assert resumed.sprints[0].completed_at is None
 
+    def test_resume_restores_failed_at_step(self) -> None:
+        """FAILED sprint with failed_at_step restores to that sub-step."""
+        failed_sprint = SprintState(
+            sprint_number=2,
+            name="Invoice Ingestion",
+            status=SprintStatus.FAILED,
+            failed_at_step=SprintStatus.FRONTEND_DEV,
+            completed_at=datetime(2026, 4, 4, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.FAILED,
+            failed_at_phase=PipelinePhase.SPRINTING,
+            sprints=[failed_sprint],
+        )
+        resumed = resume_from_failure(state)
+
+        assert resumed.sprints[0].status == SprintStatus.FRONTEND_DEV
+        assert resumed.sprints[0].failed_at_step is None
+        assert resumed.sprints[0].completed_at is None
+
+    def test_resume_restores_failed_at_step_integration(self) -> None:
+        """FAILED sprint at integration step restores correctly."""
+        failed_sprint = SprintState(
+            sprint_number=1,
+            name="Foundation",
+            status=SprintStatus.FAILED,
+            failed_at_step=SprintStatus.INTEGRATION,
+            completed_at=datetime(2026, 4, 4, 14, 0, 0, tzinfo=timezone.utc),
+        )
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.FAILED,
+            failed_at_phase=PipelinePhase.SPRINTING,
+            sprints=[failed_sprint],
+        )
+        resumed = resume_from_failure(state)
+
+        assert resumed.sprints[0].status == SprintStatus.INTEGRATION
+        assert resumed.sprints[0].failed_at_step is None
+
     def test_resume_preserves_complete_sprints(self) -> None:
         complete_sprint = SprintState(
             sprint_number=1,
@@ -179,6 +221,7 @@ class TestResumeFromFailure:
             sprint_number=2,
             name="Invoice Ingestion",
             status=SprintStatus.FAILED,
+            failed_at_step=SprintStatus.FRONTEND_DEV,
             completed_at=datetime(2026, 4, 4, 12, 0, 0, tzinfo=timezone.utc),
         )
         state = PipelineState(
@@ -191,5 +234,6 @@ class TestResumeFromFailure:
 
         assert resumed.sprints[0].status == SprintStatus.COMPLETE
         assert resumed.sprints[0].completed_at is not None
-        assert resumed.sprints[1].status == SprintStatus.PENDING
+        assert resumed.sprints[1].status == SprintStatus.FRONTEND_DEV
         assert resumed.sprints[1].completed_at is None
+        assert resumed.sprints[1].failed_at_step is None
