@@ -169,7 +169,7 @@ class PipelineEngine:
             prompt_renderer=self._prompt_renderer,
         )
 
-        total_cost = result.action_cost + result.qa_cost + result.correction_cost
+        total_cost = result.total_cost
         state.total_cost_usd += total_cost
         self._record_agent_run(state, "feature_analyst", total_cost)
 
@@ -212,7 +212,7 @@ class PipelineEngine:
         for doc_name, content in docs.items():
             self._doc_store.write(doc_name, content)
 
-        total_cost = result.action_cost + result.qa_cost + result.correction_cost
+        total_cost = result.total_cost
         state.total_cost_usd += total_cost
         self._record_agent_run(state, "architect", total_cost)
 
@@ -256,7 +256,7 @@ class PipelineEngine:
         state.sprints = self._parse_sprint_plan(sprint_plan_text)
         state.current_sprint = 1 if state.sprints else None
 
-        total_cost = result.action_cost + result.qa_cost + result.correction_cost
+        total_cost = result.total_cost
         state.total_cost_usd += total_cost
         self._record_agent_run(state, "sprint_planner", total_cost)
 

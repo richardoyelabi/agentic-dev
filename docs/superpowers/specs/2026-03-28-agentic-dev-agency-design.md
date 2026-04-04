@@ -112,8 +112,11 @@ Every action agent in the pipeline has an independent QA counterpart, with two i
 
 1. Run action agent with input documents → output
 2. Run QA agent with **only** the input documents + output (no shared internal context)
-3. If QA found issues: run action agent again with input + previous output + QA feedback
-4. Done. One cycle only. No loops.
+3. **Correction loop** (up to `max_corrections` rounds, default 1):
+   - If QA approved → done
+   - Run action agent again with input + previous output + QA feedback → corrected output
+   - Run QA agent again on corrected output → new report
+4. Done. The user always sees QA feedback on the final version of the output.
 
 QA evaluates against 6 criteria:
 - Does it do what it's supposed to do?

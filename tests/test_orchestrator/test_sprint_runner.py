@@ -190,10 +190,11 @@ async def test_partial_cost_preserved_on_frontend_failure(runner, claude):
 async def test_costs_aggregated_with_corrections(runner, claude):
     """Costs include correction runs when QA finds issues."""
     claude.run.side_effect = [
-        # Backend: action -> QA finds issues -> correction
+        # Backend: action -> QA finds issues -> correction -> re-review
         _make_claude_result("backend v1", cost=0.20),
         _make_claude_result("ISSUES_FOUND: fix error handling", cost=0.10),
         _make_claude_result("backend v2", cost=0.25),
+        _make_claude_result("APPROVED after fix", cost=0.08),
         # Frontend: action -> QA approves
         _make_claude_result("frontend code", cost=0.30),
         _make_claude_result("APPROVED", cost=0.15),
@@ -204,8 +205,8 @@ async def test_costs_aggregated_with_corrections(runner, claude):
     assert result.success is True
     assert result.backend_result.corrected is True
     assert result.frontend_result.corrected is False
-    # 0.20 + 0.10 + 0.25 + 0.30 + 0.15 = 1.00
-    assert result.total_cost == pytest.approx(1.00)
+    # 0.20 + 0.10 + 0.25 + 0.08 + 0.30 + 0.15 = 1.08
+    assert result.total_cost == pytest.approx(1.08)
 
 
 @pytest.mark.asyncio

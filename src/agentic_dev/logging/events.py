@@ -163,6 +163,19 @@ class QACycleCorrectionEvent(LogEvent):
     event_type: str = "qa_cycle_correction"
     action_agent: str
     correction_cost: float
+    round_number: int = 1
+    sprint: int | None = None
+
+
+class QACycleReReviewEvent(LogEvent):
+    """Emitted after a post-correction QA re-review."""
+
+    event_type: str = "qa_cycle_re_review"
+    action_agent: str
+    qa_agent: str
+    round_number: int
+    issues_found: bool
+    re_review_cost: float
     sprint: int | None = None
 
 
@@ -173,6 +186,7 @@ class QACycleCompleteEvent(LogEvent):
     action_agent: str
     qa_agent: str
     corrected: bool
+    correction_rounds: int = 0
     total_cost: float
     sprint: int | None = None
 

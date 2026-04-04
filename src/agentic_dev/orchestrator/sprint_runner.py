@@ -164,9 +164,7 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
             )
-            partial_cost[0] += (
-                backend_result.action_cost + backend_result.qa_cost + backend_result.correction_cost
-            )
+            partial_cost[0] += backend_result.total_cost
 
         # Frontend QA cycle
         frontend_result = None
@@ -188,9 +186,7 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
             )
-            partial_cost[0] += (
-                frontend_result.action_cost + frontend_result.qa_cost + frontend_result.correction_cost
-            )
+            partial_cost[0] += frontend_result.total_cost
 
         # Optional integration QA cycle
         integration_result = None
@@ -214,11 +210,7 @@ class SprintRunner:
                 prompt_renderer=self._prompt_renderer,
                 qa_output_key="integration_guide",
             )
-            partial_cost[0] += (
-                integration_result.action_cost
-                + integration_result.qa_cost
-                + integration_result.correction_cost
-            )
+            partial_cost[0] += integration_result.total_cost
 
         return SprintResult(
             sprint_number=sprint_number,
