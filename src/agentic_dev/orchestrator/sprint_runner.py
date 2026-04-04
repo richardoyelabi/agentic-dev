@@ -212,7 +212,7 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
                 session_id=sprint_state.backend_session_id if sprint_state else None,
-                allow_empty_action_output=True,
+
             )
             partial_cost[0] += backend_result.total_cost
 
@@ -248,7 +248,7 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
                 session_id=sprint_state.frontend_session_id if sprint_state else None,
-                allow_empty_action_output=True,
+
             )
             partial_cost[0] += frontend_result.total_cost
 
@@ -284,7 +284,7 @@ class SprintRunner:
                 prompt_renderer=self._prompt_renderer,
                 qa_output_key="integration_guide",
                 session_id=sprint_state.integration_session_id if sprint_state else None,
-                allow_empty_action_output=True,
+
             )
             partial_cost[0] += integration_result.total_cost
 
