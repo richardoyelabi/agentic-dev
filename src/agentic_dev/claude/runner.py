@@ -141,6 +141,53 @@ class ClaudeRunner:
         return cmd
 
     @staticmethod
+    def _recover_result_from_session(
+        session_id: str,
+        working_dir: Path,
+        claude_dir: Path | None = None,
+    ) -> str:
+        """Attempt to extract the last assistant text from a session JSONL.
+
+        This is a fallback for when the Claude CLI returns an empty ``result``
+        field despite the agent having produced text.  The session JSONL is
+        stored by the CLI at ``~/.claude/projects/{encoded_path}/{session_id}.jsonl``.
+
+        Returns the recovered text, or an empty string if recovery fails.
+        """
+        if claude_dir is None:
+            claude_dir = Path.home() / ".claude"
+
+        encoded_path = str(working_dir).replace("/", "-")
+        jsonl_path = claude_dir / "projects" / encoded_path / f"{session_id}.jsonl"
+
+        if not jsonl_path.exists():
+            return ""
+
+        try:
+            lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ""
+
+        # Scan backwards for the last assistant message with text content
+        for line in reversed(lines):
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("type") != "assistant":
+                continue
+            content = msg.get("message", {}).get("content", [])
+            text_parts = [
+                block["text"]
+                for block in content
+                if block.get("type") == "text" and block.get("text")
+            ]
+            if text_parts:
+                return "".join(text_parts)
+
+        return ""
+
+    @staticmethod
     def _extract_session_id(stdout: str) -> str | None:
         """Try to extract session_id from potentially partial JSON output."""
         try:
@@ -300,9 +347,19 @@ class ClaudeRunner:
                 message=f"Failed to parse JSON output: {exc}",
             ) from exc
 
+        result_text = raw_json.get("result", "") or ""
+        sid = raw_json.get("session_id")
+
+        # Fallback: if the CLI returned empty result but the agent produced
+        # text (visible in the session JSONL), recover it from there.
+        if not result_text.strip() and sid:
+            recovered = self._recover_result_from_session(sid, working_dir)
+            if recovered.strip():
+                result_text = recovered
+
         result = ClaudeResult(
-            text=raw_json.get("result", ""),
-            session_id=raw_json.get("session_id"),
+            text=result_text,
+            session_id=sid,
             cost_usd=float(raw_json.get("total_cost_usd", 0.0)),
             exit_code=exit_code,
             raw_json=raw_json,

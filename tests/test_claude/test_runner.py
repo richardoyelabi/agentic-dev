@@ -254,6 +254,179 @@ class TestLogging:
         assert result.text == "ok"
 
 
+class TestRunFallbackToSession:
+    """Tests for the run() method falling back to session JSONL on empty result."""
+
+    @staticmethod
+    def _make_mock_process(stdout: str, returncode: int = 0, stderr: str = ""):
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (
+            stdout.encode("utf-8"),
+            stderr.encode("utf-8"),
+        )
+        mock_process.returncode = returncode
+        return mock_process
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_session_jsonl_when_result_empty(self, tmp_path: Path):
+        """When CLI returns empty result but session JSONL has text, use the JSONL text."""
+        runner = ClaudeRunner()
+        agent = FakeAgentConfig()
+        output_json = json.dumps({
+            "result": "",
+            "session_id": "sess-fallback",
+            "total_cost_usd": 1.50,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch.object(
+            ClaudeRunner, "_recover_result_from_session",
+            return_value="Recovered summary text",
+        ) as mock_recover:
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_recover.assert_called_once_with("sess-fallback", tmp_path)
+        assert result.text == "Recovered summary text"
+        assert result.cost_usd == pytest.approx(1.50)
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_result_present(self, tmp_path: Path):
+        """When CLI returns non-empty result, no fallback attempted."""
+        runner = ClaudeRunner()
+        agent = FakeAgentConfig()
+        output_json = json.dumps({
+            "result": "Normal result",
+            "session_id": "sess-ok",
+            "total_cost_usd": 0.50,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch.object(
+            ClaudeRunner, "_recover_result_from_session",
+        ) as mock_recover:
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_recover.assert_not_called()
+        assert result.text == "Normal result"
+
+    @pytest.mark.asyncio
+    async def test_fallback_returns_empty_still_reports_empty(self, tmp_path: Path):
+        """When both CLI and fallback return empty, result stays empty."""
+        runner = ClaudeRunner()
+        agent = FakeAgentConfig()
+        output_json = json.dumps({
+            "result": "",
+            "session_id": "sess-empty",
+            "total_cost_usd": 0.10,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch.object(
+            ClaudeRunner, "_recover_result_from_session",
+            return_value="",
+        ):
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == ""
+
+
+class TestRecoverResultFromSession:
+    """Tests for _recover_result_from_session JSONL fallback."""
+
+    def test_extracts_last_assistant_text(self, tmp_path: Path):
+        """Extracts text from the last assistant message in the JSONL."""
+        session_id = "test-session-123"
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+
+        # Create the JSONL path matching the CLI convention
+        encoded = str(project_dir).replace("/", "-")
+        sessions_dir = tmp_path / ".claude" / "projects" / encoded
+        sessions_dir.mkdir(parents=True)
+        jsonl_path = sessions_dir / f"{session_id}.jsonl"
+
+        jsonl_path.write_text(
+            json.dumps({"type": "human", "message": {"content": "do something"}}) + "\n"
+            + json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Write", "input": {}},
+            ]}}) + "\n"
+            + json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Here is the summary of work done."},
+            ]}}) + "\n"
+            + json.dumps({"type": "last-prompt"}) + "\n",
+            encoding="utf-8",
+        )
+
+        result = ClaudeRunner._recover_result_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result == "Here is the summary of work done."
+
+    def test_returns_empty_when_no_text_blocks(self, tmp_path: Path):
+        """Returns empty string when assistant messages have only tool_use blocks."""
+        session_id = "test-no-text"
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        encoded = str(project_dir).replace("/", "-")
+        sessions_dir = tmp_path / ".claude" / "projects" / encoded
+        sessions_dir.mkdir(parents=True)
+        jsonl_path = sessions_dir / f"{session_id}.jsonl"
+
+        jsonl_path.write_text(
+            json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {}},
+            ]}}) + "\n",
+            encoding="utf-8",
+        )
+
+        result = ClaudeRunner._recover_result_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result == ""
+
+    def test_returns_empty_when_file_missing(self, tmp_path: Path):
+        """Returns empty string when session JSONL does not exist."""
+        result = ClaudeRunner._recover_result_from_session(
+            "nonexistent", tmp_path, claude_dir=tmp_path / ".claude",
+        )
+        assert result == ""
+
+    def test_concatenates_multiple_text_blocks(self, tmp_path: Path):
+        """Concatenates all text blocks from the last assistant message."""
+        session_id = "test-multi-text"
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        encoded = str(project_dir).replace("/", "-")
+        sessions_dir = tmp_path / ".claude" / "projects" / encoded
+        sessions_dir.mkdir(parents=True)
+        jsonl_path = sessions_dir / f"{session_id}.jsonl"
+
+        jsonl_path.write_text(
+            json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Part one."},
+                {"type": "tool_use", "name": "Read", "input": {}},
+                {"type": "text", "text": " Part two."},
+            ]}}) + "\n",
+            encoding="utf-8",
+        )
+
+        result = ClaudeRunner._recover_result_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result == "Part one. Part two."
+
+
 class TestRetry:
     """Tests for rate limit retry logic in ClaudeRunner.run()."""
 
