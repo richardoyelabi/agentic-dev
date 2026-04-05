@@ -1,6 +1,7 @@
 """Reusable QA cycle: action agent -> QA agent -> correction loop with re-review."""
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -167,6 +168,8 @@ async def run_qa_cycle(
     max_empty_retries: int = 1,
     empty_retry_delay: float = 5.0,
     session_id: str | None = None,
+    on_substep: Callable[[str], None] | None = None,
+    skip_to_correction: bool = False,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -177,6 +180,11 @@ async def run_qa_cycle(
     Args:
         max_corrections: Maximum number of correction rounds. Defaults to 1.
             Set to 0 to make QA informational only (no corrections).
+        on_substep: Optional callback invoked at sub-step boundaries with
+            ``"qa"`` (before QA runs) or ``"correction"`` (before correction).
+        skip_to_correction: When True, skip the action agent and initial QA
+            review, loading their outputs from the doc_store instead. Used
+            to resume mid-QA-cycle after a crash.
     """
     ctx = get_run_context()
     sprint = ctx.sprint_number if ctx else None
@@ -189,52 +197,68 @@ async def run_qa_cycle(
         message=f"QA cycle: {action_agent.name} -> {qa_agent.name} for '{output_doc_name}'",
     ))
 
-    # 1. Render and run the action agent
-    action_prompt = prompt_renderer.render_agent_prompt(
-        template_name=action_agent.prompt_template,
-        input_documents=input_docs,
-        constraints=action_agent.constraints,
-        extra_context=extra_context,
-    )
-    action_config = to_run_config(action_agent)
-    action_result = await _run_with_empty_retry(
-        claude=claude,
-        agent_config=action_config,
-        prompt=action_prompt,
-        workspace=workspace,
-        agent_name=action_agent.name,
-        error_message="Agent returned empty output",
-        sprint=sprint,
-        max_empty_retries=max_empty_retries,
-        empty_retry_delay=empty_retry_delay,
-        session_id=session_id,
-    )
-
-    # 2. Save the action output
-    doc_store.write(output_doc_name, action_result.text)
-
-    # 3. Run the initial QA review
     qa_key = qa_output_key or output_doc_name
+    qa_report_name = f"qa_reports/{output_doc_name}"
+
+    action_config = to_run_config(action_agent)
     qa_config = to_run_config(qa_agent)
 
-    initial_qa_report, initial_qa_cost = await _run_qa_review(
-        claude=claude,
-        qa_agent=qa_agent,
-        qa_config=qa_config,
-        input_docs=input_docs,
-        qa_key=qa_key,
-        output_text=action_result.text,
-        prompt_renderer=prompt_renderer,
-        workspace=workspace,
-        extra_context=extra_context,
-        sprint=sprint,
-        max_empty_retries=max_empty_retries,
-        empty_retry_delay=empty_retry_delay,
-    )
+    if skip_to_correction:
+        # Resume: load prior action output and QA report from doc_store
+        action_output_text = doc_store.read(output_doc_name)
+        initial_qa_report = doc_store.read(qa_report_name)
+        action_cost = 0.0
+        initial_qa_cost = 0.0
+        action_session_id: str | None = None
+    else:
+        # 1. Render and run the action agent
+        action_prompt = prompt_renderer.render_agent_prompt(
+            template_name=action_agent.prompt_template,
+            input_documents=input_docs,
+            constraints=action_agent.constraints,
+            extra_context=extra_context,
+        )
+        action_result = await _run_with_empty_retry(
+            claude=claude,
+            agent_config=action_config,
+            prompt=action_prompt,
+            workspace=workspace,
+            agent_name=action_agent.name,
+            error_message="Agent returned empty output",
+            sprint=sprint,
+            max_empty_retries=max_empty_retries,
+            empty_retry_delay=empty_retry_delay,
+            session_id=session_id,
+        )
 
-    # 4. Save the initial QA report
-    qa_report_name = f"qa_reports/{output_doc_name}"
-    doc_store.write(qa_report_name, initial_qa_report)
+        action_output_text = action_result.text
+        action_cost = action_result.cost_usd
+        action_session_id = action_result.session_id
+
+        # 2. Save the action output
+        doc_store.write(output_doc_name, action_output_text)
+
+        if on_substep is not None:
+            on_substep("qa")
+
+        # 3. Run the initial QA review
+        initial_qa_report, initial_qa_cost = await _run_qa_review(
+            claude=claude,
+            qa_agent=qa_agent,
+            qa_config=qa_config,
+            input_docs=input_docs,
+            qa_key=qa_key,
+            output_text=action_output_text,
+            prompt_renderer=prompt_renderer,
+            workspace=workspace,
+            extra_context=extra_context,
+            sprint=sprint,
+            max_empty_retries=max_empty_retries,
+            empty_retry_delay=empty_retry_delay,
+        )
+
+        # 4. Save the initial QA report
+        doc_store.write(qa_report_name, initial_qa_report)
 
     issues_found = ISSUES_FOUND_MARKER in initial_qa_report
     emit(_event_log, QACycleVerdictEvent(
@@ -247,12 +271,15 @@ async def run_qa_cycle(
 
     # 5. Correction loop
     corrections: list[CorrectionRound] = []
-    latest_output = action_result.text
+    latest_output = action_output_text
     latest_qa_report = initial_qa_report
 
     for round_num in range(1, max_corrections + 1):
         if ISSUES_FOUND_MARKER not in latest_qa_report:
             break
+
+        if on_substep is not None:
+            on_substep("correction")
 
         # Preserve the initial QA report before overwrites
         if round_num == 1:
@@ -346,9 +373,9 @@ async def run_qa_cycle(
         initial_qa_report=initial_qa_report,
         final_qa_report=final_qa_report,
         corrections=corrections,
-        action_cost=action_result.cost_usd,
+        action_cost=action_cost,
         initial_qa_cost=initial_qa_cost,
-        session_id=action_result.session_id,
+        session_id=action_session_id,
     )
 
     emit(_event_log, QACycleCompleteEvent(

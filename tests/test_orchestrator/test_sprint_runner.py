@@ -310,46 +310,58 @@ class TestShouldSkip:
         assert _should_skip(SprintStatus.PENDING, SprintStatus.INTEGRATION) is False
 
     def test_backend_dev_skips_nothing(self):
-        """BACKEND_DEV is group 1 — same group as the step, so no skip."""
         assert _should_skip(SprintStatus.BACKEND_DEV, SprintStatus.BACKEND_DEV) is False
 
-    def test_backend_qa_skips_nothing(self):
-        """BACKEND_QA is group 1 — still in backend group, backend not complete."""
-        assert _should_skip(SprintStatus.BACKEND_QA, SprintStatus.BACKEND_DEV) is False
+    def test_backend_qa_skips_backend_dev(self):
+        """BACKEND_QA skips BACKEND_DEV — dev is done, now doing QA."""
+        assert _should_skip(SprintStatus.BACKEND_QA, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.BACKEND_QA, SprintStatus.BACKEND_QA) is False
 
-    def test_backend_correction_skips_nothing(self):
-        """BACKEND_CORRECTION is group 1 — still in backend group."""
-        assert _should_skip(SprintStatus.BACKEND_CORRECTION, SprintStatus.BACKEND_DEV) is False
+    def test_backend_correction_skips_backend_dev_and_qa(self):
+        """BACKEND_CORRECTION skips BACKEND_DEV and BACKEND_QA."""
+        assert _should_skip(SprintStatus.BACKEND_CORRECTION, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.BACKEND_CORRECTION, SprintStatus.BACKEND_QA) is True
+        assert _should_skip(SprintStatus.BACKEND_CORRECTION, SprintStatus.BACKEND_CORRECTION) is False
 
-    def test_frontend_dev_skips_backend(self):
-        """FRONTEND_DEV is group 2 — backend (group 1) is done."""
+    def test_frontend_dev_skips_all_backend(self):
+        """FRONTEND_DEV skips all backend sub-steps."""
         assert _should_skip(SprintStatus.FRONTEND_DEV, SprintStatus.BACKEND_DEV) is True
+        assert _should_skip(SprintStatus.FRONTEND_DEV, SprintStatus.BACKEND_QA) is True
+        assert _should_skip(SprintStatus.FRONTEND_DEV, SprintStatus.BACKEND_CORRECTION) is True
         assert _should_skip(SprintStatus.FRONTEND_DEV, SprintStatus.FRONTEND_DEV) is False
 
-    def test_frontend_qa_skips_backend(self):
-        """FRONTEND_QA is group 2 — backend (group 1) is done."""
+    def test_frontend_qa_skips_backend_and_frontend_dev(self):
+        """FRONTEND_QA skips all backend and FRONTEND_DEV."""
         assert _should_skip(SprintStatus.FRONTEND_QA, SprintStatus.BACKEND_DEV) is True
-        assert _should_skip(SprintStatus.FRONTEND_QA, SprintStatus.FRONTEND_DEV) is False
+        assert _should_skip(SprintStatus.FRONTEND_QA, SprintStatus.FRONTEND_DEV) is True
+        assert _should_skip(SprintStatus.FRONTEND_QA, SprintStatus.FRONTEND_QA) is False
 
-    def test_frontend_correction_skips_backend(self):
+    def test_frontend_correction_skips_through_frontend_qa(self):
+        """FRONTEND_CORRECTION skips everything up to and including FRONTEND_QA."""
         assert _should_skip(SprintStatus.FRONTEND_CORRECTION, SprintStatus.BACKEND_DEV) is True
-        assert _should_skip(SprintStatus.FRONTEND_CORRECTION, SprintStatus.FRONTEND_DEV) is False
+        assert _should_skip(SprintStatus.FRONTEND_CORRECTION, SprintStatus.FRONTEND_DEV) is True
+        assert _should_skip(SprintStatus.FRONTEND_CORRECTION, SprintStatus.FRONTEND_QA) is True
+        assert _should_skip(SprintStatus.FRONTEND_CORRECTION, SprintStatus.FRONTEND_CORRECTION) is False
 
     def test_integration_skips_backend_and_frontend(self):
-        """INTEGRATION is group 3 — both backend and frontend done."""
+        """INTEGRATION skips all backend and frontend sub-steps."""
         assert _should_skip(SprintStatus.INTEGRATION, SprintStatus.BACKEND_DEV) is True
         assert _should_skip(SprintStatus.INTEGRATION, SprintStatus.FRONTEND_DEV) is True
+        assert _should_skip(SprintStatus.INTEGRATION, SprintStatus.FRONTEND_CORRECTION) is True
         assert _should_skip(SprintStatus.INTEGRATION, SprintStatus.INTEGRATION) is False
 
-    def test_integration_qa_skips_backend_and_frontend(self):
+    def test_integration_qa_skips_through_integration_dev(self):
         assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.BACKEND_DEV) is True
         assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.FRONTEND_DEV) is True
-        assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION) is False
+        assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION) is True
+        assert _should_skip(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION_QA) is False
 
-    def test_integration_correction_skips_backend_and_frontend(self):
+    def test_integration_correction_skips_through_integration_qa(self):
         assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.BACKEND_DEV) is True
         assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.FRONTEND_DEV) is True
-        assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.INTEGRATION) is False
+        assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.INTEGRATION) is True
+        assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.INTEGRATION_QA) is True
+        assert _should_skip(SprintStatus.INTEGRATION_CORRECTION, SprintStatus.INTEGRATION_CORRECTION) is False
 
     def test_complete_skips_everything(self):
         assert _should_skip(SprintStatus.COMPLETE, SprintStatus.BACKEND_DEV) is True
@@ -357,7 +369,7 @@ class TestShouldSkip:
         assert _should_skip(SprintStatus.COMPLETE, SprintStatus.INTEGRATION) is True
 
     def test_failed_skips_nothing(self):
-        """FAILED is group 0 — resume logic restores the sub-step first."""
+        """FAILED is order 0 — resume logic restores the sub-step first."""
         assert _should_skip(SprintStatus.FAILED, SprintStatus.BACKEND_DEV) is False
         assert _should_skip(SprintStatus.FAILED, SprintStatus.FRONTEND_DEV) is False
         assert _should_skip(SprintStatus.FAILED, SprintStatus.INTEGRATION) is False

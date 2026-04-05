@@ -1017,3 +1017,152 @@ async def test_session_id_none_by_default(
     assert result.session_id == "sess-123"  # from _make_claude_result default
 
 
+# ---------------------------------------------------------------------------
+# on_substep callback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_substep_called_before_qa(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """on_substep('qa') fires after action agent, before QA runs."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+    calls = []
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        on_substep=lambda step: calls.append(step),
+    )
+
+    assert "qa" in calls
+
+
+@pytest.mark.asyncio
+async def test_on_substep_called_before_correction(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """on_substep('correction') fires when QA finds issues, before correction runs."""
+    claude.run.side_effect = [
+        _make_claude_result("v1", cost=0.15),
+        _make_claude_result("ISSUES_FOUND: fix it", cost=0.10),
+        _make_claude_result("v2", cost=0.20),
+        _make_claude_result("APPROVED", cost=0.08),
+    ]
+    calls = []
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        on_substep=lambda step: calls.append(step),
+    )
+
+    assert calls == ["qa", "correction"]
+
+
+@pytest.mark.asyncio
+async def test_on_substep_not_called_when_none(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """No error when on_substep is None (default)."""
+    claude.run.side_effect = [
+        _make_claude_result("output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    assert result.output == "output"  # just confirm it works without callback
+
+
+# ---------------------------------------------------------------------------
+# skip_to_correction (resume mid-QA-cycle)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skip_to_correction_loads_existing_output_and_runs_correction(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When skip_to_correction=True, action+QA are skipped and correction runs."""
+    # doc_store already has the action output and QA report from prior run
+    doc_store.read = MagicMock(side_effect=lambda name: {
+        "out.md": "prior action output",
+        "qa_reports/out.md": "ISSUES_FOUND: fix the bug",
+    }[name])
+    doc_store.exists = MagicMock(return_value=True)
+
+    claude.run.side_effect = [
+        _make_claude_result("corrected output", cost=0.20),  # correction
+        _make_claude_result("APPROVED", cost=0.08),           # re-review
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        skip_to_correction=True,
+    )
+
+    assert result.output == "corrected output"
+    assert result.corrected is True
+    assert result.initial_qa_report == "ISSUES_FOUND: fix the bug"
+    assert claude.run.call_count == 2  # correction + re-review only
+
+
+@pytest.mark.asyncio
+async def test_skip_to_correction_no_issues_returns_existing(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When skip_to_correction=True but QA report has no issues, no correction runs."""
+    doc_store.read = MagicMock(side_effect=lambda name: {
+        "out.md": "prior action output",
+        "qa_reports/out.md": "APPROVED: all good",
+    }[name])
+    doc_store.exists = MagicMock(return_value=True)
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        skip_to_correction=True,
+    )
+
+    assert result.output == "prior action output"
+    assert result.corrected is False
+    assert claude.run.call_count == 0

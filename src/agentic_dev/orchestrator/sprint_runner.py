@@ -23,28 +23,28 @@ from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import PipelineState, SprintState, SprintStatus
 
-# Maps each SprintStatus to its "phase group" index for skip comparison.
-# Sub-steps within the same QA cycle (dev -> qa -> correction) share a group
-# because the QA cycle is atomic — if any part fails, the whole cycle re-runs.
-_STEP_GROUP: dict[SprintStatus, int] = {
+# Maps each SprintStatus to a unique ordinal for fine-grained skip comparison.
+# Each sub-step (dev, qa, correction) gets its own position so that resume
+# after a crash can skip to the exact point where work was interrupted.
+_STEP_ORDER: dict[SprintStatus, int] = {
     SprintStatus.PENDING: 0,
     SprintStatus.BACKEND_DEV: 1,
-    SprintStatus.BACKEND_QA: 1,
-    SprintStatus.BACKEND_CORRECTION: 1,
-    SprintStatus.FRONTEND_DEV: 2,
-    SprintStatus.FRONTEND_QA: 2,
-    SprintStatus.FRONTEND_CORRECTION: 2,
-    SprintStatus.INTEGRATION: 3,
-    SprintStatus.INTEGRATION_QA: 3,
-    SprintStatus.INTEGRATION_CORRECTION: 3,
-    SprintStatus.COMPLETE: 4,
+    SprintStatus.BACKEND_QA: 2,
+    SprintStatus.BACKEND_CORRECTION: 3,
+    SprintStatus.FRONTEND_DEV: 4,
+    SprintStatus.FRONTEND_QA: 5,
+    SprintStatus.FRONTEND_CORRECTION: 6,
+    SprintStatus.INTEGRATION: 7,
+    SprintStatus.INTEGRATION_QA: 8,
+    SprintStatus.INTEGRATION_CORRECTION: 9,
+    SprintStatus.COMPLETE: 10,
     SprintStatus.FAILED: 0,
 }
 
 
 def _should_skip(current_status: SprintStatus, step: SprintStatus) -> bool:
     """Return True if ``step`` was already completed based on ``current_status``."""
-    return _STEP_GROUP[current_status] > _STEP_GROUP[step]
+    return _STEP_ORDER[current_status] > _STEP_ORDER[step]
 
 _event_log = get_event_logger("sprint_runner")
 
@@ -180,6 +180,17 @@ class SprintRunner:
         """
         current_status = sprint_state.status if sprint_state else SprintStatus.PENDING
 
+        def _make_on_substep(qa_status: SprintStatus, correction_status: SprintStatus):
+            """Create an on_substep callback that checkpoints sprint sub-steps."""
+            def callback(substep: str) -> None:
+                if sprint_state is None:
+                    return
+                status_map = {"qa": qa_status, "correction": correction_status}
+                if substep in status_map:
+                    sprint_state.status = status_map[substep]
+                    self._save_state()
+            return callback
+
         backend_spec = self._doc_store.read("backend_spec") if self._has_backend else ""
         frontend_spec = self._doc_store.read("frontend_spec") if self._has_frontend else ""
         api_contract = self._doc_store.read("api_contract") if self._has_backend else ""
@@ -212,7 +223,8 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
                 session_id=sprint_state.backend_session_id if sprint_state else None,
-
+                on_substep=_make_on_substep(SprintStatus.BACKEND_QA, SprintStatus.BACKEND_CORRECTION),
+                skip_to_correction=_should_skip(current_status, SprintStatus.BACKEND_QA),
             )
             partial_cost[0] += backend_result.total_cost
 
@@ -248,7 +260,8 @@ class SprintRunner:
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
                 session_id=sprint_state.frontend_session_id if sprint_state else None,
-
+                on_substep=_make_on_substep(SprintStatus.FRONTEND_QA, SprintStatus.FRONTEND_CORRECTION),
+                skip_to_correction=_should_skip(current_status, SprintStatus.FRONTEND_QA),
             )
             partial_cost[0] += frontend_result.total_cost
 
@@ -284,7 +297,8 @@ class SprintRunner:
                 prompt_renderer=self._prompt_renderer,
                 qa_output_key="integration_guide",
                 session_id=sprint_state.integration_session_id if sprint_state else None,
-
+                on_substep=_make_on_substep(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION_CORRECTION),
+                skip_to_correction=_should_skip(current_status, SprintStatus.INTEGRATION_QA),
             )
             partial_cost[0] += integration_result.total_cost
 
