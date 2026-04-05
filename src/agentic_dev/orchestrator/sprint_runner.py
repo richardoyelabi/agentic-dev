@@ -201,7 +201,7 @@ class SprintRunner:
 
         # Backend QA cycle
         backend_result = None
-        if self._has_backend and not _should_skip(current_status, SprintStatus.BACKEND_DEV):
+        if self._has_backend and not _should_skip(current_status, SprintStatus.BACKEND_CORRECTION):
             if sprint_state is not None:
                 sprint_state.status = SprintStatus.BACKEND_DEV
                 self._save_state()
@@ -238,7 +238,7 @@ class SprintRunner:
 
         # Frontend QA cycle
         frontend_result = None
-        if self._has_frontend and not _should_skip(current_status, SprintStatus.FRONTEND_DEV):
+        if self._has_frontend and not _should_skip(current_status, SprintStatus.FRONTEND_CORRECTION):
             if sprint_state is not None:
                 sprint_state.status = SprintStatus.FRONTEND_DEV
                 self._save_state()
@@ -273,7 +273,7 @@ class SprintRunner:
 
         # Optional integration QA cycle
         integration_result = None
-        if needs_integration and not _should_skip(current_status, SprintStatus.INTEGRATION):
+        if needs_integration and not _should_skip(current_status, SprintStatus.INTEGRATION_CORRECTION):
             if sprint_state is not None:
                 sprint_state.status = SprintStatus.INTEGRATION
                 self._save_state()
