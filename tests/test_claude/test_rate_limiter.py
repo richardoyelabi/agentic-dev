@@ -116,13 +116,16 @@ class TestParseWaitSeconds:
         assert result == 60.0
 
     def test_parse_resets_at_future_time(self):
-        now = datetime.now(timezone.utc)
-        future = now + timedelta(minutes=5)
+        fixed_now = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        future = fixed_now + timedelta(minutes=5)
         time_str = future.strftime("%H:%M")
         stderr = f"Rate limit resets at {time_str} UTC"
-        result = RateLimitDetector.parse_wait_seconds(stderr)
+        with patch("agentic_dev.claude.rate_limiter.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = RateLimitDetector.parse_wait_seconds(stderr)
         assert result is not None
-        assert 250.0 < result < 350.0  # ~5 minutes, with tolerance
+        assert result == 300.0
 
     def test_parse_no_timing_hint(self):
         result = RateLimitDetector.parse_wait_seconds("rate limit exceeded")
