@@ -1,0 +1,18 @@
+name: feature_extractor_qa
+description: "Validates that extracted features match the Feature Analyst output format"
+team: onboarding
+claude:
+  model: sonnet
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep]
+  max_turns: 20
+  max_budget_usd: 1.50
+prompt_template: feature_extractor_qa.md.j2
+input_documents: []
+output_documents: []
+qa_agent: null
+constraints:
+  - "Verify [EXISTING-F001] ID format on all features"
+  - "Verify each feature has Description, Acceptance Criteria, Dependencies, Priority"
+  - "Verify acceptance criteria are specific and testable"
+  - "Verify no duplicate IDs"

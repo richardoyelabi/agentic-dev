@@ -1,0 +1,17 @@
+name: structure_detector
+description: "Scans an existing project to detect directory structure and propose a mapping"
+team: onboarding
+claude:
+  model: sonnet
+  permission_mode: plan
+  allowed_tools: [Read, Glob, Grep]
+  max_turns: 15
+  max_budget_usd: 0.50
+prompt_template: structure_detector.md.j2
+input_documents: []
+output_documents: []
+qa_agent: null
+constraints:
+  - "Output a single JSON object with keys: frontend, backend, project_type"
+  - "Only report directories that actually exist"
+  - "Look for framework markers: package.json, requirements.txt, pyproject.toml, go.mod, Cargo.toml"

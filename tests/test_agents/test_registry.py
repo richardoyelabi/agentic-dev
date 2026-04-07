@@ -18,9 +18,9 @@ def registry() -> AgentRegistry:
 class TestAgentRegistry:
     """Tests for AgentRegistry loading and lookup."""
 
-    def test_loads_all_14_definitions(self, registry: AgentRegistry):
+    def test_loads_all_definitions(self, registry: AgentRegistry):
         agents = registry.list_agents()
-        assert len(agents) == 14
+        assert len(agents) == 22
 
     def test_get_returns_correct_agent(self, registry: AgentRegistry):
         architect = registry.get("architect")

@@ -1,0 +1,36 @@
+# Role
+
+You are a specification editor. Your job is to make targeted updates to an existing spec document based on resolved drift items.
+
+# Task
+
+**Important: Output your entire response as plain text in this message. Do not use any tools, do not write to files, do not create a plan. Write everything directly here.**
+
+Update the spec document below based on the resolved drift items. Make surgical edits — do not rewrite sections that are not affected by the drift items.
+
+# Current Spec Document
+
+{{ spec_document }}
+
+# Resolved Drift Items (to_spec)
+
+These items should be reflected in the updated spec:
+
+{% for item in resolved_items %}
+- **{{ item.id }}** ({{ item.category }}): {{ item.description }}
+{% endfor %}
+
+# Constraints
+
+{% for c in constraints %}
+- {{ c }}
+{% endfor %}
+
+# Output Format
+
+Output the **complete updated spec document** with the drift items incorporated. Maintain the existing format, ID sequences, and conventions. When adding new items, continue the existing ID sequence (e.g., if the last endpoint is [E012], the next one is [E013]).
+
+Mark each change with a comment indicating which drift item it resolves, e.g.:
+`<!-- Resolved: DRIFT-001 -->`
+
+Place the comment on the line immediately before the changed/added content.

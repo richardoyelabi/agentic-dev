@@ -223,6 +223,39 @@ AGENT_TEMPLATES = {
         "sprint_scope": "# Sprint Scope",
         "integration_guide": "# Integration Guide\n## Service: Stripe",
     },
+    "structure_detector.md.j2": {},
+    "spec_reverse_engineer.md.j2": {
+        "target_spec_type": "frontend_spec",
+        "existing_specs": "",
+        "constraints": ["Follow ID conventions"],
+        "correction_mode": False,
+    },
+    "spec_reverse_engineer_qa.md.j2": {
+        "spec_output": "# Frontend Spec\n## Tech Stack\n- Framework: React 18",
+        "target_spec_type": "frontend_spec",
+    },
+    "feature_extractor.md.j2": {
+        "specs": "# Frontend Spec\n## Pages\n### [P001] Home",
+        "constraints": ["Use EXISTING-F prefix"],
+        "correction_mode": False,
+    },
+    "feature_extractor_qa.md.j2": {
+        "features_output": "# Features Request\n## Feature: [EXISTING-F001] Auth",
+    },
+    "code_analyzer.md.j2": {
+        "analysis_scope": "backend",
+    },
+    "drift_detector.md.j2": {
+        "code_snapshots": "# Code Snapshot: Backend\n## Endpoints\n- GET /api/users",
+        "spec_documents": "# API Contract\n## Endpoints\n### [E001] GET /api/users",
+        "figma_analysis": "",
+        "sync_ignores": [],
+    },
+    "spec_updater.md.j2": {
+        "spec_document": "# API Contract\n## Endpoints\n### [E001] GET /api/users",
+        "resolved_items": [{"id": "DRIFT-001", "category": "in_code_not_spec", "description": "POST /api/webhooks"}],
+        "constraints": ["Maintain ID sequences"],
+    },
     "uat.md.j2": {
         "features": "# Features Request",
         "frontend_spec": "# Frontend Spec",
