@@ -17,9 +17,17 @@ from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
 from agentic_dev.documents.store import DocumentStore
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import (
+    DriftDetectionEvent,
+    SyncResolutionEvent,
+    SyncStartEvent,
+)
 from agentic_dev.orchestrator.agent_bridge import to_run_config
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.models import DriftItem, SyncReport
+
+_event_log = get_event_logger("sync")
 
 
 @dataclass
@@ -58,6 +66,11 @@ async def run_sync(
     Returns:
         SyncReport with all detected drift items.
     """
+    emit(_event_log, SyncStartEvent(
+        scope=scope,
+        message=f"Sync started: scope={scope}",
+    ))
+
     # Step 1: Run code_analyzer agents in parallel
     snapshots = await _analyze_code(
         claude=claude,
@@ -81,6 +94,12 @@ async def run_sync(
         spec_documents=spec_documents,
         sync_ignores=sync_ignores or [],
     )
+
+    emit(_event_log, DriftDetectionEvent(
+        drift_items_found=len(drift_report.items),
+        summary=drift_report.summary,
+        message=f"Drift detection: {len(drift_report.items)} items found",
+    ))
 
     return drift_report
 
@@ -144,6 +163,18 @@ async def apply_sync_resolutions(
 
     result.items_ignored = len(ignore_items)
     result.items_deferred = len(defer_items)
+
+    emit(_event_log, SyncResolutionEvent(
+        specs_updated=result.specs_updated,
+        code_changes_queued=result.code_changes_queued,
+        items_ignored=result.items_ignored,
+        items_deferred=result.items_deferred,
+        total_cost=result.total_cost,
+        message=(
+            f"Sync resolutions applied: {result.specs_updated} specs updated, "
+            f"{result.code_changes_queued} code changes queued"
+        ),
+    ))
 
     return result
 

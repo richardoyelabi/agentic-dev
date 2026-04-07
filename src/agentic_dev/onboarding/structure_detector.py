@@ -12,7 +12,11 @@ from pathlib import Path
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
 from agentic_dev.exceptions import AgenticDevError
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import StructureDetectionEvent
 from agentic_dev.orchestrator.agent_bridge import AgentRunConfig
+
+_event_log = get_event_logger("structure_detector")
 
 
 DETECTOR_PROMPT = """\
@@ -74,7 +78,22 @@ async def detect_structure(
         working_dir=project_path,
     )
 
-    return _parse_detection_result(result.text)
+    directory_map = _parse_detection_result(result.text)
+
+    project_type = "fullstack"
+    if directory_map.frontend and not directory_map.backend:
+        project_type = "frontend_only"
+    elif directory_map.backend and not directory_map.frontend:
+        project_type = "backend_only"
+
+    emit(_event_log, StructureDetectionEvent(
+        frontend=directory_map.frontend,
+        backend=directory_map.backend,
+        project_type=project_type,
+        message=f"Structure detected: frontend={directory_map.frontend}, backend={directory_map.backend}",
+    ))
+
+    return directory_map
 
 
 def _parse_detection_result(text: str) -> DirectoryMap:

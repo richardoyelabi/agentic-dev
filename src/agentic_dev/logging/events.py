@@ -323,3 +323,96 @@ class CheckpointDecisionEvent(LogEvent):
     phase: str
     should_pause: bool
     config_snapshot: dict[str, object]
+
+
+# ---------------------------------------------------------------------------
+# Adoption events
+# ---------------------------------------------------------------------------
+
+
+class AdoptionStartEvent(LogEvent):
+    """Emitted when project adoption begins."""
+
+    event_type: str = "adoption_start"
+    project_path: str
+    project_type: str
+
+
+class SpecReverseEngineerEvent(LogEvent):
+    """Emitted when a spec is reverse-engineered from code."""
+
+    event_type: str = "spec_reverse_engineer"
+    spec_type: str
+    total_cost: float
+    corrected: bool
+
+
+class AdoptionCompleteEvent(LogEvent):
+    """Emitted when project adoption completes successfully."""
+
+    event_type: str = "adoption_complete"
+    total_cost_usd: float
+    documents_produced: list[str]
+    features_count: int
+    endpoints_count: int
+
+
+class AdoptionFailedEvent(LogEvent):
+    """Emitted when project adoption fails."""
+
+    event_type: str = "adoption_failed"
+    error: str
+    failed_at_step: str
+
+
+# ---------------------------------------------------------------------------
+# Sync events
+# ---------------------------------------------------------------------------
+
+
+class SyncStartEvent(LogEvent):
+    """Emitted when sync begins."""
+
+    event_type: str = "sync_start"
+    scope: str
+
+
+class DriftDetectionEvent(LogEvent):
+    """Emitted when drift detection completes."""
+
+    event_type: str = "drift_detection"
+    drift_items_found: int
+    summary: str
+
+
+class SyncResolutionEvent(LogEvent):
+    """Emitted when sync resolutions are applied."""
+
+    event_type: str = "sync_resolution"
+    specs_updated: int
+    code_changes_queued: int
+    items_ignored: int
+    items_deferred: int
+    total_cost: float
+
+
+class SyncCompleteEvent(LogEvent):
+    """Emitted when sync completes."""
+
+    event_type: str = "sync_complete"
+    total_cost_usd: float
+    drift_items: int
+
+
+# ---------------------------------------------------------------------------
+# Structure detection events
+# ---------------------------------------------------------------------------
+
+
+class StructureDetectionEvent(LogEvent):
+    """Emitted when structure detection completes."""
+
+    event_type: str = "structure_detection"
+    frontend: str | None
+    backend: str | None
+    project_type: str

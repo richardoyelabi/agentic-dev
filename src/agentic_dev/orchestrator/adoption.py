@@ -14,9 +14,17 @@ from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
 from agentic_dev.documents.store import DocumentStore
+from agentic_dev.logging import get_event_logger, emit
+from agentic_dev.logging.events import (
+    AdoptionCompleteEvent,
+    AdoptionStartEvent,
+    SpecReverseEngineerEvent,
+)
 from agentic_dev.orchestrator.qa_cycle import QACycleResult, run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.models import ProjectType
+
+_event_log = get_event_logger("adoption")
 
 
 @dataclass
@@ -59,6 +67,12 @@ async def run_adoption(
     """
     result = AdoptionResult()
 
+    emit(_event_log, AdoptionStartEvent(
+        project_path=str(project_dir),
+        project_type=project_type.value,
+        message=f"Adoption starting: {project_type.value} project at {project_dir}",
+    ))
+
     # Step 1: Reverse-engineer frontend and backend specs in parallel
     tasks = []
     if project_type in (ProjectType.FULLSTACK, ProjectType.FRONTEND_ONLY):
@@ -90,6 +104,12 @@ async def run_adoption(
     for qa_result, doc_name in spec_results:
         result.total_cost += qa_result.total_cost
         result.documents_produced.append(doc_name)
+        emit(_event_log, SpecReverseEngineerEvent(
+            spec_type=doc_name,
+            total_cost=qa_result.total_cost,
+            corrected=qa_result.corrected,
+            message=f"Reverse-engineered {doc_name} (${qa_result.total_cost:.4f})",
+        ))
 
     # Step 2: Reverse-engineer API contract (needs generated specs as context)
     if project_type in (ProjectType.FULLSTACK, ProjectType.BACKEND_ONLY):
@@ -110,6 +130,12 @@ async def run_adoption(
         )
         result.total_cost += api_result.total_cost
         result.documents_produced.append("api_contract")
+        emit(_event_log, SpecReverseEngineerEvent(
+            spec_type="api_contract",
+            total_cost=api_result.total_cost,
+            corrected=api_result.corrected,
+            message=f"Reverse-engineered api_contract (${api_result.total_cost:.4f})",
+        ))
 
     # Step 3: Extract features from all generated specs
     features_result = await _extract_features(
@@ -138,6 +164,17 @@ async def run_adoption(
     # Save design analyses if provided
     if design_analyses:
         doc_store.write("design_analyses", design_analyses)
+
+    emit(_event_log, AdoptionCompleteEvent(
+        total_cost_usd=result.total_cost,
+        documents_produced=result.documents_produced,
+        features_count=result.features_count,
+        endpoints_count=result.endpoints_count,
+        message=(
+            f"Adoption complete: {len(result.documents_produced)} docs, "
+            f"{result.features_count} features, ${result.total_cost:.4f}"
+        ),
+    ))
 
     return result
 
