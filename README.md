@@ -4,13 +4,14 @@ Autonomous software development agency powered by Claude Code CLI. Takes a produ
 
 ## Features
 
-- **14 specialized agents** organized into 5 teams (Design & Architecture, Frontend, Backend, Integration, QA)
+- **22 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
 - **Independent QA review** at every stage with one-cycle correction
 - **Feature-based sprints** break large projects into manageable chunks
 - **Configurable checkpoints** for human review (default: pause after design)
 - **Full autonomy mode** for end-to-end unattended execution
 - **Update support** for both targeted changes and full re-specifications
-- **Existing project onboarding** from codebases and Figma designs
+- **Adopt existing projects** with full spec reverse-engineering from codebases and Figma designs
+- **Continuous sync** between code, specs, and Figma with flexible source-of-truth resolution
 
 ## Installation
 
@@ -130,11 +131,13 @@ Show cost breakdown by agent and sprint.
 
 ## Architecture
 
-The agency consists of 5 teams with 14 agents:
+The agency consists of 7 teams with 22 agents:
 
 | Team | Agents | Purpose |
 |---|---|---|
 | Design & Architecture | Input Processor, Feature Analyst + QA, Architect + QA, Sprint Planner + QA | Requirements analysis, specifications, sprint planning |
+| Adoption | Structure Detector, Spec Reverse Engineer + QA, Feature Extractor + QA | Reverse-engineer specs from existing codebases |
+| Sync | Code Analyzer, Drift Detector, Spec Updater | Detect and resolve drift between code and specs |
 | Frontend | Frontend Developer + QA | UI implementation per sprint |
 | Backend | Backend Developer + QA | API and business logic per sprint |
 | Integration | Integration Agent + QA | Third-party service connections |
@@ -143,7 +146,10 @@ The agency consists of 5 teams with 14 agents:
 ### Pipeline Flow
 
 ```
-User Input → Design Phase → [CHECKPOINT] → Sprint 1..N → UAT → Done
+New project:    User Input → Design Phase → [CHECKPOINT] → Sprint 1..N → UAT → Done
+Adopt project:  Existing Code → Spec Generation → [ADOPTED] → (update/sync as needed)
+Adopt + extend: Existing Code → Spec Generation → Design Phase → Sprint 1..N → UAT → Done
+Sync:           Code + Specs → Drift Detection → User Resolution → Spec/Code Updates
 ```
 
 Each sprint: Backend → Frontend → Integration (if needed)

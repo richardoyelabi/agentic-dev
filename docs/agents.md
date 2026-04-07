@@ -8,8 +8,8 @@ All agents are defined as YAML files in `src/agentic_dev/agents/definitions/`.
 
 | Model | Agents | Rationale |
 |---|---|---|
-| **opus** | Feature Analyst, Architect, all QA agents, UAT | Deep reasoning, critical review, multi-document synthesis |
-| **sonnet** | Input Processor, Sprint Planner, Frontend/Backend Dev, Integration | Structured transformation, code generation, cost-effective |
+| **opus** | Feature Analyst, Architect, all QA agents, UAT, Spec Reverse Engineer, Feature Extractor, Drift Detector | Deep reasoning, critical review, multi-document synthesis |
+| **sonnet** | Input Processor, Sprint Planner, Frontend/Backend Dev, Integration, Structure Detector, Code Analyzer, Spec Updater, Spec Reverse Engineer QA, Feature Extractor QA | Structured transformation, code generation, validation, cost-effective |
 
 ### Design & Architecture Team
 
@@ -37,6 +37,22 @@ All agents are defined as YAML files in `src/agentic_dev/agents/definitions/`.
 | Agent | QA Counterpart | Input | Output |
 |---|---|---|---|
 | Integration Agent | Integration QA | API Contract, Sprint Plan | Integration code + guide |
+
+### Adoption Team
+
+| Agent | QA Counterpart | Input | Output |
+|---|---|---|---|
+| Structure Detector | *(none)* | Project directory | Directory mapping (JSON) |
+| Spec Reverse Engineer | Spec Reverse Engineer QA | Existing code + target spec type | Frontend Spec, Backend Spec, or API Contract |
+| Feature Extractor | Feature Extractor QA | All generated specs | Features Request with `[EXISTING-F...]` IDs |
+
+### Sync Team
+
+| Agent | QA Counterpart | Input | Output |
+|---|---|---|---|
+| Code Analyzer | *(none)* | Code directory + scope | Code reality snapshot |
+| Drift Detector | *(none)* | Code snapshots + spec documents | Sync Report with `[DRIFT-nnn]` IDs |
+| Spec Updater | *(none)* | Current spec + resolved drift items | Updated spec document |
 
 ### QA Team
 

@@ -13,6 +13,8 @@
 | Integration Guide | Integration Agent | User, UAT | `integration_guide.md` |
 | QA Reports | All QA agents | Action agents | `qa_reports/<agent>_qa.md` |
 | UAT Report | UAT Agent | User | `uat_report.md` |
+| Design Analyses | Figma Analyzer | Architect, Spec Reverse Engineer | `design_analyses.md` |
+| Sync Change Request | Sync resolver | Update command (`--from-sync`) | `sync_change_request.md` |
 
 ## No-Duplication Principle
 

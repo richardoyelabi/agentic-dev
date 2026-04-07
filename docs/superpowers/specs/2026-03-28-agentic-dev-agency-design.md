@@ -1,5 +1,7 @@
 # Agentic-Dev: Autonomous Software Development Agency — Design Spec
 
+> **See also:** [Adopt & Sync Design Spec](2026-04-07-adopt-and-sync-design.md) — extends this design with `adopt` and `sync` commands for existing project onboarding and continuous synchronization (8 additional agents, 3 new pipeline phases).
+
 ## Overview
 
 A Python CLI tool (`agentic-dev`) that orchestrates Claude Code CLI sessions to function as an autonomous software development agency. Takes a product description as input and produces complete applications — fullstack (frontend + backend), frontend-only (with optional BaaS), or backend-only (API/service/library) — including CI/CD pipelines.
