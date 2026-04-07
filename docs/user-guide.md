@@ -230,6 +230,20 @@ Common causes:
 
 Resume after fixing: `agentic-dev resume my-app`
 
+### Shell Quoting
+
+URLs often contain `&`, `?`, and `#` — characters that have special meaning in the shell. If you pass them unquoted, the shell interprets them before agentic-dev sees them. For example:
+
+```bash
+# BROKEN — the & backgrounds the process; --frontend becomes a separate command
+agentic-dev adopt /path --from-figma https://figma.com/file/abc?m=auto&t=xyz --frontend client
+
+# FIXED — quote the URL and any multi-word values
+agentic-dev adopt /path --from-figma "https://figma.com/file/abc?m=auto&t=xyz" --frontend client
+```
+
+**Rule of thumb:** always wrap URLs and multi-word values in double quotes. This applies to any flag that takes a string value, including `--from-figma`, `--from-codebase`, `--extend`, `--change-request`, and `--feedback`.
+
 ### Agent Output Issues
 
 Check logs: `agentic-dev logs my-app --agent <agent-name>`

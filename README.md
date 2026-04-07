@@ -41,6 +41,8 @@ agentic-dev resume my-saas-app --feedback "Use Supabase instead of raw PostgreSQ
 
 ## CLI Reference
 
+> **Tip:** Always quote URLs and multi-word option values to prevent shell interpretation (e.g., `--from-figma "https://..."`, `--extend "add dark mode"`). See the [User Guide troubleshooting section](docs/user-guide.md#shell-quoting) for details.
+
 ### `agentic-dev new <app-name>`
 
 Create a new project and start the development pipeline.
