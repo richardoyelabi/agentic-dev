@@ -924,3 +924,151 @@ def adopt(
     except (AgenticDevError, RuntimeError) as exc:
         _display_error(exc)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def sync(
+    app_name: str | None = typer.Argument(None, help="Name of the application to sync"),
+    from_source: str | None = typer.Option(
+        None, "--from", help="Source of truth: code, specs, or figma"
+    ),
+    scope: str | None = typer.Option(
+        None, help="Sync scope: api, frontend, or backend"
+    ),
+    check: bool = typer.Option(False, "--check", help="Check-only mode: report drift without changes"),
+    path: str | None = typer.Option(None, help="Directory containing the project"),
+) -> None:
+    """Detect drift between code, specs, and Figma designs, and resolve interactively."""
+    try:
+        from agentic_dev.config import (  # noqa: WPS433
+            load_project_config,
+            save_project_config,
+        )
+
+        workspace_mgr = _get_workspace_manager(path)
+        project_dir = workspace_mgr.get_project_dir(app_name or "")
+
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+
+        terminal_phases = (PipelinePhase.COMPLETE, PipelinePhase.ADOPTED)
+        if state.phase not in terminal_phases:
+            console.print(
+                "[bold red]Project must be in COMPLETE or ADOPTED state to sync. "
+                f"Current phase: {state.phase}[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+        config = load_project_config(project_dir)
+        sync_scope = scope or "all"
+
+        console.print(f"[cyan]Running drift detection (scope: {sync_scope})...[/cyan]")
+
+        from agentic_dev.agents.registry import AgentRegistry  # noqa: WPS433
+        from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+        from agentic_dev.config import AGENT_DEFINITIONS_DIR, PROMPT_TEMPLATES_DIR  # noqa: WPS433
+        from agentic_dev.orchestrator.sync import apply_sync_resolutions, run_sync  # noqa: WPS433
+        from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
+
+        log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
+        claude = ClaudeRunner(log_dir=log_dir)
+        registry = AgentRegistry(definitions_dir=AGENT_DEFINITIONS_DIR)
+        doc_store = DocumentStore(project_dir)
+        prompt_renderer = PromptRenderer(templates_dir=PROMPT_TEMPLATES_DIR)
+
+        report = asyncio.run(run_sync(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            project_dir=project_dir,
+            directory_map=config.directory_map,
+            scope=sync_scope,
+            sync_ignores=config.sync_ignores,
+        ))
+
+        if not report.items:
+            console.print("[bold green]No drift detected. Code and specs are in sync.[/bold green]")
+            state.last_sync_at = datetime.now(timezone.utc)
+            state_mgr.save(state)
+            return
+
+        # Display report
+        console.print(f"\n[bold]Sync Report:[/bold] {report.summary}\n")
+        for item in report.items:
+            console.print(f"  {item.id} [{item.scope}] ({item.category}): {item.description}")
+
+        if check:
+            console.print(f"\n[dim]{len(report.items)} drift item(s) found. Run without --check to resolve.[/dim]")
+            return
+
+        # Resolve items
+        if from_source == "code":
+            for item in report.items:
+                item.resolution = "to_spec"
+            console.print("\n[cyan]Auto-resolving all items as 'to_spec' (code is truth)[/cyan]")
+        elif from_source == "specs":
+            for item in report.items:
+                item.resolution = "to_code"
+            console.print("\n[cyan]Auto-resolving all items as 'to_code' (specs are truth)[/cyan]")
+        elif from_source == "figma":
+            for item in report.items:
+                if item.scope == "figma":
+                    item.resolution = "to_spec"
+            unresolved = [i for i in report.items if i.resolution is None]
+            if unresolved:
+                _resolve_items_interactively(unresolved)
+        else:
+            _resolve_items_interactively(report.items)
+
+        # Apply resolutions
+        apply_result = asyncio.run(apply_sync_resolutions(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            project_dir=project_dir,
+            report=report,
+        ))
+
+        # Save ignore items to config
+        new_ignores = [i.id for i in report.items if i.resolution == "ignore"]
+        if new_ignores:
+            config.sync_ignores.extend(new_ignores)
+            save_project_config(project_dir, config)
+
+        state.last_sync_at = datetime.now(timezone.utc)
+        state.total_cost_usd += apply_result.total_cost
+        state_mgr.save(state)
+
+        console.print(
+            f"\n[bold green]Sync complete![/bold green]\n"
+            f"  Specs updated: {apply_result.specs_updated}\n"
+            f"  Code changes queued: {apply_result.code_changes_queued}\n"
+            f"  Ignored: {apply_result.items_ignored}\n"
+            f"  Deferred: {apply_result.items_deferred}"
+        )
+
+        if apply_result.code_changes_queued > 0:
+            console.print(
+                f"\n[yellow]{apply_result.code_changes_queued} code change(s) queued. "
+                f"Run 'agentic-dev update {app_name} --from-sync' to apply them.[/yellow]"
+            )
+
+    except (AgenticDevError, RuntimeError) as exc:
+        _display_error(exc)
+        raise typer.Exit(code=1)
+
+
+def _resolve_items_interactively(items: list) -> None:
+    """Prompt the user to resolve each drift item."""
+    for item in items:
+        if item.resolution is not None:
+            continue
+        console.print(f"\n  [bold]{item.id}[/bold] [{item.scope}] {item.description}")
+        choice = Prompt.ask(
+            "  Resolution",
+            choices=["to_spec", "to_code", "ignore", "defer"],
+            default="to_spec",
+        )
+        item.resolution = choice
