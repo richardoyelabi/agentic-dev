@@ -34,15 +34,30 @@ class TestValidateTransition:
         with pytest.raises(InvalidTransitionError):
             validate_transition(PipelinePhase.IDLE, PipelinePhase.COMPLETE)
 
-    def test_transition_from_complete_always_invalid(self) -> None:
+    def test_complete_allows_only_defined_transitions(self) -> None:
+        allowed = {
+            PipelinePhase.INPUT_PROCESSING,
+            PipelinePhase.FEATURE_ANALYSIS,
+            PipelinePhase.ARCHITECTURE,
+            PipelinePhase.SYNCING,
+        }
         for phase in PipelinePhase:
-            with pytest.raises(InvalidTransitionError):
+            if phase in allowed:
                 validate_transition(PipelinePhase.COMPLETE, phase)
+            else:
+                with pytest.raises(InvalidTransitionError):
+                    validate_transition(PipelinePhase.COMPLETE, phase)
 
-    def test_transition_from_failed_always_invalid(self) -> None:
+    def test_failed_allows_resume_transitions(self) -> None:
+        from agentic_dev.state.transitions import VALID_TRANSITIONS
+        allowed = set(VALID_TRANSITIONS[PipelinePhase.FAILED])
+        assert len(allowed) > 0
         for phase in PipelinePhase:
-            with pytest.raises(InvalidTransitionError):
+            if phase in allowed:
                 validate_transition(PipelinePhase.FAILED, phase)
+            else:
+                with pytest.raises(InvalidTransitionError):
+                    validate_transition(PipelinePhase.FAILED, phase)
 
 
 class TestAdvancePhase:
@@ -69,9 +84,9 @@ class TestResetForUpdate:
             phase=PipelinePhase.COMPLETE,
             total_cost_usd=5.0,
         )
-        result = reset_for_update(state, PipelinePhase.FEATURE_ANALYSIS, "update")
+        result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
 
-        assert result.phase == PipelinePhase.FEATURE_ANALYSIS
+        assert result.phase == PipelinePhase.INPUT_PROCESSING
         assert result.mode == "update"
         assert result.sprints == []
         assert result.agent_runs == []
@@ -132,15 +147,14 @@ class TestResumeFromFailure:
         assert resumed.error is None
         assert resumed.failed_at_phase is None
 
-    def test_resumes_to_idle_when_no_failed_at_phase(self) -> None:
+    def test_raises_when_no_failed_at_phase(self) -> None:
         state = PipelineState(
             project_name="test",
             phase=PipelinePhase.FAILED,
             error="something broke",
         )
-        resumed = resume_from_failure(state)
-
-        assert resumed.phase == PipelinePhase.IDLE
+        with pytest.raises(InvalidTransitionError):
+            resume_from_failure(state)
 
     def test_raises_when_not_in_failed_state(self) -> None:
         state = PipelineState(

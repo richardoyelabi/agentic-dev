@@ -10,7 +10,7 @@ from agentic_dev.state.models import PipelinePhase, PipelineState, SprintStatus
 _event_log = get_event_logger("transitions")
 
 VALID_TRANSITIONS: dict[PipelinePhase, list[PipelinePhase]] = {
-    PipelinePhase.IDLE: [PipelinePhase.INPUT_PROCESSING],
+    PipelinePhase.IDLE: [PipelinePhase.INPUT_PROCESSING, PipelinePhase.ADOPTING],
     PipelinePhase.INPUT_PROCESSING: [PipelinePhase.FEATURE_ANALYSIS, PipelinePhase.FAILED],
     PipelinePhase.FEATURE_ANALYSIS: [PipelinePhase.FEATURE_ANALYSIS_QA, PipelinePhase.FAILED],
     PipelinePhase.FEATURE_ANALYSIS_QA: [PipelinePhase.ARCHITECTURE, PipelinePhase.FAILED],
@@ -21,8 +21,31 @@ VALID_TRANSITIONS: dict[PipelinePhase, list[PipelinePhase]] = {
     PipelinePhase.DESIGN_CHECKPOINT: [PipelinePhase.SPRINTING, PipelinePhase.FAILED],
     PipelinePhase.SPRINTING: [PipelinePhase.UAT, PipelinePhase.FAILED],
     PipelinePhase.UAT: [PipelinePhase.COMPLETE, PipelinePhase.FAILED],
-    PipelinePhase.COMPLETE: [],
-    PipelinePhase.FAILED: [],
+    PipelinePhase.COMPLETE: [
+        PipelinePhase.INPUT_PROCESSING,
+        PipelinePhase.FEATURE_ANALYSIS,
+        PipelinePhase.ARCHITECTURE,
+        PipelinePhase.SYNCING,
+    ],
+    PipelinePhase.FAILED: [
+        PipelinePhase.INPUT_PROCESSING,
+        PipelinePhase.FEATURE_ANALYSIS,
+        PipelinePhase.ARCHITECTURE,
+        PipelinePhase.SPRINT_PLANNING,
+        PipelinePhase.DESIGN_CHECKPOINT,
+        PipelinePhase.SPRINTING,
+        PipelinePhase.UAT,
+        PipelinePhase.ADOPTING,
+        PipelinePhase.SYNCING,
+    ],
+    PipelinePhase.ADOPTING: [PipelinePhase.ADOPTED, PipelinePhase.INPUT_PROCESSING, PipelinePhase.FAILED],
+    PipelinePhase.ADOPTED: [
+        PipelinePhase.INPUT_PROCESSING,
+        PipelinePhase.FEATURE_ANALYSIS,
+        PipelinePhase.ARCHITECTURE,
+        PipelinePhase.SYNCING,
+    ],
+    PipelinePhase.SYNCING: [PipelinePhase.COMPLETE, PipelinePhase.ADOPTED, PipelinePhase.FAILED],
 }
 
 
@@ -56,16 +79,15 @@ def reset_for_update(
     restart_phase: PipelinePhase,
     mode: str,
 ) -> PipelineState:
-    """Reset a COMPLETE pipeline for an update or remediation cycle.
+    """Reset a COMPLETE or ADOPTED pipeline for an update or remediation cycle.
 
     Preserves total_cost_usd. Clears sprints, agent_runs, error.
     Sets phase to restart_phase and mode to the given mode.
     If mode is "remediate", increments remediation_cycle.
 
-    Raises InvalidTransitionError if state is not in COMPLETE phase.
+    Raises InvalidTransitionError if the transition is not valid.
     """
-    if state.phase != PipelinePhase.COMPLETE:
-        raise InvalidTransitionError(state.phase, PipelinePhase.COMPLETE)
+    validate_transition(state.phase, restart_phase)
 
     state.phase = restart_phase
     state.mode = mode  # type: ignore[assignment]
@@ -84,13 +106,20 @@ def reset_for_update(
 def resume_from_failure(state: PipelineState) -> PipelineState:
     """Reset a FAILED state back to the phase where it failed, clearing the error.
 
+    Supports resuming from any failed phase including ADOPTING and SYNCING.
+
     Raises InvalidTransitionError if state is not in FAILED phase or has no
     recorded failed_at_phase.
     """
     if state.phase != PipelinePhase.FAILED:
         raise InvalidTransitionError(state.phase, PipelinePhase.FAILED)
 
-    target_phase = state.failed_at_phase or PipelinePhase.IDLE
+    if state.failed_at_phase is None:
+        raise InvalidTransitionError(
+            state.phase, PipelinePhase.IDLE,
+        )
+    target_phase = state.failed_at_phase
+    validate_transition(state.phase, target_phase)
     state.phase = target_phase
     state.error = None
     state.failed_at_phase = None

@@ -31,6 +31,9 @@ class PipelinePhase(StrEnum):
     UAT = "UAT"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
+    ADOPTING = "ADOPTING"
+    SYNCING = "SYNCING"
+    ADOPTED = "ADOPTED"
 
 
 class SprintStatus(StrEnum):
@@ -83,7 +86,7 @@ class PipelineState(BaseModel):
     project_name: str
     project_type: ProjectType | None = None
     phase: PipelinePhase = PipelinePhase.IDLE
-    mode: Literal["new", "update", "remediate"] = "new"
+    mode: Literal["new", "update", "remediate", "adopt"] = "new"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     sprints: list[SprintState] = Field(default_factory=list)
@@ -95,6 +98,8 @@ class PipelineState(BaseModel):
     remediation_cycle: int = 0
     agent_runs: list[AgentRunRecord] = Field(default_factory=list)
     active_session_id: str | None = None
+    origin: Literal["created", "adopted"] = "created"
+    last_sync_at: datetime | None = None
 
     @property
     def has_frontend(self) -> bool:
@@ -118,3 +123,26 @@ class PipelineState(BaseModel):
         if self.project_type == ProjectType.BACKEND_ONLY:
             return ["backend_spec", "api_contract"]
         return ["frontend_spec", "backend_spec", "api_contract"]
+
+
+class DriftItem(BaseModel):
+    """A single item of drift detected between code, specs, and/or Figma designs."""
+
+    id: str
+    scope: Literal["api", "frontend", "backend", "figma"]
+    category: Literal[
+        "in_code_not_spec", "in_spec_not_code", "difference", "design_drift"
+    ]
+    description: str
+    source_file: str | None = None
+    spec_reference: str | None = None
+    resolution: Literal["to_spec", "to_code", "ignore", "defer"] | None = None
+
+
+class SyncReport(BaseModel):
+    """Structured report of drift between code, specs, and Figma designs."""
+
+    generated_at: datetime
+    scope: Literal["all", "api", "frontend", "backend"] = "all"
+    items: list[DriftItem] = Field(default_factory=list)
+    summary: str = ""

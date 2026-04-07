@@ -3,10 +3,13 @@
 import pytest
 
 from agentic_dev.state.models import (
+    DriftItem,
+    PipelinePhase,
     PipelineState,
     ProjectType,
     SprintState,
     SprintStatus,
+    SyncReport,
 )
 
 
@@ -222,3 +225,123 @@ class TestPipelineStateNewFields:
         data = {"project_name": "test"}
         state = PipelineState.model_validate(data)
         assert state.active_session_id is None
+
+
+class TestAdoptSyncStateFields:
+    """Tests for adopt/sync fields on PipelinePhase and PipelineState."""
+
+    def test_new_pipeline_phases_exist(self):
+        assert PipelinePhase.ADOPTING == "ADOPTING"
+        assert PipelinePhase.SYNCING == "SYNCING"
+        assert PipelinePhase.ADOPTED == "ADOPTED"
+
+    def test_mode_accepts_adopt(self):
+        state = PipelineState(project_name="test", mode="adopt")
+        assert state.mode == "adopt"
+
+    def test_origin_defaults_to_created(self):
+        state = PipelineState(project_name="test")
+        assert state.origin == "created"
+
+    def test_origin_set_to_adopted(self):
+        state = PipelineState(project_name="test", origin="adopted")
+        assert state.origin == "adopted"
+
+    def test_last_sync_at_defaults_to_none(self):
+        state = PipelineState(project_name="test")
+        assert state.last_sync_at is None
+
+    def test_last_sync_at_set_explicitly(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        state = PipelineState(project_name="test", last_sync_at=now)
+        assert state.last_sync_at == now
+
+    def test_backward_compat_missing_new_fields(self):
+        data = {"project_name": "test", "mode": "new"}
+        state = PipelineState.model_validate(data)
+        assert state.origin == "created"
+        assert state.last_sync_at is None
+
+    def test_adopted_phase_serializes(self):
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.ADOPTED,
+            origin="adopted",
+        )
+        data = state.model_dump()
+        assert data["phase"] == "ADOPTED"
+        assert data["origin"] == "adopted"
+        restored = PipelineState.model_validate(data)
+        assert restored.phase == PipelinePhase.ADOPTED
+
+
+class TestDriftItemAndSyncReport:
+    """Tests for DriftItem and SyncReport models."""
+
+    def test_drift_item_creation(self):
+        item = DriftItem(
+            id="DRIFT-001",
+            scope="api",
+            category="in_code_not_spec",
+            description="POST /api/webhooks found in code",
+            source_file="backend/routes/webhooks.py",
+        )
+        assert item.id == "DRIFT-001"
+        assert item.resolution is None
+
+    def test_drift_item_with_resolution(self):
+        item = DriftItem(
+            id="DRIFT-002",
+            scope="frontend",
+            category="difference",
+            description="Component mismatch",
+            resolution="to_spec",
+        )
+        assert item.resolution == "to_spec"
+
+    def test_sync_report_creation(self):
+        from datetime import datetime, timezone
+        report = SyncReport(
+            generated_at=datetime.now(timezone.utc),
+            scope="api",
+            items=[
+                DriftItem(
+                    id="DRIFT-001",
+                    scope="api",
+                    category="in_code_not_spec",
+                    description="New endpoint found",
+                ),
+            ],
+            summary="1 drift item found",
+        )
+        assert len(report.items) == 1
+        assert report.scope == "api"
+
+    def test_sync_report_defaults(self):
+        from datetime import datetime, timezone
+        report = SyncReport(generated_at=datetime.now(timezone.utc))
+        assert report.scope == "all"
+        assert report.items == []
+        assert report.summary == ""
+
+    def test_sync_report_serialization_roundtrip(self):
+        from datetime import datetime, timezone
+        report = SyncReport(
+            generated_at=datetime.now(timezone.utc),
+            items=[
+                DriftItem(
+                    id="DRIFT-001",
+                    scope="backend",
+                    category="in_spec_not_code",
+                    description="Missing endpoint",
+                    spec_reference="api_contract.md",
+                    resolution="to_code",
+                ),
+            ],
+            summary="1 item",
+        )
+        data = report.model_dump()
+        restored = SyncReport.model_validate(data)
+        assert restored.items[0].id == "DRIFT-001"
+        assert restored.items[0].resolution == "to_code"
