@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
+from agentic_dev.config import DirectoryMap
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.logging import get_event_logger, emit
@@ -75,12 +76,16 @@ class SprintRunner:
         project_type: str = "fullstack",
         state_manager: StateManager | None = None,
         pipeline_state: PipelineState | None = None,
+        directory_map: DirectoryMap | None = None,
     ) -> None:
         self._claude = claude
         self._registry = registry
         self._doc_store = doc_store
         self._prompt_renderer = prompt_renderer
         self._project_dir = project_dir
+        self._directory_map = directory_map or DirectoryMap(
+            frontend="frontend", backend="backend",
+        )
         self._has_backend = project_type in ("fullstack", "backend_only")
         self._has_frontend = project_type in ("fullstack", "frontend_only")
         self._state_manager = state_manager
@@ -219,7 +224,7 @@ class SprintRunner:
                 qa_agent=self._registry.get("backend_qa"),
                 input_docs=backend_input_docs,
                 output_doc_name=f"sprint_{sprint_number}_backend",
-                workspace=self._project_dir / "backend",
+                workspace=self._project_dir / (self._directory_map.backend or "backend"),
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
                 session_id=sprint_state.backend_session_id if sprint_state else None,
@@ -256,7 +261,7 @@ class SprintRunner:
                 qa_agent=self._registry.get("frontend_qa"),
                 input_docs=frontend_input_docs,
                 output_doc_name=f"sprint_{sprint_number}_frontend",
-                workspace=self._project_dir / "frontend",
+                workspace=self._project_dir / (self._directory_map.frontend or "frontend"),
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
                 session_id=sprint_state.frontend_session_id if sprint_state else None,

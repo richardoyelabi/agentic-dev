@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agentic_dev.agents.registry import AgentRegistry
+from agentic_dev.config import DirectoryMap
 from agentic_dev.claude.output_parser import OutputParser
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
@@ -52,6 +53,7 @@ class PipelineEngine:
         prompt_renderer: PromptRenderer,
         state_manager: StateManager,
         checkpoint_config: CheckpointConfig,
+        directory_map: DirectoryMap | None = None,
     ) -> None:
         self._project_dir = project_dir
         self._claude = claude
@@ -61,6 +63,9 @@ class PipelineEngine:
         self._state_manager = state_manager
         self._checkpoint_config = checkpoint_config
         self._output_parser = OutputParser()
+        self._directory_map = directory_map or DirectoryMap(
+            frontend="frontend", backend="backend",
+        )
 
     def _get_sprint_runner(
         self, project_type: str = "fullstack", state: PipelineState | None = None,
@@ -75,6 +80,7 @@ class PipelineEngine:
             project_type=project_type,
             state_manager=self._state_manager,
             pipeline_state=state,
+            directory_map=self._directory_map,
         )
 
     async def run(self) -> None:
@@ -87,7 +93,9 @@ class PipelineEngine:
         state = self._state_manager.load()
         shutdown_event = get_shutdown_event()
 
-        while state.phase not in (PipelinePhase.COMPLETE, PipelinePhase.FAILED):
+        while state.phase not in (
+            PipelinePhase.COMPLETE, PipelinePhase.FAILED, PipelinePhase.ADOPTED,
+        ):
             if shutdown_event.is_set():
                 self._state_manager.save(state)
                 raise GracefulShutdown(phase=state.phase)
@@ -150,10 +158,12 @@ class PipelineEngine:
         state.project_type = self._parse_project_type(output)
 
         # Create code directories based on detected project type
+        frontend_name = self._directory_map.frontend or "frontend"
+        backend_name = self._directory_map.backend or "backend"
         if state.has_frontend:
-            (self._project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+            (self._project_dir / frontend_name).mkdir(parents=True, exist_ok=True)
         if state.has_backend:
-            (self._project_dir / "backend").mkdir(parents=True, exist_ok=True)
+            (self._project_dir / backend_name).mkdir(parents=True, exist_ok=True)
 
         return advance_phase(state, PipelinePhase.FEATURE_ANALYSIS)
 
@@ -300,8 +310,11 @@ class PipelineEngine:
         """Initialize git repos and generate CLAUDE.md for code directories."""
         project_name = state.project_name
 
+        frontend_name = self._directory_map.frontend or "frontend"
+        backend_name = self._directory_map.backend or "backend"
+
         if state.has_frontend:
-            frontend_dir = self._project_dir / "frontend"
+            frontend_dir = self._project_dir / frontend_name
             tech_stack = self._read_tech_stack("frontend_spec")
             content = generate_frontend_claude_md(project_name, tech_stack)
             write_claude_md(frontend_dir, content)
@@ -309,7 +322,7 @@ class PipelineEngine:
             await commit(frontend_dir, "Initial commit: project scaffold and CLAUDE.md")
 
         if state.has_backend:
-            backend_dir = self._project_dir / "backend"
+            backend_dir = self._project_dir / backend_name
             tech_stack = self._read_tech_stack("backend_spec")
             content = generate_backend_claude_md(project_name, tech_stack)
             write_claude_md(backend_dir, content)
@@ -321,11 +334,13 @@ class PipelineEngine:
     ) -> None:
         """Commit changes in code directories after a successful sprint."""
         message = f"Sprint {sprint.sprint_number}: {sprint.name}"
+        frontend_name = self._directory_map.frontend or "frontend"
+        backend_name = self._directory_map.backend or "backend"
         dirs = []
         if state.has_frontend:
-            dirs.append(self._project_dir / "frontend")
+            dirs.append(self._project_dir / frontend_name)
         if state.has_backend:
-            dirs.append(self._project_dir / "backend")
+            dirs.append(self._project_dir / backend_name)
 
         for code_dir in dirs:
             if await has_changes(code_dir):
