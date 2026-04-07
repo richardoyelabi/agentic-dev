@@ -137,6 +137,57 @@ agentic-dev update my-app --change-request "Add dark mode to settings page"
 agentic-dev update my-app --full-spec requirements-v2.txt
 ```
 
+## Adopting an Existing Project
+
+Point agentic-dev at any existing codebase and it will reverse-engineer the full spec suite, making the project a first-class citizen.
+
+```bash
+# Basic adoption
+agentic-dev adopt /path/to/my-project
+
+# With explicit directory mapping
+agentic-dev adopt /path/to/my-project --frontend client --backend server
+
+# With Figma designs
+agentic-dev adopt /path/to/my-project --from-figma "https://figma.com/file/abc::Main UI"
+
+# Adopt and extend with new requirements
+agentic-dev adopt /path/to/my-project --extend "Add an admin dashboard"
+```
+
+Adoption creates `.agentic-dev/` and `docs/` in-place, detects the directory structure (or uses your explicit `--frontend`/`--backend` overrides), then runs specialized agents to produce `frontend_spec.md`, `backend_spec.md`, `api_contract.md`, `features.md`, and `structured_input.md`.
+
+After adoption, you can use all standard commands (`update`, `resume`, `sync`, `status`, `cost`) on the adopted project.
+
+When `--extend` is used, adoption feeds into the standard pipeline: the Input Processor receives the extracted specs plus your new requirements, and the pipeline pauses at the design checkpoint for review before building.
+
+## Syncing Code and Specs
+
+After any changes — whether you edited code manually, updated Figma designs, or modified specs — use `sync` to detect and resolve drift.
+
+```bash
+# Full interactive sync
+agentic-dev sync my-app
+
+# Code is truth — update specs to match code
+agentic-dev sync my-app --from code
+
+# Specs are truth — queue code changes to match specs
+agentic-dev sync my-app --from specs
+
+# Check a specific area
+agentic-dev sync my-app --scope api
+
+# Check-only mode (no changes, just report)
+agentic-dev sync my-app --check
+```
+
+In interactive mode, each drift item is presented and you choose how to resolve it:
+- **to_spec** — update the spec document to match code reality
+- **to_code** — queue a code change (apply later with `agentic-dev update --from-sync`)
+- **ignore** — mark as intentional divergence (won't appear again)
+- **defer** — skip for now, will reappear on next sync
+
 ## Configuring Checkpoints
 
 ```bash

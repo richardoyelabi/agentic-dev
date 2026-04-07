@@ -62,6 +62,34 @@ Options:
   --feedback TEXT  Feedback to inject into the next agent's context
 ```
 
+### `agentic-dev adopt <path>`
+
+Adopt an existing project and reverse-engineer full specifications.
+
+```
+Options:
+  --from-figma TEXT     Figma URL (supports value::annotation, repeatable)
+  --extend TEXT         New requirements to add on top
+  --frontend TEXT       Explicit frontend directory name
+  --backend TEXT        Explicit backend directory name
+  --yes / -y            Skip confirmation prompts
+```
+
+See the [User Guide](docs/user-guide.md#adopting-an-existing-project) for detailed documentation.
+
+### `agentic-dev sync [app-name]`
+
+Detect drift between code, specs, and Figma designs, and resolve interactively.
+
+```
+Options:
+  --from TEXT           Source of truth: code, specs, or figma
+  --scope TEXT          Sync scope: api, frontend, or backend
+  --check               Check-only mode (report drift, no changes)
+```
+
+See the [User Guide](docs/user-guide.md#syncing-code-and-specs) for detailed documentation.
+
 ### `agentic-dev update <app-name>`
 
 Trigger an update cycle on an existing project.

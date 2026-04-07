@@ -14,7 +14,6 @@ from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
 from agentic_dev.documents.store import DocumentStore
-from agentic_dev.orchestrator.agent_bridge import to_run_config
 from agentic_dev.orchestrator.qa_cycle import QACycleResult, run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.models import ProjectType

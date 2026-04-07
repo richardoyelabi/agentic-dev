@@ -8,7 +8,7 @@ uses spec_updater for to_spec items and generates change requests for to_code it
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
