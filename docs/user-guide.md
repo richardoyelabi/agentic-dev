@@ -20,9 +20,11 @@ You can also specify preferences:
 - Deployment: "Deploy frontend on Vercel, backend on AWS"
 - UI/UX: "Minimalist design, dark mode support"
 
-### Onboarding from Existing Sources
+### Referencing Existing Sources
 
-You can onboard existing codebases and Figma designs so the agency understands your current project before generating new specifications. Both flags are optional and additive — they enrich the agency's context but don't replace your requirements.
+You can reference existing codebases and Figma designs to give the agency context before it generates your new project's specifications. Both flags are optional and additive — they enrich the agency's understanding but don't replace your requirements. The existing sources are analyzed read-only; nothing about them is changed or managed.
+
+> **`new --from-codebase` vs `adopt`:** The `--from-codebase` flag uses an existing codebase as **reference context** for building a new project in a new directory. The existing codebase is not modified or managed — it only informs the specs. If you want agentic-dev to manage an existing project in-place, use [`adopt`](#adopting-an-existing-project) instead.
 
 #### Annotation Syntax
 
@@ -70,7 +72,7 @@ Design analyses are passed to the Architect agent, which incorporates design tok
 
 #### Combining Multiple Sources
 
-Both flags are repeatable. You can onboard multiple codebases and Figma files in a single command — they are analyzed concurrently:
+Both flags are repeatable. You can reference multiple codebases and Figma files in a single command — they are analyzed concurrently:
 
 ```bash
 agentic-dev new my-app \
@@ -80,7 +82,7 @@ agentic-dev new my-app \
   --from-figma "https://figma.com/file/xyz::Design system"
 ```
 
-You can also combine onboarding sources with your own requirements. Describe what you want to build at the prompt, and the agency will merge your intent with the analysis of existing sources.
+You can also combine reference sources with your own requirements. Describe what you want to build at the prompt, and the agency will merge your intent with the analysis of existing sources.
 
 #### How Results Flow Through the Pipeline
 
@@ -129,17 +131,25 @@ agentic-dev logs my-app --agent backend_developer --sprint 1
 
 ## Updating an Existing Project
 
+Use `update` when you want to make **intentional changes** — adding features, modifying behavior, or re-specifying requirements. The project must be in `COMPLETE` state (i.e., at least one full pipeline run has finished).
+
+The command archives previous documents, determines which pipeline phase to restart from based on what changed, and re-runs the pipeline.
+
+> **`update` vs `sync`:** `update` is for changes you want to make. If you've edited code manually and need to bring specs back in line (or vice versa), use [`sync`](#syncing-code-and-specs) instead — it detects drift and lets you choose how to resolve it.
+
 ```bash
-# Targeted change
+# Targeted change — describe what you want
 agentic-dev update my-app --change-request "Add dark mode to settings page"
 
-# Full re-specification
+# Full re-specification — replace requirements entirely
 agentic-dev update my-app --full-spec requirements-v2.txt
 ```
 
 ## Adopting an Existing Project
 
-Point agentic-dev at any existing codebase and it will reverse-engineer the full spec suite, making the project a first-class citizen.
+Use `adopt` when you have an existing codebase that you want agentic-dev to manage. It works **in-place** — no new directory is created. Specialized agents read the actual code and reverse-engineer the full spec suite (`frontend_spec.md`, `backend_spec.md`, `api_contract.md`, `features.md`), making the project a first-class citizen.
+
+> **`adopt` vs `new --from-codebase`:** `adopt` makes agentic-dev manage your existing project where it lives. `new --from-codebase` creates a separate new project that merely uses the existing code as reference context — the original project is untouched and unmanaged.
 
 ```bash
 # Basic adoption
@@ -163,7 +173,9 @@ When `--extend` is used, adoption feeds into the standard pipeline: the Input Pr
 
 ## Syncing Code and Specs
 
-After any changes — whether you edited code manually, updated Figma designs, or modified specs — use `sync` to detect and resolve drift.
+Use `sync` when code and specs have drifted apart — for example, after manual code edits, direct spec modifications, or Figma design updates. It is **diagnostic**: it compares the current state of code against specs, reports what's misaligned, and lets you choose how to resolve each item.
+
+> **`sync` vs `update`:** `sync` answers "what's out of alignment?" and helps you fix it. `update` answers "I want this changed" and re-runs the pipeline. If you manually edited backend code and want specs to reflect that, use `sync`. If you want to add a new feature, use [`update`](#updating-an-existing-project).
 
 ```bash
 # Full interactive sync

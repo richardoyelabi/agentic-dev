@@ -262,7 +262,7 @@ def new(
         None, help="Figma URL to import designs from (use '::' for annotation, repeatable)"
     ),
     from_codebase: list[str] | None = typer.Option(
-        None, help="Codebase path to onboard (use '::' for annotation, repeatable)"
+        None, help="Existing codebase to use as reference context (use '::' for annotation, repeatable)"
     ),
 ) -> None:
     """Create a new project and start the development pipeline."""

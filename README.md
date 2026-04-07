@@ -49,10 +49,12 @@ Create a new project and start the development pipeline.
 Options:
   --path TEXT           Directory to create the project in (default: ~/projects)
   --from-figma TEXT     Figma URL to import designs from (supports value::annotation, repeatable)
-  --from-codebase TEXT  Path to existing codebase to onboard (supports value::annotation, repeatable)
+  --from-codebase TEXT  Path to existing codebase to use as reference context (supports value::annotation, repeatable)
 ```
 
-See the [User Guide](docs/user-guide.md#onboarding-from-existing-sources) for detailed onboarding documentation.
+`--from-codebase` and `--from-figma` analyze existing sources read-only and use them as context for the new project — they do not manage or modify the existing codebase. To bring an existing project under agentic-dev management in-place, use `adopt` instead.
+
+See the [User Guide](docs/user-guide.md#referencing-existing-sources) for detailed documentation.
 
 ### `agentic-dev resume [app-name]`
 
@@ -65,7 +67,9 @@ Options:
 
 ### `agentic-dev adopt <path>`
 
-Adopt an existing project and reverse-engineer full specifications.
+Bring an existing project under agentic-dev management. Works **in-place** — no new directory is created. Specialized agents read the existing code and reverse-engineer the full spec suite (`frontend_spec.md`, `backend_spec.md`, `api_contract.md`, `features.md`). After adoption, all standard commands (`update`, `sync`, `status`, `cost`) work on the project.
+
+This is different from `new --from-codebase`, which creates a **separate new project** using existing code only as reference context.
 
 ```
 Options:
@@ -80,7 +84,9 @@ See the [User Guide](docs/user-guide.md#adopting-an-existing-project) for detail
 
 ### `agentic-dev sync [app-name]`
 
-Detect drift between code, specs, and Figma designs, and resolve interactively.
+Detect and resolve drift between code and specs — for example, after manual code edits or direct spec modifications. **Diagnostic**: compares current code state against specs, reports what's misaligned, and lets you choose how to resolve each item (update the spec, queue a code change, or ignore).
+
+Use `update` instead when you want to request intentional new features or changes.
 
 ```
 Options:
@@ -93,7 +99,9 @@ See the [User Guide](docs/user-guide.md#syncing-code-and-specs) for detailed doc
 
 ### `agentic-dev update <app-name>`
 
-Trigger an update cycle on an existing project.
+Request **intentional changes** to an existing project — adding features, modifying behavior, or replacing requirements entirely. Re-runs the pipeline from the appropriate phase. Requires the project to be in `COMPLETE` state.
+
+Use `sync` instead if you've edited code or specs manually and need to resolve the resulting drift.
 
 ```
 Options:
