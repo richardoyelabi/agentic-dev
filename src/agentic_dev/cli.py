@@ -737,3 +737,190 @@ def cost(
     except AgenticDevError as exc:
         _display_error(exc)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def adopt(
+    project_path: str = typer.Argument(help="Path to the existing project to adopt"),
+    from_figma: list[str] | None = typer.Option(
+        None, help="Figma URL to import designs from (use '::' for annotation, repeatable)"
+    ),
+    extend: str | None = typer.Option(
+        None, help="New requirements to add on top of the adopted project"
+    ),
+    frontend_dir: str | None = typer.Option(
+        None, "--frontend", help="Explicit frontend directory name (skips auto-detection)"
+    ),
+    backend_dir: str | None = typer.Option(
+        None, "--backend", help="Explicit backend directory name (skips auto-detection)"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
+) -> None:
+    """Adopt an existing project and reverse-engineer full specifications."""
+    try:
+        from agentic_dev.config import (  # noqa: WPS433
+            DirectoryMap,
+            ProjectConfig,
+            save_project_config,
+        )
+
+        path = Path(project_path).resolve()
+        app_name = path.name
+
+        if not path.exists():
+            console.print(f"[bold red]Path does not exist: {path}[/bold red]")
+            raise typer.Exit(code=1)
+
+        if (path / AGENTIC_DEV_METADATA_DIR).exists():
+            console.print(
+                f"[bold red]Project already has {AGENTIC_DEV_METADATA_DIR}/. "
+                "Use 'sync' to update specs.[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+        workspace_mgr = WorkspaceManager(base_dir=path.parent)
+        workspace_mgr.adopt_project(path, app_name)
+        console.print(f"[green]Initialized agentic-dev in {path}[/green]")
+
+        if frontend_dir or backend_dir:
+            directory_map = DirectoryMap(frontend=frontend_dir, backend=backend_dir)
+            console.print(
+                f"[cyan]Using explicit mapping: "
+                f"frontend={frontend_dir}, backend={backend_dir}[/cyan]"
+            )
+        else:
+            console.print("[cyan]Detecting project structure...[/cyan]")
+            from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+            from agentic_dev.onboarding.structure_detector import detect_structure  # noqa: WPS433
+
+            log_dir = path / AGENTIC_DEV_METADATA_DIR / "logs"
+            claude = ClaudeRunner(log_dir=log_dir)
+            directory_map = asyncio.run(detect_structure(claude, path))
+            console.print(
+                f"[green]Detected: frontend={directory_map.frontend}, "
+                f"backend={directory_map.backend}[/green]"
+            )
+
+        from agentic_dev.state.models import ProjectType  # noqa: WPS433
+
+        if directory_map.frontend and directory_map.backend:
+            project_type = ProjectType.FULLSTACK
+        elif directory_map.frontend:
+            project_type = ProjectType.FRONTEND_ONLY
+        else:
+            project_type = ProjectType.BACKEND_ONLY
+
+        console.print(f"[cyan]Project type: {project_type.value}[/cyan]")
+
+        if not yes:
+            console.print(
+                "\n[yellow]Adoption runs multiple AI agents to reverse-engineer specs.\n"
+                "Estimated cost: $20-50 depending on codebase size.[/yellow]"
+            )
+            confirm = Prompt.ask("Proceed?", choices=["y", "n"], default="y")
+            if confirm != "y":
+                console.print("[dim]Aborted.[/dim]")
+                raise typer.Exit(code=0)
+
+        config = ProjectConfig(
+            app_name=app_name,
+            directory_map=directory_map,
+        )
+        save_project_config(path, config)
+
+        state_mgr = StateManager(path)
+        state = PipelineState(
+            project_name=app_name,
+            project_type=project_type,
+            phase=PipelinePhase.ADOPTING,
+            mode="adopt",
+            origin="adopted",
+        )
+        state_mgr.save(state)
+
+        from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
+
+        figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
+        design_analyses = ""
+
+        if figma_sources:
+            from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+            from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
+
+            for src in figma_sources:
+                label = f"{src.value} ({src.annotation})" if src.annotation else src.value
+                console.print(f"[cyan]Importing designs from Figma: {label}[/cyan]")
+
+            log_dir = path / AGENTIC_DEV_METADATA_DIR / "logs"
+            figma_claude = ClaudeRunner(log_dir=log_dir)
+            figma_results = asyncio.run(
+                analyze_figma_designs(figma_claude, figma_sources, path)
+            )
+            design_sections = []
+            for src, result in zip(figma_sources, figma_results):
+                header = "## Source: Figma Design"
+                if src.annotation:
+                    header += f" - {src.annotation}"
+                header += f"\n**URL:** `{src.value}`\n\n"
+                design_sections.append(header + result.text)
+            design_analyses = "\n\n---\n".join(design_sections)
+
+        console.print("\n[bold cyan]Running spec reverse-engineering...[/bold cyan]")
+
+        from agentic_dev.agents.registry import AgentRegistry  # noqa: WPS433
+        from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+        from agentic_dev.config import AGENT_DEFINITIONS_DIR, PROMPT_TEMPLATES_DIR  # noqa: WPS433
+        from agentic_dev.orchestrator.adoption import run_adoption  # noqa: WPS433
+        from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
+
+        log_dir = path / AGENTIC_DEV_METADATA_DIR / "logs"
+        claude = ClaudeRunner(log_dir=log_dir)
+        registry = AgentRegistry(definitions_dir=AGENT_DEFINITIONS_DIR)
+        doc_store = DocumentStore(path)
+        prompt_renderer = PromptRenderer(templates_dir=PROMPT_TEMPLATES_DIR)
+
+        adoption_result = asyncio.run(run_adoption(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            project_dir=path,
+            directory_map=directory_map,
+            project_type=project_type,
+            design_analyses=design_analyses,
+        ))
+
+        state = state_mgr.load()
+        state.total_cost_usd += adoption_result.total_cost
+
+        if extend:
+            user_input = extend
+            if doc_store.exists("structured_input"):
+                user_input = doc_store.read("structured_input") + "\n\n---\n\n" + extend
+            doc_store.write("user_input", user_input)
+
+            from agentic_dev.state.transitions import advance_phase  # noqa: WPS433
+
+            state = advance_phase(state, PipelinePhase.INPUT_PROCESSING)
+            state_mgr.save(state)
+            console.print("[cyan]Extending with new requirements...[/cyan]")
+            _run_pipeline(path, state)
+        else:
+            from agentic_dev.state.transitions import advance_phase  # noqa: WPS433
+
+            state = advance_phase(state, PipelinePhase.ADOPTED)
+            state.last_sync_at = datetime.now(timezone.utc)
+            state_mgr.save(state)
+
+            console.print(
+                f"\n[bold green]Project adopted successfully![/bold green]\n"
+                f"  Features extracted: {adoption_result.features_count}\n"
+                f"  Endpoints mapped: {adoption_result.endpoints_count}\n"
+                f"  Documents: {', '.join(adoption_result.documents_produced)}\n"
+                f"  Cost: ${adoption_result.total_cost:.4f}\n"
+                f"\nSpecs saved to {path / 'docs'}/"
+            )
+
+    except (AgenticDevError, RuntimeError) as exc:
+        _display_error(exc)
+        raise typer.Exit(code=1)
