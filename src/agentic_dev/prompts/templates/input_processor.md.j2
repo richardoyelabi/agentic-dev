@@ -12,6 +12,24 @@ Parse the user input below. Separate feature requirements from preferences (tech
 
 {{ user_input }}
 
+# Onboarding Context Handling
+
+The user input above may contain embedded analysis sections from existing codebases and/or Figma designs. These are marked with the following headers:
+
+- `## Source: Codebase` or `## Source: Codebase - <annotation>` — Contains a Codebase Analysis with detected tech stack, architecture, patterns, and dependencies.
+- `## Source: Figma Design` or `## Source: Figma Design - <annotation>` — Contains a Design Analysis with pages, components, design tokens, and navigation structure.
+
+If these sections are present, follow these rules:
+
+1. **Tech stack defaults**: Use the tech stack detected in codebase analysis sections as defaults for the Preferences > Tech Stack output. If the user explicitly states a tech stack preference elsewhere in their input, the user's preference takes priority.
+2. **Feature discovery**: Extract discovered routes, endpoints, data models, and UI components from codebase analysis sections. Incorporate them as existing features in the Feature Requirements output, prefixed with `[EXISTING]` to distinguish them from new feature requests.
+3. **Patterns and conventions**: Note any coding patterns, naming conventions, or project structure conventions discovered in codebase analysis sections under a `### Patterns & Conventions` subsection in Preferences.
+4. **Design information**: If Figma design sections are present, extract UI/UX preferences (color palette, typography, spacing) and list them under Preferences > UI/UX Preferences. Extract page layouts and component structures as feature context.
+5. **Annotation context**: Use the annotation text (after the dash in the header) to understand the role of each source (e.g., "Frontend React app", "Backend API", "Admin dashboard").
+6. **Merge, don't duplicate**: When user requirements overlap with discovered features, merge them — use the user's description but augment with technical details from the analysis.
+
+If no onboarding sections are present, ignore these rules entirely.
+
 # Constraints
 
 {% for c in constraints %}
@@ -41,6 +59,8 @@ Produce a **Structured Input** document in the following markdown format:
 - <plugin>: <usage>
 ### UI/UX Preferences
 - <preference>
+### Patterns & Conventions
+- <pattern or convention discovered from existing codebase, if any>
 ```
 
 **Project type rules:**

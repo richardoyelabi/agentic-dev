@@ -473,3 +473,51 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "uat.md.j2 did not render 'features' — "
             "likely still using 'features_request'"
         )
+
+
+class TestInputProcessorOnboardingGuidance:
+    """Verify the Input Processor template includes guidance for handling onboarding context."""
+
+    def _render(self, real_renderer, user_input="Build an app"):
+        return real_renderer.render("input_processor.md.j2", {
+            "user_input": user_input,
+            "constraints": [],
+        })
+
+    def test_contains_codebase_handling_guidance(self, real_renderer):
+        """Template should instruct the agent on how to handle codebase analysis sections."""
+        result = self._render(real_renderer)
+        assert "Source: Codebase" in result
+        assert "tech stack" in result.lower()
+
+    def test_contains_figma_handling_guidance(self, real_renderer):
+        """Template should instruct the agent on how to handle Figma design sections."""
+        result = self._render(real_renderer)
+        assert "Source: Figma Design" in result
+
+    def test_mentions_existing_feature_prefix(self, real_renderer):
+        """Template should instruct using [EXISTING] prefix for discovered features."""
+        result = self._render(real_renderer)
+        assert "[EXISTING]" in result
+
+    def test_output_format_includes_patterns_and_conventions(self, real_renderer):
+        """Output format should include a Patterns & Conventions subsection."""
+        result = self._render(real_renderer)
+        assert "Patterns & Conventions" in result
+
+    def test_renders_with_embedded_onboarding_sources(self, real_renderer):
+        """Template should render correctly when user_input contains embedded source sections."""
+        user_input = (
+            "Extend this application with a new admin panel\n\n"
+            "---\n## Source: Codebase - Frontend React app\n"
+            "**Path:** `/path/frontend`\n\n"
+            "# Codebase Analysis\n## Tech Stack\n- Frontend: React 18\n- Backend: N/A\n\n"
+            "---\n## Source: Figma Design - Admin dashboard\n"
+            "**URL:** `https://figma.com/file/abc`\n\n"
+            "# Design Analysis\n## Pages\n### Dashboard\n- Layout: sidebar + main"
+        )
+        result = self._render(real_renderer, user_input=user_input)
+        assert len(result) > 0
+        assert "React 18" in result
+        assert "Admin dashboard" in result
+        assert "{{" not in result

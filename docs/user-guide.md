@@ -20,21 +20,74 @@ You can also specify preferences:
 - Deployment: "Deploy frontend on Vercel, backend on AWS"
 - UI/UX: "Minimalist design, dark mode support"
 
-### From an Existing Codebase
+### Onboarding from Existing Sources
+
+You can onboard existing codebases and Figma designs so the agency understands your current project before generating new specifications. Both flags are optional and additive — they enrich the agency's context but don't replace your requirements.
+
+#### Annotation Syntax
+
+Both `--from-codebase` and `--from-figma` support an optional annotation using `::` as a separator:
+
+```
+--from-codebase /path/to/project::Frontend React app
+--from-figma "https://figma.com/file/abc::Admin dashboard"
+```
+
+The annotation helps the agency understand what each source represents. It splits on the first `::` only, so URLs or annotations containing `::` are handled safely. If you don't need an annotation, just pass the path or URL directly.
+
+#### From an Existing Codebase
 
 ```bash
 agentic-dev new my-app --from-codebase /path/to/existing/project
 ```
 
-The agency will analyze the codebase and produce specifications that match the existing architecture.
+A read-only Claude agent analyzes the codebase (using only Read, Glob, and Grep tools) and produces a **Codebase Analysis** document containing:
 
-### From Figma Designs
+- **Tech Stack** — detected frameworks, languages, and database
+- **Architecture** — discovered routes/endpoints, data models, and UI components
+- **Patterns & Conventions** — coding patterns, naming conventions, project structure
+- **Dependencies** — key dependencies and their purposes
+- **Notes** — anything notable that would help in planning changes
+
+The detected tech stack is used as defaults when generating specifications. Your explicit preferences (e.g., "use PostgreSQL") always take priority over what is detected.
+
+#### From Figma Designs
 
 ```bash
 agentic-dev new my-app --from-figma "https://figma.com/file/..."
 ```
 
-Requires Figma MCP server configuration.
+A Claude agent with Figma MCP tools extracts design information and produces a **Design Analysis** document containing:
+
+- **Pages** — layout structure and components per page
+- **Components** — purpose, variants, and configurable properties
+- **Design Tokens** — color palette, typography, and spacing scale
+- **Navigation** — navigation structure and user flows
+
+**Prerequisite:** The Figma MCP server must be configured. Place your Figma MCP config at the project's `mcp_configs/figma.json`. See the [MCP server configuration docs](https://github.com/anthropics/claude-code/blob/main/docs/mcp.md) for setup instructions. The CLI will show an error with setup guidance if the config is missing.
+
+Design analyses are passed to the Architect agent, which incorporates design tokens, component names, page layouts, and navigation flows into the Frontend Spec.
+
+#### Combining Multiple Sources
+
+Both flags are repeatable. You can onboard multiple codebases and Figma files in a single command — they are analyzed concurrently:
+
+```bash
+agentic-dev new my-app \
+  --from-codebase /path/frontend::"Frontend React app" \
+  --from-codebase /path/backend::"Backend API" \
+  --from-figma "https://figma.com/file/abc::Main UI" \
+  --from-figma "https://figma.com/file/xyz::Design system"
+```
+
+You can also combine onboarding sources with your own requirements. Describe what you want to build at the prompt, and the agency will merge your intent with the analysis of existing sources.
+
+#### How Results Flow Through the Pipeline
+
+1. Each source is analyzed concurrently by a dedicated Claude agent
+2. Analysis results are appended to your requirements text with section headers (e.g., `## Source: Codebase - Frontend React app`)
+3. The combined text is saved as `docs/user_input.md` and passed to the **Input Processor**, which merges detected tech stack, features, and patterns with your stated preferences
+4. Figma analyses are additionally saved as `docs/design_analyses.md` and passed directly to the **Architect** for frontend specification
 
 ## The Design Phase
 

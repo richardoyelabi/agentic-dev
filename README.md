@@ -47,9 +47,11 @@ Create a new project and start the development pipeline.
 ```
 Options:
   --path TEXT           Directory to create the project in (default: ~/projects)
-  --from-figma TEXT     Figma URL to import designs from
-  --from-codebase TEXT  Path to existing codebase to onboard
+  --from-figma TEXT     Figma URL to import designs from (supports value::annotation, repeatable)
+  --from-codebase TEXT  Path to existing codebase to onboard (supports value::annotation, repeatable)
 ```
+
+See the [User Guide](docs/user-guide.md#onboarding-from-existing-sources) for detailed onboarding documentation.
 
 ### `agentic-dev resume [app-name]`
 
