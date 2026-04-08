@@ -138,7 +138,7 @@ def _collect_user_requirements() -> str:
     lines: list[str] = []
     empty_count = 0
     while True:
-        line = Prompt.ask("", default="")
+        line = input()
         if line == "":
             empty_count += 1
             if empty_count >= 2:
