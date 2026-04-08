@@ -74,11 +74,14 @@ Persists pipeline state as JSON. Supports atomic writes and history archiving.
 ### `workspace/manager.py`
 Creates and adopts project directories. Initializes git repos. Generates CLAUDE.md files. Resolves directory paths through `DirectoryMap` and the global project registry (`~/.agentic-dev/registry.json`).
 
+### `mcp/claude_settings.py`
+Discovers MCP servers from Claude Code's native settings files (`~/.claude/settings.json`, project `.claude/settings.json`, `.claude/settings.local.json`). Provides fuzzy matching to find servers by service name. Agents inherit configured MCP servers automatically — no `--mcp-config` flag needed.
+
 ### `mcp/catalog.py`
-Central catalog of known MCP services. Maps service names to config files, required env vars, and setup instructions. Provides validation, text-based service detection, and config merging for multi-service sprints.
+Text-based service detection using regex patterns. Scans sprint plan text for references to known services (figma, github, stripe, supabase).
 
 ### `mcp/setup.py`
-Rich-formatted prerequisite validation and guided setup helpers. Used by the CLI to check MCP readiness before launching agents.
+Rich-formatted prerequisite validation and guided setup helpers. Checks Claude Code settings for configured MCP servers and guides users to `claude mcp add` or Claude Code's OAuth UI.
 
 ### `config.py`
 Global settings, constants, and project configuration models. Contains `ProjectConfig` (with `DirectoryMap`, `ExternalSource`, checkpoint config, sync ignores), config migration logic, and the global project registry.

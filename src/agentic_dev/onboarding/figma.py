@@ -11,7 +11,7 @@ from pathlib import Path
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.exceptions import AgenticDevError
-from agentic_dev.mcp.catalog import get_mcp_config_path
+from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
 from agentic_dev.onboarding.models import AnnotatedSource
 from agentic_dev.orchestrator.agent_bridge import AgentRunConfig
 
@@ -56,26 +56,22 @@ class FigmaMCPNotConfigured(AgenticDevError):
 
     def __init__(self) -> None:
         super().__init__(
-            "Figma MCP server is not configured. "
-            "To use Figma onboarding, configure the Figma MCP server. "
-            "See https://docs.anthropic.com/en/docs/claude-code/mcp "
-            "for MCP server configuration instructions."
+            "Figma MCP server is not configured in your Claude Code settings. "
+            "Run 'claude mcp add figma' or use Claude Code's authentication UI "
+            "to connect Figma (supports OAuth). "
+            "See https://docs.anthropic.com/en/docs/claude-code/mcp for details."
         )
 
 
-def get_figma_mcp_config() -> Path:
-    """Get the path to the Figma MCP config file.
-
-    Returns:
-        Path to the Figma MCP config.
+def check_figma_mcp_available() -> None:
+    """Verify that a Figma MCP server is configured in Claude Code.
 
     Raises:
-        FigmaMCPNotConfigured: If no Figma MCP config exists.
+        FigmaMCPNotConfigured: If no Figma MCP server is found.
     """
-    figma_config = get_mcp_config_path("figma")
-    if figma_config is None:
+    env = discover_mcp_servers()
+    if find_server_for_service(env, "figma") is None:
         raise FigmaMCPNotConfigured()
-    return figma_config
 
 
 async def analyze_figma_design(
@@ -99,7 +95,7 @@ async def analyze_figma_design(
     Raises:
         FigmaMCPNotConfigured: If Figma MCP server is not configured.
     """
-    mcp_config = get_figma_mcp_config()
+    check_figma_mcp_available()
 
     config = AgentRunConfig(
         name="onboarding_figma",
@@ -108,7 +104,7 @@ async def analyze_figma_design(
         allowed_tools=["Read", "Glob", "Grep"],
         max_turns=30,
         use_bare_mode=True,
-        mcp_config=mcp_config,
+        mcp_config=None,
         system_prompt=None,
     )
 

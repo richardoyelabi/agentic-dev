@@ -66,11 +66,12 @@ A Claude agent with Figma MCP tools extracts design information and produces a *
 - **Design Tokens** — color palette, typography, and spacing scale
 - **Navigation** — navigation structure and user flows
 
-**Prerequisite:** The Figma MCP server requires a `FIGMA_ACCESS_TOKEN` environment variable. The CLI validates this before starting and shows guided setup instructions if anything is missing:
+**Prerequisite:** The Figma MCP server must be configured in your Claude Code environment. The CLI checks your Claude Code settings before starting and shows setup instructions if Figma is not found:
 
-1. Go to https://www.figma.com/developers/api#access-tokens
-2. Generate a personal access token
-3. Export it: `export FIGMA_ACCESS_TOKEN=<your-token>`
+- **Option 1:** Run `claude mcp add figma` to configure the Figma MCP server
+- **Option 2:** Use Claude Code's authentication UI to connect Figma (supports OAuth)
+
+See https://docs.anthropic.com/en/docs/claude-code/mcp for details.
 
 Design analyses are passed to the Architect agent, which incorporates design tokens, component names, page layouts, and navigation flows into the Frontend Spec.
 
@@ -223,27 +224,38 @@ The agency tracks costs per agent run. Use `agentic-dev cost my-app` to see a br
 
 ## MCP Configuration for Third-Party Services
 
-The agency uses MCP (Model Context Protocol) servers to give agents direct access to third-party services. When a sprint's integration phase involves a known service, the integration agent receives MCP tools for that service automatically.
+The agency uses MCP (Model Context Protocol) servers to give agents direct access to third-party services. Rather than maintaining its own MCP configuration, agentic-dev relies on **Claude Code's native MCP infrastructure** — any MCP servers configured in your Claude Code environment are automatically available to all spawned agents.
 
-### Supported Services
+### Setting Up MCP Servers
 
-| Service | Env Var(s) Required | How to Get |
-|---------|-------------------|------------|
-| **Figma** | `FIGMA_ACCESS_TOKEN` | https://www.figma.com/developers/api#access-tokens |
-| **GitHub** | `GITHUB_TOKEN` | https://github.com/settings/tokens (repo scope) |
-| **Stripe** | `STRIPE_API_KEY` | https://dashboard.stripe.com/apikeys |
-| **Supabase** | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Supabase project settings > API |
+Configure MCP servers using Claude Code's built-in tools:
+
+| Service | Setup Command | Alternative |
+|---------|--------------|-------------|
+| **Figma** | `claude mcp add figma` | Claude Code's OAuth UI |
+| **GitHub** | `claude mcp add github` | Claude Code's OAuth UI |
+| **Stripe** | `claude mcp add stripe` | Manual in `~/.claude/settings.json` |
+| **Supabase** | `claude mcp add supabase` | Manual in `~/.claude/settings.json` |
+
+MCP servers can be configured at three levels (later overrides earlier):
+1. **Global:** `~/.claude/settings.json` — available to all projects
+2. **Project:** `<project>/.claude/settings.json` — project-specific
+3. **Project-local:** `<project>/.claude/settings.local.json` — local overrides (not committed)
+
+For services that support OAuth (like Figma), Claude Code provides a UI-friendly authentication flow that opens your browser automatically.
+
+See https://docs.anthropic.com/en/docs/claude-code/mcp for full MCP documentation.
 
 ### How It Works
 
 1. The sprint planner identifies which sprints need third-party integrations
-2. Before sprints begin, the engine validates MCP readiness and logs warnings for unconfigured services
-3. During the integration phase, known services get their MCP configs passed to the integration agent
-4. For services without MCP support, the integration agent falls back to SDK-only mode using `WebSearch` and official documentation
+2. Before sprints begin, the engine checks your Claude Code settings and logs warnings for services not yet configured
+3. During the integration phase, agents inherit all MCP servers from your Claude Code environment automatically
+4. For services without an MCP server configured, the integration agent falls back to SDK-only mode using `WebSearch` and official documentation
 
 ### Pre-Flight Validation
 
-The CLI validates MCP prerequisites before starting expensive operations. For example, `--from-figma` checks that the Figma config and `FIGMA_ACCESS_TOKEN` are available before launching any agents. If validation fails, the CLI shows a status table and setup instructions.
+The CLI validates MCP prerequisites before starting expensive operations. For example, `--from-figma` checks that a Figma MCP server is configured in your Claude Code settings before launching any agents. If validation fails, the CLI shows a status table and setup instructions.
 
 ## Troubleshooting
 

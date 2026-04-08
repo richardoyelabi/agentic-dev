@@ -1,7 +1,7 @@
 """Tests for the sprint runner."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -514,15 +514,14 @@ class TestIntegrationMCPConfig:
             project_type="fullstack",
         )
 
-    def test_resolve_mcp_config_single_service(self, runner, tmp_path: Path) -> None:
-        """Single known service returns its config path directly."""
+    @patch("agentic_dev.orchestrator.sprint_runner.discover_mcp_servers")
+    def test_resolve_mcp_config_always_returns_none(self, mock_discover, runner) -> None:
+        """Subprocess inherits MCP servers — always returns None."""
+        from agentic_dev.mcp.claude_settings import ClaudeMCPEnvironment, MCPServerEntry
+        mock_discover.return_value = ClaudeMCPEnvironment(
+            servers={"figma": MCPServerEntry(name="figma", transport="stdio", source="global")}
+        )
         config = runner._resolve_integration_mcp_config(["figma"])
-        assert config is not None
-        assert config.name == "figma.json"
-
-    def test_resolve_mcp_config_unknown_service(self, runner) -> None:
-        """Unknown services return None."""
-        config = runner._resolve_integration_mcp_config(["nonexistent"])
         assert config is None
 
     def test_resolve_mcp_config_empty_list(self, runner) -> None:
@@ -530,11 +529,10 @@ class TestIntegrationMCPConfig:
         config = runner._resolve_integration_mcp_config([])
         assert config is None
 
-    def test_resolve_mcp_config_multiple_services(self, runner, tmp_path: Path) -> None:
-        """Multiple known services produces a merged config."""
-        config = runner._resolve_integration_mcp_config(["github", "stripe"])
-        assert config is not None
-        import json
-        data = json.loads(config.read_text())
-        assert "github" in data["mcpServers"]
-        assert "stripe" in data["mcpServers"]
+    @patch("agentic_dev.orchestrator.sprint_runner.discover_mcp_servers")
+    def test_resolve_mcp_config_logs_warning_for_missing(self, mock_discover, runner) -> None:
+        """Logs warnings for services not found in Claude Code settings."""
+        from agentic_dev.mcp.claude_settings import ClaudeMCPEnvironment
+        mock_discover.return_value = ClaudeMCPEnvironment(servers={})
+        config = runner._resolve_integration_mcp_config(["nonexistent"])
+        assert config is None

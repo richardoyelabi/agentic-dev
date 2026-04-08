@@ -367,9 +367,12 @@ class PipelineEngine:
         """Check MCP readiness for all integration services across sprints.
 
         Returns a list of human-readable warning strings for services
-        that are not fully configured. Does not block execution.
+        that are not configured in Claude Code settings. Does not block execution.
         """
-        from agentic_dev.mcp.catalog import SERVICE_CATALOG, validate_service
+        from agentic_dev.mcp.claude_settings import (
+            discover_mcp_servers,
+            find_server_for_service,
+        )
 
         all_services: set[str] = set()
         for sprint in sprints:
@@ -378,23 +381,13 @@ class PipelineEngine:
         if not all_services:
             return []
 
+        env = discover_mcp_servers(project_dir=self._project_dir)
         warnings: list[str] = []
         for service in sorted(all_services):
-            if service not in SERVICE_CATALOG:
+            if find_server_for_service(env, service) is None:
                 warnings.append(
-                    f"Service '{service}' is not in the MCP catalog "
-                    f"(integration agent will use SDK-only mode)"
-                )
-                continue
-            result = validate_service(service)
-            if not result.config_exists:
-                warnings.append(
-                    f"MCP config missing for '{service}'"
-                )
-            elif result.missing_env_vars:
-                missing = ", ".join(result.missing_env_vars)
-                warnings.append(
-                    f"Service '{service}' missing env vars: {missing}"
+                    f"No MCP server for '{service}' found in Claude Code "
+                    f"settings. Run 'claude mcp add {service}' to configure it."
                 )
         return warnings
 

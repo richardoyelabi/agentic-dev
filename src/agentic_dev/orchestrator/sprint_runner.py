@@ -9,7 +9,7 @@ from pathlib import Path
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
-from agentic_dev.mcp.catalog import get_mcp_config_path, merge_mcp_configs
+from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.logging import get_event_logger, emit
@@ -98,22 +98,27 @@ class SprintRunner:
             self._state_manager.save(self._pipeline_state)
 
     def _resolve_integration_mcp_config(self, services: list[str]) -> Path | None:
-        """Resolve MCP config for integration services.
+        """Check MCP availability for integration services.
 
-        Returns the config path for a single service, a merged config for
-        multiple services, or None if no known services have configs.
+        Claude Code subprocesses inherit all MCP servers from the user's
+        settings, so no ``--mcp-config`` flag is needed. This method only
+        logs warnings for services not found in the Claude Code environment.
+
+        Returns None always — the subprocess inherits configured servers.
         """
         if not services:
             return None
 
-        available = [s for s in services if get_mcp_config_path(s) is not None]
-        if not available:
-            return None
-
-        if len(available) == 1:
-            return get_mcp_config_path(available[0])
-
-        return merge_mcp_configs(available)
+        env = discover_mcp_servers(project_dir=self._project_dir)
+        for service in services:
+            if find_server_for_service(env, service) is None:
+                _event_log.warning(
+                    "No MCP server for '%s' found in Claude Code settings. "
+                    "Run 'claude mcp add %s' to configure it.",
+                    service,
+                    service,
+                )
+        return None
 
     async def run_sprint(
         self,

@@ -16,7 +16,6 @@ AGENCY_DIR = Path(__file__).parent.parent.parent
 
 AGENT_DEFINITIONS_DIR = AGENCY_DIR / "src" / "agentic_dev" / "agents" / "definitions"
 PROMPT_TEMPLATES_DIR = AGENCY_DIR / "src" / "agentic_dev" / "prompts" / "templates"
-MCP_CONFIGS_DIR = AGENCY_DIR / "src" / "agentic_dev" / "agents" / "mcp_configs"
 
 AGENTIC_DEV_METADATA_DIR = ".agentic-dev"
 STATE_FILE = "state.json"

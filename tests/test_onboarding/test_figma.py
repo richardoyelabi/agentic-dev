@@ -7,17 +7,29 @@ import pytest
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.exceptions import AgentRunError
+from agentic_dev.mcp.claude_settings import ClaudeMCPEnvironment, MCPServerEntry
 from agentic_dev.onboarding.figma import (
     FIGMA_PROMPT_TEMPLATE,
     FigmaMCPNotConfigured,
     analyze_figma_design,
     analyze_figma_designs,
-    get_figma_mcp_config,
+    check_figma_mcp_available,
 )
 from agentic_dev.onboarding.models import AnnotatedSource
 
 
 SAMPLE_FIGMA_URL = "https://www.figma.com/file/abc123/MyDesign"
+
+
+def _figma_env() -> ClaudeMCPEnvironment:
+    """Return a ClaudeMCPEnvironment with Figma configured."""
+    return ClaudeMCPEnvironment(
+        servers={"figma": MCPServerEntry(name="figma", transport="stdio", source="global")}
+    )
+
+
+def _empty_env() -> ClaudeMCPEnvironment:
+    return ClaudeMCPEnvironment(servers={})
 
 
 def _make_claude_result(
@@ -41,29 +53,23 @@ def _make_mock_runner(return_value: ClaudeResult | None = None) -> MagicMock:
     return mock
 
 
-class TestGetFigmaMcpConfig:
-    def test_raises_when_figma_json_missing(self) -> None:
-        with patch("agentic_dev.onboarding.figma.get_mcp_config_path", return_value=None):
+class TestCheckFigmaMcpAvailable:
+    def test_raises_when_figma_not_configured(self) -> None:
+        with patch("agentic_dev.onboarding.figma.discover_mcp_servers", return_value=_empty_env()):
             with pytest.raises(FigmaMCPNotConfigured, match="not configured"):
-                get_figma_mcp_config()
+                check_figma_mcp_available()
 
-    def test_returns_path_when_figma_json_exists(self, tmp_path: Path) -> None:
-        figma_config = tmp_path / "figma.json"
-        figma_config.write_text("{}", encoding="utf-8")
-
-        with patch("agentic_dev.onboarding.figma.get_mcp_config_path", return_value=figma_config):
-            result = get_figma_mcp_config()
-
-        assert result == figma_config
+    def test_succeeds_when_figma_configured(self) -> None:
+        with patch("agentic_dev.onboarding.figma.discover_mcp_servers", return_value=_figma_env()):
+            check_figma_mcp_available()
 
 
 class TestAnalyzeFigmaDesign:
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
-    async def test_constructs_correct_agent_config_with_mcp(
-        self, mock_get_config: MagicMock, tmp_path: Path
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
+    async def test_constructs_correct_agent_config(
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        fake_mcp_path = Path("/fake/figma.json")
-        mock_get_config.return_value = fake_mcp_path
+        mock_discover.return_value = _figma_env()
         mock_runner = _make_mock_runner()
 
         await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
@@ -75,14 +81,14 @@ class TestAnalyzeFigmaDesign:
         assert config.allowed_tools == ["Read", "Glob", "Grep"]
         assert config.max_turns == 30
         assert config.use_bare_mode is True
-        assert config.mcp_config == fake_mcp_path
+        assert config.mcp_config is None
         assert config.system_prompt is None
 
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_formats_prompt_with_figma_url(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_discover.return_value = _figma_env()
         mock_runner = _make_mock_runner()
 
         await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
@@ -91,11 +97,11 @@ class TestAnalyzeFigmaDesign:
         assert SAMPLE_FIGMA_URL in prompt
         assert "Design Analysis" in prompt
 
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_passes_working_dir(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_discover.return_value = _figma_env()
         mock_runner = _make_mock_runner()
 
         await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
@@ -103,11 +109,11 @@ class TestAnalyzeFigmaDesign:
         working_dir = mock_runner.run.call_args.kwargs["working_dir"]
         assert working_dir == tmp_path
 
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_returns_claude_result(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_discover.return_value = _figma_env()
         expected = _make_claude_result(
             text="# Design Analysis\nComponents: Button, Card",
             cost_usd=0.35,
@@ -118,11 +124,11 @@ class TestAnalyzeFigmaDesign:
 
         assert result is expected
 
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_raises_figma_mcp_not_configured(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.side_effect = FigmaMCPNotConfigured()
+        mock_discover.return_value = _empty_env()
         mock_runner = _make_mock_runner()
 
         with pytest.raises(FigmaMCPNotConfigured):
@@ -130,11 +136,11 @@ class TestAnalyzeFigmaDesign:
 
         mock_runner.run.assert_not_called()
 
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_propagates_agent_run_error(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_discover.return_value = _figma_env()
         mock_runner = _make_mock_runner()
         mock_runner.run.side_effect = AgentRunError(
             agent_name="onboarding_figma",
@@ -144,11 +150,11 @@ class TestAnalyzeFigmaDesign:
         with pytest.raises(AgentRunError, match="onboarding_figma"):
             await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
 
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_annotation_prepended_to_prompt(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_discover.return_value = _figma_env()
         mock_runner = _make_mock_runner()
 
         await analyze_figma_design(
@@ -160,11 +166,11 @@ class TestAnalyzeFigmaDesign:
         assert "Admin dashboard" in prompt
         assert SAMPLE_FIGMA_URL in prompt
 
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_empty_annotation_uses_original_prompt(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_discover.return_value = _figma_env()
         mock_runner = _make_mock_runner()
 
         await analyze_figma_design(
@@ -177,11 +183,11 @@ class TestAnalyzeFigmaDesign:
 
 
 class TestAnalyzeFigmaDesigns:
-    @patch("agentic_dev.onboarding.figma.get_figma_mcp_config")
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_runs_all_sources(
-        self, mock_get_config: MagicMock, tmp_path: Path
+        self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_get_config.return_value = Path("/fake/figma.json")
+        mock_discover.return_value = _figma_env()
         results = [
             _make_claude_result(text="Design 1"),
             _make_claude_result(text="Design 2"),

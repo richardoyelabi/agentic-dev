@@ -1259,25 +1259,31 @@ class TestPreSprintMCPValidation:
         )
         return engine
 
-    def test_validate_sprint_mcp_services_returns_warnings(self, engine) -> None:
+    @patch("agentic_dev.mcp.claude_settings.discover_mcp_servers")
+    def test_validate_sprint_mcp_services_returns_warnings(self, mock_discover, engine) -> None:
         """_validate_sprint_mcp_services returns warnings for unconfigured services."""
+        from agentic_dev.mcp.claude_settings import ClaudeMCPEnvironment
+        mock_discover.return_value = ClaudeMCPEnvironment(servers={})
         sprints = [
             SprintState(sprint_number=1, name="S1", integration_services=["stripe"]),
             SprintState(sprint_number=2, name="S2", integration_services=["nonexistent"]),
         ]
         warnings = engine._validate_sprint_mcp_services(sprints)
-        # "nonexistent" is not in catalog, should produce a warning
         assert any("nonexistent" in w for w in warnings)
+        assert any("stripe" in w for w in warnings)
 
-    def test_validate_sprint_mcp_services_no_warnings_for_known(self, engine) -> None:
-        """Known services with existing configs don't produce warnings about config."""
+    @patch("agentic_dev.mcp.claude_settings.discover_mcp_servers")
+    def test_validate_sprint_mcp_services_no_warnings_when_configured(self, mock_discover, engine) -> None:
+        """Services found in Claude Code settings produce no warnings."""
+        from agentic_dev.mcp.claude_settings import ClaudeMCPEnvironment, MCPServerEntry
+        mock_discover.return_value = ClaudeMCPEnvironment(
+            servers={"figma": MCPServerEntry(name="figma", transport="stdio", source="global")}
+        )
         sprints = [
             SprintState(sprint_number=1, name="S1", integration_services=["figma"]),
         ]
         warnings = engine._validate_sprint_mcp_services(sprints)
-        # figma.json exists, so no "config missing" warning; env var warning is possible
-        config_warnings = [w for w in warnings if "config" in w.lower()]
-        assert config_warnings == []
+        assert warnings == []
 
     def test_validate_sprint_mcp_services_empty_services(self, engine) -> None:
         """Sprints with no integration services produce no warnings."""
