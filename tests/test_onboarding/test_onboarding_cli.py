@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from agentic_dev.claude.runner import ClaudeResult
@@ -12,6 +13,13 @@ from agentic_dev.onboarding.figma import FigmaMCPNotConfigured
 
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _bypass_mcp_check():
+    """Bypass MCP prerequisite validation in CLI tests."""
+    with patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True):
+        yield
 
 
 def _make_claude_result(

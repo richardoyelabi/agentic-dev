@@ -83,3 +83,15 @@ class DocumentError(AgenticDevError):
 
 class LockError(AgenticDevError):
     """Raised for file locking failures."""
+
+
+class MCPPrerequisiteError(AgenticDevError):
+    """Raised when required MCP services are not configured."""
+
+    def __init__(self, services: list[str], message: str = ""):
+        self.services = services
+        detail = ", ".join(services)
+        super().__init__(
+            message
+            or f"MCP prerequisites not met for: {detail}"
+        )

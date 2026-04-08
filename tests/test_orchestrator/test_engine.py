@@ -1170,3 +1170,119 @@ class TestCrashResilience:
         await engine._run_feature_analysis(state)
 
         assert state.active_session_id is None
+
+
+class TestParseSprintPlan:
+    """Tests for PipelineEngine._parse_sprint_plan() integration field extraction."""
+
+    def test_extracts_integration_services(self) -> None:
+        plan = (
+            "## Sprint 1: Auth & Payments\n"
+            "- **Features:** [F001], [F002]\n"
+            "- **Needs Integration:** yes\n"
+            "- **Integration Services:** Stripe, GitHub\n"
+        )
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert len(sprints) == 1
+        assert "stripe" in sprints[0].integration_services
+        assert "github" in sprints[0].integration_services
+
+    def test_no_integration_services_when_not_needed(self) -> None:
+        plan = (
+            "## Sprint 1: Core Models\n"
+            "- **Needs Integration:** no\n"
+        )
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert sprints[0].integration_services == []
+
+    def test_multiple_sprints_with_mixed_integration(self) -> None:
+        plan = (
+            "## Sprint 1: Core Models\n"
+            "- **Needs Integration:** no\n"
+            "\n"
+            "## Sprint 2: Payments\n"
+            "- **Needs Integration:** yes\n"
+            "- **Integration Services:** Stripe\n"
+            "\n"
+            "## Sprint 3: Social Login\n"
+            "- **Needs Integration:** yes\n"
+            "- **Integration Services:** GitHub\n"
+        )
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert len(sprints) == 3
+        assert sprints[0].integration_services == []
+        assert sprints[1].integration_services == ["stripe"]
+        assert sprints[2].integration_services == ["github"]
+
+    def test_integration_services_normalized_to_lowercase(self) -> None:
+        plan = (
+            "## Sprint 1: Integrations\n"
+            "- **Needs Integration:** yes\n"
+            "- **Integration Services:** STRIPE, Supabase\n"
+        )
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert "stripe" in sprints[0].integration_services
+        assert "supabase" in sprints[0].integration_services
+
+    def test_missing_integration_fields_defaults_to_empty(self) -> None:
+        plan = "## Sprint 1: Basic setup\n- **Features:** [F001]\n"
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert sprints[0].integration_services == []
+
+    def test_fallback_single_sprint_has_empty_services(self) -> None:
+        plan = "Just do everything in one sprint."
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert len(sprints) == 1
+        assert sprints[0].integration_services == []
+
+
+class TestPreSprintMCPValidation:
+    """Tests for pre-sprint MCP validation logging in _run_sprints()."""
+
+    @pytest.fixture
+    def engine(self, tmp_path, claude):
+        registry = MagicMock(spec=AgentRegistry)
+        registry.get = MagicMock(side_effect=lambda name: _make_agent(name))
+        doc_store = DocumentStore(tmp_path)
+        prompt_renderer = MagicMock(spec=PromptRenderer)
+        prompt_renderer.render_agent_prompt = MagicMock(return_value="prompt")
+        state_manager = MagicMock(spec=StateManager)
+        checkpoint = CheckpointConfig()
+        engine = PipelineEngine(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            state_manager=state_manager,
+            project_dir=tmp_path,
+            checkpoint_config=checkpoint,
+        )
+        return engine
+
+    def test_validate_sprint_mcp_services_returns_warnings(self, engine) -> None:
+        """_validate_sprint_mcp_services returns warnings for unconfigured services."""
+        sprints = [
+            SprintState(sprint_number=1, name="S1", integration_services=["stripe"]),
+            SprintState(sprint_number=2, name="S2", integration_services=["nonexistent"]),
+        ]
+        warnings = engine._validate_sprint_mcp_services(sprints)
+        # "nonexistent" is not in catalog, should produce a warning
+        assert any("nonexistent" in w for w in warnings)
+
+    def test_validate_sprint_mcp_services_no_warnings_for_known(self, engine) -> None:
+        """Known services with existing configs don't produce warnings about config."""
+        sprints = [
+            SprintState(sprint_number=1, name="S1", integration_services=["figma"]),
+        ]
+        warnings = engine._validate_sprint_mcp_services(sprints)
+        # figma.json exists, so no "config missing" warning; env var warning is possible
+        config_warnings = [w for w in warnings if "config" in w.lower()]
+        assert config_warnings == []
+
+    def test_validate_sprint_mcp_services_empty_services(self, engine) -> None:
+        """Sprints with no integration services produce no warnings."""
+        sprints = [
+            SprintState(sprint_number=1, name="S1", integration_services=[]),
+        ]
+        warnings = engine._validate_sprint_mcp_services(sprints)
+        assert warnings == []

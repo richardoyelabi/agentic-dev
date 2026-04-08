@@ -66,7 +66,11 @@ A Claude agent with Figma MCP tools extracts design information and produces a *
 - **Design Tokens** — color palette, typography, and spacing scale
 - **Navigation** — navigation structure and user flows
 
-**Prerequisite:** The Figma MCP server must be configured. Place your Figma MCP config at the project's `mcp_configs/figma.json`. See the [MCP server configuration docs](https://docs.anthropic.com/en/docs/claude-code/mcp) for setup instructions. The CLI will show an error with setup guidance if the config is missing.
+**Prerequisite:** The Figma MCP server requires a `FIGMA_ACCESS_TOKEN` environment variable. The CLI validates this before starting and shows guided setup instructions if anything is missing:
+
+1. Go to https://www.figma.com/developers/api#access-tokens
+2. Generate a personal access token
+3. Export it: `export FIGMA_ACCESS_TOKEN=<your-token>`
 
 Design analyses are passed to the Architect agent, which incorporates design tokens, component names, page layouts, and navigation flows into the Frontend Spec.
 
@@ -216,6 +220,30 @@ agentic-dev config my-app --autonomy maximum
 ## Cost Management
 
 The agency tracks costs per agent run. Use `agentic-dev cost my-app` to see a breakdown. Each agent has a max budget in its YAML definition — the agent stops when its turn limit is exhausted.
+
+## MCP Configuration for Third-Party Services
+
+The agency uses MCP (Model Context Protocol) servers to give agents direct access to third-party services. When a sprint's integration phase involves a known service, the integration agent receives MCP tools for that service automatically.
+
+### Supported Services
+
+| Service | Env Var(s) Required | How to Get |
+|---------|-------------------|------------|
+| **Figma** | `FIGMA_ACCESS_TOKEN` | https://www.figma.com/developers/api#access-tokens |
+| **GitHub** | `GITHUB_TOKEN` | https://github.com/settings/tokens (repo scope) |
+| **Stripe** | `STRIPE_API_KEY` | https://dashboard.stripe.com/apikeys |
+| **Supabase** | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Supabase project settings > API |
+
+### How It Works
+
+1. The sprint planner identifies which sprints need third-party integrations
+2. Before sprints begin, the engine validates MCP readiness and logs warnings for unconfigured services
+3. During the integration phase, known services get their MCP configs passed to the integration agent
+4. For services without MCP support, the integration agent falls back to SDK-only mode using `WebSearch` and official documentation
+
+### Pre-Flight Validation
+
+The CLI validates MCP prerequisites before starting expensive operations. For example, `--from-figma` checks that the Figma config and `FIGMA_ACCESS_TOKEN` are available before launching any agents. If validation fails, the CLI shows a status table and setup instructions.
 
 ## Troubleshooting
 

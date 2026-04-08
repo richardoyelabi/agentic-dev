@@ -491,3 +491,50 @@ class TestSubStepCheckpointing:
         assert result.backend_result is None
         assert result.frontend_result is not None
         assert claude.run.call_count == 2
+
+
+class TestIntegrationMCPConfig:
+    """Tests for MCP config resolution and passing to integration agent."""
+
+    @pytest.fixture
+    def runner(self, claude, tmp_path: Path) -> SprintRunner:
+        registry = MagicMock(spec=AgentRegistry)
+        registry.get = MagicMock(side_effect=lambda name: _make_agent(name))
+        doc_store = MagicMock(spec=DocumentStore)
+        doc_store.read = MagicMock(return_value="content")
+        doc_store.exists = MagicMock(return_value=False)
+        prompt_renderer = MagicMock(spec=PromptRenderer)
+        prompt_renderer.render_agent_prompt = MagicMock(return_value="prompt")
+        return SprintRunner(
+            claude=claude,
+            registry=registry,
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            project_dir=tmp_path,
+            project_type="fullstack",
+        )
+
+    def test_resolve_mcp_config_single_service(self, runner, tmp_path: Path) -> None:
+        """Single known service returns its config path directly."""
+        config = runner._resolve_integration_mcp_config(["figma"])
+        assert config is not None
+        assert config.name == "figma.json"
+
+    def test_resolve_mcp_config_unknown_service(self, runner) -> None:
+        """Unknown services return None."""
+        config = runner._resolve_integration_mcp_config(["nonexistent"])
+        assert config is None
+
+    def test_resolve_mcp_config_empty_list(self, runner) -> None:
+        """Empty services list returns None."""
+        config = runner._resolve_integration_mcp_config([])
+        assert config is None
+
+    def test_resolve_mcp_config_multiple_services(self, runner, tmp_path: Path) -> None:
+        """Multiple known services produces a merged config."""
+        config = runner._resolve_integration_mcp_config(["github", "stripe"])
+        assert config is not None
+        import json
+        data = json.loads(config.read_text())
+        assert "github" in data["mcpServers"]
+        assert "stripe" in data["mcpServers"]

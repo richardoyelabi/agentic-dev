@@ -1166,3 +1166,65 @@ async def test_skip_to_correction_no_issues_returns_existing(
     assert result.output == "prior action output"
     assert result.corrected is False
     assert claude.run.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# MCP config passthrough
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_config_passed_to_action_agent(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When mcp_config is provided, it flows to the action agent config."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+    fake_mcp_path = Path("/fake/mcp_config.json")
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        mcp_config=fake_mcp_path,
+    )
+
+    # Action agent (first call) should have mcp_config
+    action_call_agent = claude.run.call_args_list[0].kwargs["agent"]
+    assert action_call_agent.mcp_config == fake_mcp_path
+
+    # QA agent (second call) should NOT have mcp_config
+    qa_call_agent = claude.run.call_args_list[1].kwargs["agent"]
+    assert qa_call_agent.mcp_config is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_config_defaults_to_none(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When mcp_config is not provided, action agent has mcp_config=None."""
+    claude.run.side_effect = [
+        _make_claude_result("output", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    action_call_agent = claude.run.call_args_list[0].kwargs["agent"]
+    assert action_call_agent.mcp_config is None

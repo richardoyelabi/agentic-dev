@@ -9,6 +9,7 @@ from pathlib import Path
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
+from agentic_dev.mcp.catalog import get_mcp_config_path, merge_mcp_configs
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.logging import get_event_logger, emit
@@ -95,6 +96,24 @@ class SprintRunner:
         """Save pipeline state if state_manager is configured."""
         if self._state_manager is not None and self._pipeline_state is not None:
             self._state_manager.save(self._pipeline_state)
+
+    def _resolve_integration_mcp_config(self, services: list[str]) -> Path | None:
+        """Resolve MCP config for integration services.
+
+        Returns the config path for a single service, a merged config for
+        multiple services, or None if no known services have configs.
+        """
+        if not services:
+            return None
+
+        available = [s for s in services if get_mcp_config_path(s) is not None]
+        if not available:
+            return None
+
+        if len(available) == 1:
+            return get_mcp_config_path(available[0])
+
+        return merge_mcp_configs(available)
 
     async def run_sprint(
         self,
@@ -291,6 +310,8 @@ class SprintRunner:
                 "sprint_scope": sprint_scope,
                 **extra_context,
             }
+            integration_services = sprint_state.integration_services if sprint_state else []
+            mcp_config = self._resolve_integration_mcp_config(integration_services)
             integration_result = await run_qa_cycle(
                 claude=self._claude,
                 action_agent=self._registry.get("integration"),
@@ -304,6 +325,7 @@ class SprintRunner:
                 session_id=sprint_state.integration_session_id if sprint_state else None,
                 on_substep=_make_on_substep(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION_CORRECTION),
                 skip_to_correction=_should_skip(current_status, SprintStatus.INTEGRATION_QA),
+                mcp_config=mcp_config,
             )
             partial_cost[0] += integration_result.total_cost
 

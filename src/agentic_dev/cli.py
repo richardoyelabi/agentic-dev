@@ -306,7 +306,11 @@ def new(
 
         if figma_sources:
             from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+            from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
             from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
+
+            if not check_mcp_prerequisites(["figma"], console):
+                raise typer.Exit(code=1)
 
             for src in figma_sources:
                 label = f"{src.value} ({src.annotation})" if src.annotation else src.value
@@ -845,7 +849,11 @@ def adopt(
 
         if figma_sources:
             from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+            from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
             from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
+
+            if not check_mcp_prerequisites(["figma"], console):
+                raise typer.Exit(code=1)
 
             for src in figma_sources:
                 label = f"{src.value} ({src.annotation})" if src.annotation else src.value

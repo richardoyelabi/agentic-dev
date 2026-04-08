@@ -285,6 +285,13 @@ class PipelineEngine:
         state.sprints = self._parse_sprint_plan(sprint_plan_text)
         state.current_sprint = 1 if state.sprints else None
 
+        for sprint in state.sprints:
+            if sprint.integration_services:
+                self._doc_store.write(
+                    f"sprint_{sprint.sprint_number}_integration_flag",
+                    ", ".join(sprint.integration_services),
+                )
+
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
         state.active_session_id = None
@@ -354,10 +361,57 @@ class PipelineEngine:
         except Exception:
             return {}
 
+    def _validate_sprint_mcp_services(
+        self, sprints: list[SprintState],
+    ) -> list[str]:
+        """Check MCP readiness for all integration services across sprints.
+
+        Returns a list of human-readable warning strings for services
+        that are not fully configured. Does not block execution.
+        """
+        from agentic_dev.mcp.catalog import SERVICE_CATALOG, validate_service
+
+        all_services: set[str] = set()
+        for sprint in sprints:
+            all_services.update(sprint.integration_services)
+
+        if not all_services:
+            return []
+
+        warnings: list[str] = []
+        for service in sorted(all_services):
+            if service not in SERVICE_CATALOG:
+                warnings.append(
+                    f"Service '{service}' is not in the MCP catalog "
+                    f"(integration agent will use SDK-only mode)"
+                )
+                continue
+            result = validate_service(service)
+            if not result.config_exists:
+                warnings.append(
+                    f"MCP config missing for '{service}'"
+                )
+            elif result.missing_env_vars:
+                missing = ", ".join(result.missing_env_vars)
+                warnings.append(
+                    f"Service '{service}' missing env vars: {missing}"
+                )
+        return warnings
+
     async def _run_sprints(self, state: PipelineState) -> PipelineState:
         """Run each sprint sequentially using SprintRunner."""
         project_type_str = state.project_type.value if state.project_type else "fullstack"
         sprint_runner = self._get_sprint_runner(project_type_str, state=state)
+
+        mcp_warnings = self._validate_sprint_mcp_services(state.sprints)
+        if mcp_warnings:
+            from agentic_dev.logging import get_event_logger, emit
+            from agentic_dev.logging.events import MCPValidationEvent
+            _event_log = get_event_logger("engine")
+            emit(_event_log, MCPValidationEvent(
+                warnings=mcp_warnings,
+                message="MCP validation: " + "; ".join(mcp_warnings),
+            ))
 
         for sprint in state.sprints:
             if sprint.status == SprintStatus.COMPLETE:
@@ -485,18 +539,53 @@ class PipelineEngine:
     def _parse_sprint_plan(plan_text: str) -> list[SprintState]:
         """Extract sprint entries from the plan text.
 
-        Looks for lines matching "Sprint N: <name>" pattern.
+        Looks for lines matching "Sprint N: <name>" pattern and parses
+        integration fields (``Needs Integration`` and ``Integration Services``)
+        for each sprint block.
+
         Falls back to a single sprint if no pattern is found.
         """
         import re
 
+        sprint_header_re = re.compile(r"Sprint\s+(\d+):\s*(.+)")
+        needs_integration_re = re.compile(
+            r"\*\*Needs Integration:\*\*\s*(yes|no)", re.IGNORECASE
+        )
+        integration_services_re = re.compile(
+            r"\*\*Integration Services:\*\*\s*(.+)", re.IGNORECASE
+        )
+
+        # Split text into blocks per sprint header
+        headers = list(sprint_header_re.finditer(plan_text))
+        if not headers:
+            return [SprintState(sprint_number=1, name="Sprint 1")]
+
         sprints: list[SprintState] = []
-        for match in re.finditer(r"Sprint\s+(\d+):\s*(.+)", plan_text):
+        for i, match in enumerate(headers):
             number = int(match.group(1))
             name = match.group(2).strip()
-            sprints.append(SprintState(sprint_number=number, name=name))
 
-        if not sprints:
-            sprints.append(SprintState(sprint_number=1, name="Sprint 1"))
+            # Extract block text between this header and the next
+            start = match.end()
+            end = headers[i + 1].start() if i + 1 < len(headers) else len(plan_text)
+            block = plan_text[start:end]
+
+            integration_services: list[str] = []
+            needs_match = needs_integration_re.search(block)
+            if needs_match and needs_match.group(1).lower() == "yes":
+                services_match = integration_services_re.search(block)
+                if services_match:
+                    raw_services = services_match.group(1).strip()
+                    integration_services = [
+                        s.strip().lower()
+                        for s in raw_services.split(",")
+                        if s.strip()
+                    ]
+
+            sprints.append(SprintState(
+                sprint_number=number,
+                name=name,
+                integration_services=integration_services,
+            ))
 
         return sprints

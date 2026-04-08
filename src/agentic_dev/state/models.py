@@ -62,6 +62,7 @@ class SprintState(BaseModel):
     backend_session_id: str | None = None
     frontend_session_id: str | None = None
     integration_session_id: str | None = None
+    integration_services: list[str] = Field(default_factory=list)
     failed_at_step: SprintStatus | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None

@@ -416,3 +416,11 @@ class StructureDetectionEvent(LogEvent):
     frontend: str | None
     backend: str | None
     project_type: str
+
+
+class MCPValidationEvent(LogEvent):
+    """Emitted when pre-sprint MCP validation finds issues."""
+
+    event_type: str = "mcp_validation"
+    warnings: list[str]
+    level: str = "WARNING"

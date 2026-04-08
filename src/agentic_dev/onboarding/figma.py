@@ -10,8 +10,8 @@ import asyncio
 from pathlib import Path
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
-from agentic_dev.config import MCP_CONFIGS_DIR
 from agentic_dev.exceptions import AgenticDevError
+from agentic_dev.mcp.catalog import get_mcp_config_path
 from agentic_dev.onboarding.models import AnnotatedSource
 from agentic_dev.orchestrator.agent_bridge import AgentRunConfig
 
@@ -72,8 +72,8 @@ def get_figma_mcp_config() -> Path:
     Raises:
         FigmaMCPNotConfigured: If no Figma MCP config exists.
     """
-    figma_config = MCP_CONFIGS_DIR / "figma.json"
-    if not figma_config.exists():
+    figma_config = get_mcp_config_path("figma")
+    if figma_config is None:
         raise FigmaMCPNotConfigured()
     return figma_config
 

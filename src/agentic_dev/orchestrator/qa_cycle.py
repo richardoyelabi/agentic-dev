@@ -170,6 +170,7 @@ async def run_qa_cycle(
     session_id: str | None = None,
     on_substep: Callable[[str], None] | None = None,
     skip_to_correction: bool = False,
+    mcp_config: Path | None = None,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -200,7 +201,7 @@ async def run_qa_cycle(
     qa_key = qa_output_key or output_doc_name
     qa_report_name = f"qa_reports/{output_doc_name}"
 
-    action_config = to_run_config(action_agent)
+    action_config = to_run_config(action_agent, mcp_config=mcp_config)
     qa_config = to_run_config(qa_agent)
 
     if skip_to_correction:

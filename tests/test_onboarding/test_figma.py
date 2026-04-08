@@ -42,8 +42,8 @@ def _make_mock_runner(return_value: ClaudeResult | None = None) -> MagicMock:
 
 
 class TestGetFigmaMcpConfig:
-    def test_raises_when_figma_json_missing(self, tmp_path: Path) -> None:
-        with patch("agentic_dev.onboarding.figma.MCP_CONFIGS_DIR", tmp_path):
+    def test_raises_when_figma_json_missing(self) -> None:
+        with patch("agentic_dev.onboarding.figma.get_mcp_config_path", return_value=None):
             with pytest.raises(FigmaMCPNotConfigured, match="not configured"):
                 get_figma_mcp_config()
 
@@ -51,7 +51,7 @@ class TestGetFigmaMcpConfig:
         figma_config = tmp_path / "figma.json"
         figma_config.write_text("{}", encoding="utf-8")
 
-        with patch("agentic_dev.onboarding.figma.MCP_CONFIGS_DIR", tmp_path):
+        with patch("agentic_dev.onboarding.figma.get_mcp_config_path", return_value=figma_config):
             result = get_figma_mcp_config()
 
         assert result == figma_config
