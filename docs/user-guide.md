@@ -66,7 +66,7 @@ A Claude agent with Figma MCP tools extracts design information and produces a *
 - **Design Tokens** — color palette, typography, and spacing scale
 - **Navigation** — navigation structure and user flows
 
-**Prerequisite:** The Figma MCP server must be configured. Place your Figma MCP config at the project's `mcp_configs/figma.json`. See the [MCP server configuration docs](https://github.com/anthropics/claude-code/blob/main/docs/mcp.md) for setup instructions. The CLI will show an error with setup guidance if the config is missing.
+**Prerequisite:** The Figma MCP server must be configured. Place your Figma MCP config at the project's `mcp_configs/figma.json`. See the [MCP server configuration docs](https://docs.anthropic.com/en/docs/claude-code/mcp) for setup instructions. The CLI will show an error with setup guidance if the config is missing.
 
 Design analyses are passed to the Architect agent, which incorporates design tokens, component names, page layouts, and navigation flows into the Frontend Spec.
 

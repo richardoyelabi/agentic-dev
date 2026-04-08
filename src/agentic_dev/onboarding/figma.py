@@ -58,7 +58,7 @@ class FigmaMCPNotConfigured(AgenticDevError):
         super().__init__(
             "Figma MCP server is not configured. "
             "To use Figma onboarding, configure the Figma MCP server. "
-            "See https://github.com/anthropics/claude-code/blob/main/docs/mcp.md "
+            "See https://docs.anthropic.com/en/docs/claude-code/mcp "
             "for MCP server configuration instructions."
         )
 
