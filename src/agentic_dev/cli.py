@@ -24,8 +24,9 @@ from agentic_dev.config import (
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgenticDevError, CheckpointPause, GracefulShutdown
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig, from_autonomy_level
+from agentic_dev.mcp.setup import check_mcp_prerequisites
 from agentic_dev.state.manager import StateManager
-from agentic_dev.state.models import PipelinePhase, PipelineState, SprintStatus
+from agentic_dev.state.models import PipelinePhase, PipelineState, SprintState, SprintStatus
 from agentic_dev.workspace.manager import WorkspaceManager
 
 console = Console()
@@ -1080,3 +1081,216 @@ def _resolve_items_interactively(items: list) -> None:
             default="to_spec",
         )
         item.resolution = choice
+
+
+# ---------------------------------------------------------------------------
+# Integration statuses that indicate a crashed/stuck integration run
+# ---------------------------------------------------------------------------
+_INTEGRATION_STUCK_STATUSES = frozenset({
+    SprintStatus.INTEGRATION,
+    SprintStatus.INTEGRATION_QA,
+    SprintStatus.INTEGRATION_CORRECTION,
+})
+
+
+def _qualify_sprints(
+    sprints: list[SprintState],
+    sprint_number: int | None,
+    force: bool,
+) -> list[SprintState]:
+    """Filter sprints that qualify for integration reruns.
+
+    Qualifying means the sprint has integration_services AND one of:
+    - Stuck mid-integration (crashed previous run)
+    - Never integrated (no integration_session_id)
+    - force=True (rerun even if already integrated)
+    """
+    candidates = [s for s in sprints if s.integration_services]
+    if sprint_number is not None:
+        candidates = [s for s in candidates if s.sprint_number == sprint_number]
+
+    qualifying: list[SprintState] = []
+    for sprint in candidates:
+        if sprint.status in _INTEGRATION_STUCK_STATUSES:
+            qualifying.append(sprint)
+        elif sprint.integration_session_id is None:
+            qualifying.append(sprint)
+        elif force:
+            qualifying.append(sprint)
+
+    return qualifying
+
+
+def _run_integration(
+    project_dir: Path,
+    state: PipelineState,
+    sprints: list[SprintState],
+) -> None:
+    """Run integration for qualifying sprints using IntegrationRunner."""
+    from agentic_dev.agents.registry import AgentRegistry  # noqa: WPS433
+    from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+    from agentic_dev.config import AGENT_DEFINITIONS_DIR, PROMPT_TEMPLATES_DIR  # noqa: WPS433
+    from agentic_dev.logging import (  # noqa: WPS433
+        emit,
+        generate_run_id,
+        get_event_logger,
+        setup_logging,
+        teardown_logging,
+    )
+    from agentic_dev.logging.events import PipelineStartEvent  # noqa: WPS433
+    from agentic_dev.orchestrator.integration_runner import IntegrationRunner  # noqa: WPS433
+    from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
+
+    log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
+    claude = ClaudeRunner(log_dir=log_dir)
+    registry = AgentRegistry(definitions_dir=AGENT_DEFINITIONS_DIR)
+    doc_store = DocumentStore(project_dir)
+    prompt_renderer = PromptRenderer(templates_dir=PROMPT_TEMPLATES_DIR)
+    state_manager = StateManager(project_dir)
+
+    runner = IntegrationRunner(
+        claude=claude,
+        registry=registry,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        project_dir=project_dir,
+        state_manager=state_manager,
+        pipeline_state=state,
+    )
+
+    run_id = generate_run_id()
+    _event_log = get_event_logger("integrate")
+    setup_logging(run_id, state.project_name, log_dir, console)
+
+    start_time = datetime.now(timezone.utc)
+
+    emit(_event_log, PipelineStartEvent(
+        mode="integrate",
+        phase=str(state.phase),
+        command_args={},
+        message=f"Integration started for {len(sprints)} sprint(s)",
+    ))
+
+    try:
+        total_cost = 0.0
+        for sprint in sprints:
+            resuming = sprint.status in _INTEGRATION_STUCK_STATUSES
+            label = "Resuming" if resuming else "Running"
+            console.print(
+                f"[cyan]{label} integration for sprint {sprint.sprint_number}: "
+                f"{sprint.name}[/cyan]"
+            )
+            result = asyncio.run(runner.run_integration(sprint))
+            total_cost += result.total_cost
+            state.total_cost_usd += result.total_cost
+            state_manager.save(state)
+            console.print(
+                f"  [green]Sprint {sprint.sprint_number} integration complete "
+                f"(${result.total_cost:.4f})[/green]"
+            )
+
+        duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+        teardown_logging()
+
+        console.print()
+        console.print(
+            f"[bold green]Integration complete![/bold green]\n"
+            f"  Sprints integrated: {len(sprints)}\n"
+            f"  Cost: ${total_cost:.4f}\n"
+            f"  Duration: {duration_s:.1f}s"
+        )
+    except AgenticDevError as exc:
+        teardown_logging()
+        _display_error(exc)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def integrate(
+    app_name: str = typer.Argument(help="Name of the application"),
+    sprint_number: int | None = typer.Option(
+        None, "--sprint", help="Specific sprint number to integrate",
+    ),
+    path: str | None = typer.Option(None, help="Directory containing the project"),
+    force: bool = typer.Option(
+        False, "--force", help="Rerun integration even if already completed",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip confirmation prompts",
+    ),
+) -> None:
+    """Rerun integration stages with properly configured MCP services.
+
+    Use this after completing a pipeline run where MCP services were not
+    configured. Configure the services first, then run this command to
+    integrate them into the relevant sprints.
+    """
+    try:
+        workspace_mgr = _get_workspace_manager(path)
+        project_dir = workspace_mgr.get_project_dir(app_name)
+
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+
+        terminal_phases = (PipelinePhase.COMPLETE, PipelinePhase.ADOPTED)
+        if state.phase not in terminal_phases:
+            console.print(
+                "[bold red]Project must be in COMPLETE or ADOPTED state to integrate. "
+                f"Current phase: {state.phase}[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+        qualifying = _qualify_sprints(state.sprints, sprint_number, force)
+
+        if not qualifying:
+            console.print(
+                "[bold yellow]No qualifying sprints found for integration.[/bold yellow]\n"
+                "  Sprints must have integration services defined and not already be integrated.\n"
+                "  Use --force to rerun integration for already-integrated sprints."
+            )
+            raise typer.Exit(code=1)
+
+        # Display qualifying sprints
+        table = Table(title="Sprints to Integrate")
+        table.add_column("Sprint", style="bold")
+        table.add_column("Name")
+        table.add_column("Services")
+        table.add_column("Status")
+
+        for sprint in qualifying:
+            if sprint.status in _INTEGRATION_STUCK_STATUSES:
+                status_label = f"[yellow]Resuming ({sprint.status})[/yellow]"
+            elif sprint.integration_session_id is not None:
+                status_label = "[cyan]Rerun (--force)[/cyan]"
+            else:
+                status_label = "[green]Fresh[/green]"
+            table.add_row(
+                str(sprint.sprint_number),
+                sprint.name,
+                ", ".join(sprint.integration_services),
+                status_label,
+            )
+        console.print(table)
+
+        # Validate MCP readiness
+        all_services = sorted({
+            s for sprint in qualifying for s in sprint.integration_services
+        })
+        if not check_mcp_prerequisites(all_services, console, project_dir):
+            console.print(
+                "\n[bold red]MCP services not fully configured. "
+                "Please configure them and retry.[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+        if not yes:
+            typer.confirm(
+                f"\nProceed with integration for {len(qualifying)} sprint(s)?",
+                abort=True,
+            )
+
+        _run_integration(project_dir, state, qualifying)
+
+    except AgenticDevError as exc:
+        _display_error(exc)
+        raise typer.Exit(code=1)

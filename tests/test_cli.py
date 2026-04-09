@@ -696,3 +696,225 @@ class TestRemediateCommand:
         result = runner.invoke(app, ["remediate", "--help"])
         assert result.exit_code == 0
         assert "UAT" in result.output or "remediat" in result.output.lower()
+
+
+class TestIntegrateCommand:
+    def test_integrate_help(self) -> None:
+        result = runner.invoke(app, ["integrate", "--help"])
+        assert result.exit_code == 0
+        assert "integration" in result.output.lower() or "mcp" in result.output.lower()
+
+    def test_integrate_requires_complete_or_adopted(self, project_with_state: Path) -> None:
+        """Integrate should fail when project is not in COMPLETE or ADOPTED phase."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.SPRINTING
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["integrate", "test-app", "--path", str(project_with_state), "--yes"],
+        )
+
+        assert result.exit_code == 1
+        assert "COMPLETE" in result.output or "ADOPTED" in result.output
+
+    def test_integrate_no_qualifying_sprints(self, project_with_state: Path) -> None:
+        """Integrate should exit when no sprints have integration services."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.sprints = [
+            SprintState(sprint_number=1, name="Sprint 1", status=SprintStatus.COMPLETE),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["integrate", "test-app", "--path", str(project_with_state), "--yes"],
+        )
+
+        assert result.exit_code == 1
+        assert "no qualifying" in result.output.lower() or "no sprint" in result.output.lower()
+
+    @patch("agentic_dev.cli.check_mcp_prerequisites", return_value=False)
+    def test_integrate_blocks_on_mcp_not_ready(
+        self, mock_mcp_check, project_with_state: Path,
+    ) -> None:
+        """Integrate should exit when MCP services are not configured."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.sprints = [
+            SprintState(
+                sprint_number=1, name="Sprint 1",
+                status=SprintStatus.COMPLETE,
+                integration_services=["github"],
+            ),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["integrate", "test-app", "--path", str(project_with_state), "--yes"],
+        )
+
+        assert result.exit_code == 1
+        mock_mcp_check.assert_called_once()
+
+    @patch("agentic_dev.cli.check_mcp_prerequisites", return_value=True)
+    @patch("agentic_dev.cli._run_integration")
+    def test_integrate_runs_for_qualifying_sprint(
+        self, mock_run_integration, mock_mcp_check, project_with_state: Path,
+    ) -> None:
+        """Integrate should run for sprints with integration services."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.sprints = [
+            SprintState(
+                sprint_number=1, name="Sprint 1",
+                status=SprintStatus.COMPLETE,
+                integration_services=["github"],
+            ),
+            SprintState(
+                sprint_number=2, name="Sprint 2",
+                status=SprintStatus.COMPLETE,
+            ),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["integrate", "test-app", "--path", str(project_with_state), "--yes"],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_run_integration.assert_called_once()
+
+    @patch("agentic_dev.cli.check_mcp_prerequisites", return_value=True)
+    @patch("agentic_dev.cli._run_integration")
+    def test_integrate_sprint_filter(
+        self, mock_run_integration, mock_mcp_check, project_with_state: Path,
+    ) -> None:
+        """--sprint filters to a specific sprint number."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.sprints = [
+            SprintState(
+                sprint_number=1, name="Sprint 1",
+                status=SprintStatus.COMPLETE,
+                integration_services=["github"],
+            ),
+            SprintState(
+                sprint_number=2, name="Sprint 2",
+                status=SprintStatus.COMPLETE,
+                integration_services=["stripe"],
+            ),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            [
+                "integrate", "test-app",
+                "--sprint", "2",
+                "--path", str(project_with_state),
+                "--yes",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_run_integration.assert_called_once()
+        # Verify only sprint 2 was passed
+        call_args = mock_run_integration.call_args
+        sprints_arg = call_args[1].get("sprints") or call_args[0][2]
+        assert len(sprints_arg) == 1
+        assert sprints_arg[0].sprint_number == 2
+
+    @patch("agentic_dev.cli.check_mcp_prerequisites", return_value=True)
+    @patch("agentic_dev.cli._run_integration")
+    def test_integrate_skips_already_integrated(
+        self, mock_run_integration, mock_mcp_check, project_with_state: Path,
+    ) -> None:
+        """Sprints with existing integration_session_id and COMPLETE status are skipped."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.sprints = [
+            SprintState(
+                sprint_number=1, name="Sprint 1",
+                status=SprintStatus.COMPLETE,
+                integration_services=["github"],
+                integration_session_id="sess-already-done",
+            ),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["integrate", "test-app", "--path", str(project_with_state), "--yes"],
+        )
+
+        assert result.exit_code == 1
+        assert "no qualifying" in result.output.lower() or "already" in result.output.lower()
+
+    @patch("agentic_dev.cli.check_mcp_prerequisites", return_value=True)
+    @patch("agentic_dev.cli._run_integration")
+    def test_integrate_force_reruns_completed(
+        self, mock_run_integration, mock_mcp_check, project_with_state: Path,
+    ) -> None:
+        """--force includes sprints that already have integration_session_id."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.sprints = [
+            SprintState(
+                sprint_number=1, name="Sprint 1",
+                status=SprintStatus.COMPLETE,
+                integration_services=["github"],
+                integration_session_id="sess-already-done",
+            ),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            [
+                "integrate", "test-app",
+                "--force",
+                "--path", str(project_with_state),
+                "--yes",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_run_integration.assert_called_once()
+
+    @patch("agentic_dev.cli.check_mcp_prerequisites", return_value=True)
+    @patch("agentic_dev.cli._run_integration")
+    def test_integrate_resumes_stuck_sprint(
+        self, mock_run_integration, mock_mcp_check, project_with_state: Path,
+    ) -> None:
+        """Sprints stuck at INTEGRATION_QA are included automatically."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state.sprints = [
+            SprintState(
+                sprint_number=1, name="Sprint 1",
+                status=SprintStatus.INTEGRATION_QA,
+                integration_services=["github"],
+                integration_session_id="sess-crashed",
+            ),
+        ]
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["integrate", "test-app", "--path", str(project_with_state), "--yes"],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_run_integration.assert_called_once()

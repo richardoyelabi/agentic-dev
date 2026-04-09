@@ -172,7 +172,7 @@ agentic-dev adopt /path/to/my-project --extend "Add an admin dashboard"
 
 Adoption creates `.agentic-dev/` and `docs/` in-place, detects the directory structure (or uses your explicit `--frontend`/`--backend` overrides), then runs specialized agents to produce `frontend_spec.md`, `backend_spec.md`, `api_contract.md`, `features.md`, and `structured_input.md`.
 
-After adoption, you can use all standard commands (`update`, `resume`, `sync`, `status`, `cost`) on the adopted project.
+After adoption, you can use all standard commands (`update`, `resume`, `sync`, `integrate`, `status`, `cost`) on the adopted project.
 
 When `--extend` is used, adoption feeds into the standard pipeline: the Input Processor receives the extracted specs plus your new requirements, and the pipeline pauses at the design checkpoint for review before building.
 
@@ -204,6 +204,36 @@ In interactive mode, each drift item is presented and you choose how to resolve 
 - **to_code** — queue a code change (apply later with `agentic-dev update --from-sync`)
 - **ignore** — mark as intentional divergence (won't appear again)
 - **defer** — skip for now, will reappear on next sync
+
+## Integrating Third-Party Services After Completion
+
+If you ran a pipeline without MCP services configured (e.g. Stripe, GitHub), the integration agent operated in SDK-only mode. The `integrate` command lets you configure the services and rerun just the integration stages — no need to re-run the full pipeline.
+
+```bash
+# Configure your MCP servers first
+claude mcp add stripe
+claude mcp add github
+
+# Rerun integration for all qualifying sprints
+agentic-dev integrate my-app
+
+# Target a specific sprint
+agentic-dev integrate my-app --sprint 2
+
+# Rerun even if integration was already completed
+agentic-dev integrate my-app --force
+
+# Skip confirmation
+agentic-dev integrate my-app --yes
+```
+
+The command:
+1. Validates the project is in COMPLETE or ADOPTED state
+2. Identifies sprints that have integration services but haven't been properly integrated
+3. Checks that all required MCP servers are configured in Claude Code (blocks if not ready)
+4. Runs the integration + integration QA cycle for each qualifying sprint
+
+Sprints that crashed mid-integration (e.g. due to a network error) are automatically resumed from where they left off. Sprints that already completed integration are skipped unless `--force` is used.
 
 ## Configuring Checkpoints
 
