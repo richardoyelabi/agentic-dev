@@ -224,10 +224,11 @@ def discover_mcp_servers(
     """Discover all MCP servers configured in Claude Code.
 
     Reads from (in precedence order, later overrides earlier):
-    1. ``~/.claude/settings.json`` (global ``mcpServers``)
-    2. ``<project>/.claude/settings.json`` (project ``mcpServers``)
-    3. ``<project>/.claude/settings.local.json`` (project-local ``mcpServers``)
-    4. Enabled plugins (external and cached plugin MCP servers)
+    1. ``~/.claude.json`` (user config ``mcpServers``)
+    2. ``~/.claude/settings.json`` (global ``mcpServers``)
+    3. ``<project>/.claude/settings.json`` (project ``mcpServers``)
+    4. ``<project>/.claude/settings.local.json`` (project-local ``mcpServers``)
+    5. Enabled plugins (external and cached plugin MCP servers)
 
     Args:
         project_dir: Project directory to check for project-level settings.
@@ -241,7 +242,12 @@ def discover_mcp_servers(
 
     servers: dict[str, MCPServerEntry] = {}
 
-    # 1. Global settings (mcpServers)
+    # 1. User config (~/.claude.json — servers added via `claude mcp add`)
+    servers.update(
+        _read_settings_file(claude_home.parent / ".claude.json", "user-config")
+    )
+
+    # 2. Global settings (mcpServers)
     servers.update(_read_settings_file(claude_home / "settings.json", "global"))
 
     # 2. Project settings

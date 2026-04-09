@@ -281,6 +281,45 @@ class TestDiscoverMCPServers:
         env = discover_mcp_servers(claude_home=claude_home)
         assert not env.has_server("github")
 
+    def test_reads_user_config(self, tmp_path: Path) -> None:
+        claude_home = tmp_path / ".claude"
+        claude_home.mkdir(parents=True)
+        user_config = tmp_path / ".claude.json"
+        user_config.write_text(json.dumps({
+            "mcpServers": {
+                "figma-mcp-go": {
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@vkhanhqui/figma-mcp-go@latest"],
+                }
+            }
+        }))
+        env = discover_mcp_servers(claude_home=claude_home)
+        assert env.has_server("figma-mcp-go")
+        assert env.servers["figma-mcp-go"].source == "user-config"
+        assert env.servers["figma-mcp-go"].transport == "stdio"
+
+    def test_global_settings_override_user_config(self, tmp_path: Path) -> None:
+        claude_home = tmp_path / ".claude"
+        user_config = tmp_path / ".claude.json"
+        user_config.write_text(json.dumps({
+            "mcpServers": {
+                "figma": {
+                    "command": "npx",
+                    "args": ["-y", "@vkhanhqui/figma-mcp-go@latest"],
+                }
+            }
+        }))
+        _write_settings(claude_home / "settings.json", {
+            "figma": {
+                "type": "sse",
+                "url": "https://custom-figma.example.com/sse",
+            }
+        })
+        env = discover_mcp_servers(claude_home=claude_home)
+        assert env.servers["figma"].source == "global"
+        assert env.servers["figma"].transport == "sse"
+
     def test_combines_settings_and_plugins(self, tmp_path: Path) -> None:
         claude_home = tmp_path / ".claude"
         settings = claude_home / "settings.json"
