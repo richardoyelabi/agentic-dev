@@ -201,6 +201,7 @@ async def _reverse_engineer_spec(
         workspace=workspace,
         doc_store=doc_store,
         prompt_renderer=prompt_renderer,
+        qa_output_key="spec_output",
         extra_context={
             "target_spec_type": target_spec_type,
             "existing_specs": existing_specs,
@@ -237,6 +238,7 @@ async def _extract_features(
         workspace=workspace,
         doc_store=doc_store,
         prompt_renderer=prompt_renderer,
+        qa_output_key="features_output",
         extra_context={"specs": specs},
     )
 
