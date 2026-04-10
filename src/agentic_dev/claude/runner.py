@@ -188,6 +188,57 @@ class ClaudeRunner:
         return ""
 
     @staticmethod
+    def _recover_longest_from_session(
+        session_id: str,
+        working_dir: Path,
+        claude_dir: Path | None = None,
+    ) -> str:
+        """Find the longest assistant text from a session JSONL.
+
+        Unlike ``_recover_result_from_session`` (which returns the *last*
+        assistant message), this method scans *all* assistant messages and
+        returns the one with the most text.  This is useful when the CLI
+        ``result`` field captured a short trailing summary while the real
+        document lives in an earlier message.
+
+        Returns the longest text, or an empty string if recovery fails.
+        """
+        if claude_dir is None:
+            claude_dir = Path.home() / ".claude"
+
+        encoded_path = str(working_dir).replace("/", "-")
+        jsonl_path = claude_dir / "projects" / encoded_path / f"{session_id}.jsonl"
+
+        if not jsonl_path.exists():
+            return ""
+
+        try:
+            lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ""
+
+        longest = ""
+        for line in lines:
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("type") != "assistant":
+                continue
+            content = msg.get("message", {}).get("content", [])
+            text_parts = [
+                block["text"]
+                for block in content
+                if block.get("type") == "text" and block.get("text")
+            ]
+            if text_parts:
+                combined = "".join(text_parts)
+                if len(combined) > len(longest):
+                    longest = combined
+
+        return longest
+
+    @staticmethod
     def _extract_session_id(stdout: str) -> str | None:
         """Try to extract session_id from potentially partial JSON output."""
         try:
@@ -350,12 +401,21 @@ class ClaudeRunner:
         result_text = raw_json.get("result", "") or ""
         sid = raw_json.get("session_id")
 
-        # Fallback: if the CLI returned empty result but the agent produced
-        # text (visible in the session JSONL), recover it from there.
-        if not result_text.strip() and sid:
-            recovered = self._recover_result_from_session(sid, working_dir)
-            if recovered.strip():
-                result_text = recovered
+        # Fallback recovery from session JSONL when the CLI result is
+        # missing or appears to be a trailing summary.
+        if sid:
+            if not result_text.strip():
+                # Empty result: recover the last assistant text.
+                recovered = self._recover_result_from_session(sid, working_dir)
+                if recovered.strip():
+                    result_text = recovered
+            elif len(result_text) < 500:
+                # Short result: the agent may have appended a brief summary
+                # after the real document.  If the session contains a much
+                # longer assistant message, prefer it.
+                longest = self._recover_longest_from_session(sid, working_dir)
+                if len(longest) > max(len(result_text) * 5, 1000):
+                    result_text = longest
 
         result = ClaudeResult(
             text=result_text,

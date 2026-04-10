@@ -27,6 +27,12 @@ from agentic_dev.state.models import ProjectType
 
 _event_log = get_event_logger("adoption")
 
+_SPEC_CONTENT_MARKERS: dict[str, list[str]] = {
+    "frontend_spec": ["# Frontend Spec"],
+    "backend_spec": ["# Backend Spec"],
+    "api_contract": ["# API Contract"],
+}
+
 
 @dataclass
 class AdoptionResult:
@@ -214,6 +220,7 @@ async def _reverse_engineer_spec(
             "target_spec_type": target_spec_type,
             "existing_specs": existing_specs,
         },
+        content_markers=_SPEC_CONTENT_MARKERS.get(target_spec_type),
     )
 
     return qa_result, target_spec_type

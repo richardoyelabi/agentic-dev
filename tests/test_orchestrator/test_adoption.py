@@ -241,6 +241,74 @@ class TestRunAdoption:
             assert feature_calls[0].kwargs.get("qa_output_key") == "features_output"
 
     @pytest.mark.asyncio
+    async def test_reverse_engineer_passes_content_markers(self, tmp_path):
+        """Ensure _reverse_engineer_spec passes correct content_markers
+        for each spec type so content-marker recovery can work."""
+        from agentic_dev.documents.store import DocumentStore
+        from agentic_dev.orchestrator.qa_cycle import QACycleResult
+
+        mock_qa_result = QACycleResult(
+            output="# Spec content",
+            initial_qa_report="APPROVED",
+            final_qa_report="APPROVED",
+            action_cost=1.0,
+            initial_qa_cost=0.5,
+        )
+
+        (tmp_path / "docs").mkdir()
+        doc_store = DocumentStore(tmp_path)
+        (tmp_path / "client").mkdir()
+        (tmp_path / "server").mkdir()
+
+        mock_claude = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock()
+        mock_renderer = MagicMock()
+
+        directory_map = DirectoryMap(frontend="client", backend="server")
+
+        with patch(
+            "agentic_dev.orchestrator.adoption.run_qa_cycle",
+            new_callable=AsyncMock,
+            return_value=mock_qa_result,
+        ) as mock_run_qa:
+            await run_adoption(
+                claude=mock_claude,
+                registry=mock_registry,
+                prompt_renderer=mock_renderer,
+                doc_store=doc_store,
+                project_dir=tmp_path,
+                directory_map=directory_map,
+                project_type=ProjectType.FULLSTACK,
+            )
+
+            # Check spec calls pass correct content_markers
+            expected_markers = {
+                "frontend_spec": ["# Frontend Spec"],
+                "backend_spec": ["# Backend Spec"],
+                "api_contract": ["# API Contract"],
+            }
+            spec_calls = [
+                call for call in mock_run_qa.call_args_list
+                if call.kwargs.get("output_doc_name") in expected_markers
+            ]
+            assert len(spec_calls) == 3
+            for call in spec_calls:
+                doc_name = call.kwargs["output_doc_name"]
+                assert call.kwargs.get("content_markers") == expected_markers[doc_name], (
+                    f"Expected content_markers={expected_markers[doc_name]} for "
+                    f"{doc_name}, got {call.kwargs.get('content_markers')!r}"
+                )
+
+            # Feature extraction should NOT have content_markers
+            feature_calls = [
+                call for call in mock_run_qa.call_args_list
+                if call.kwargs.get("output_doc_name") == "features"
+            ]
+            assert len(feature_calls) == 1
+            assert feature_calls[0].kwargs.get("content_markers") is None
+
+    @pytest.mark.asyncio
     async def test_adoption_commits_docs(self, tmp_path):
         """Verify docs are committed at the end of adoption."""
         from agentic_dev.documents.store import DocumentStore

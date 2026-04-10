@@ -1,7 +1,7 @@
 """Tests for the QA cycle orchestrator."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -1228,3 +1228,174 @@ async def test_mcp_config_defaults_to_none(
 
     action_call_agent = claude.run.call_args_list[0].kwargs["agent"]
     assert action_call_agent.mcp_config is None
+
+
+# ---------------------------------------------------------------------------
+# Content-marker recovery
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_content_markers_triggers_recovery_when_missing(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When action output lacks content markers, recover from session JSONL."""
+    spec_text = "# Frontend Spec\n## Tech Stack\n- Framework: React"
+    claude.run.side_effect = [
+        ClaudeResult(
+            text="The spec is rendered above.",
+            session_id="sess-recover",
+            cost_usd=0.50,
+            exit_code=0,
+        ),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    with patch.object(
+        ClaudeRunner, "_recover_longest_from_session", return_value=spec_text,
+    ) as mock_recover:
+        result = await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="frontend_spec",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            content_markers=["# Frontend Spec"],
+        )
+
+    mock_recover.assert_called_once_with("sess-recover", Path("/tmp/ws"))
+    assert result.output == spec_text
+
+
+@pytest.mark.asyncio
+async def test_content_markers_no_recovery_when_present(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When action output already has the markers, skip recovery."""
+    spec_text = "# Frontend Spec\n## Tech Stack\n- Framework: React"
+    claude.run.side_effect = [
+        ClaudeResult(
+            text=spec_text,
+            session_id="sess-ok",
+            cost_usd=0.50,
+            exit_code=0,
+        ),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    with patch.object(
+        ClaudeRunner, "_recover_longest_from_session",
+    ) as mock_recover:
+        result = await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="frontend_spec",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            content_markers=["# Frontend Spec"],
+        )
+
+    mock_recover.assert_not_called()
+    assert result.output == spec_text
+
+
+@pytest.mark.asyncio
+async def test_content_markers_skipped_when_recovered_lacks_markers(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When recovered text also lacks markers, keep the original output."""
+    claude.run.side_effect = [
+        ClaudeResult(
+            text="Summary of work done.",
+            session_id="sess-no-match",
+            cost_usd=0.50,
+            exit_code=0,
+        ),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    with patch.object(
+        ClaudeRunner, "_recover_longest_from_session",
+        return_value="Some other long text without the marker.",
+    ):
+        result = await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="frontend_spec",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            content_markers=["# Frontend Spec"],
+        )
+
+    assert result.output == "Summary of work done."
+
+
+@pytest.mark.asyncio
+async def test_content_markers_none_skips_check(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When content_markers is None (default), no recovery is attempted."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    with patch.object(
+        ClaudeRunner, "_recover_longest_from_session",
+    ) as mock_recover:
+        result = await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="result.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+        )
+
+    mock_recover.assert_not_called()
+    assert result.output == "action output"
+
+
+@pytest.mark.asyncio
+async def test_content_markers_no_session_id_skips_recovery(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When action result has no session_id, skip recovery even with markers."""
+    claude.run.side_effect = [
+        ClaudeResult(
+            text="Summary without markers.",
+            session_id=None,
+            cost_usd=0.50,
+            exit_code=0,
+        ),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    with patch.object(
+        ClaudeRunner, "_recover_longest_from_session",
+    ) as mock_recover:
+        result = await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="frontend_spec",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            content_markers=["# Frontend Spec"],
+        )
+
+    mock_recover.assert_not_called()
+    assert result.output == "Summary without markers."
