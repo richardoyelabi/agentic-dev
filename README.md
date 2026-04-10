@@ -105,10 +105,11 @@ Request **intentional changes** to an existing project — adding features, modi
 
 Use `sync` instead if you've edited code or specs manually and need to resolve the resulting drift.
 
+When `--full-spec` is not provided, you'll be prompted to type or paste your change description interactively.
+
 ```
 Options:
-  --change-request TEXT  Targeted change description
-  --full-spec TEXT       Path to full updated spec file
+  --full-spec TEXT  Path to full updated spec file
 ```
 
 ### `agentic-dev status [app-name]`

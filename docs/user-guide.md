@@ -143,10 +143,10 @@ The command archives previous documents, determines which pipeline phase to rest
 > **`update` vs `sync`:** `update` is for changes you want to make. If you've edited code manually and need to bring specs back in line (or vice versa), use [`sync`](#syncing-code-and-specs) instead — it detects drift and lets you choose how to resolve it.
 
 ```bash
-# Targeted change — describe what you want
-agentic-dev update my-app --change-request "Add dark mode to settings page"
+# Interactive — you'll be prompted to type or paste your change description
+agentic-dev update my-app
 
-# Full re-specification — replace requirements entirely
+# Full re-specification — replace requirements entirely from a file
 agentic-dev update my-app --full-spec requirements-v2.txt
 ```
 
@@ -312,7 +312,7 @@ agentic-dev adopt /path --from-figma https://figma.com/file/abc?m=auto&t=xyz --f
 agentic-dev adopt /path --from-figma "https://figma.com/file/abc?m=auto&t=xyz" --frontend client
 ```
 
-**Rule of thumb:** always wrap URLs and multi-word values in double quotes. This applies to any flag that takes a string value, including `--from-figma`, `--from-codebase`, `--extend`, `--change-request`, and `--feedback`.
+**Rule of thumb:** always wrap URLs and multi-word values in double quotes. This applies to any flag that takes a string value, including `--from-figma`, `--from-codebase`, `--extend`, and `--feedback`.
 
 ### Agent Output Issues
 

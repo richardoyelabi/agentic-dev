@@ -196,7 +196,7 @@ Jinja2 templates in `src/agentic_dev/prompts/templates/`:
 ```
 agentic-dev new <app-name> [--path] [--from-figma] [--from-codebase]
 agentic-dev resume [<app-name>] [--feedback]
-agentic-dev update <app-name> [--change-request | --full-spec]
+agentic-dev update <app-name> [--full-spec]
 agentic-dev status [<app-name>]
 agentic-dev config <app-name> [--checkpoints] [--autonomy]
 agentic-dev logs <app-name> [--agent] [--sprint]
@@ -435,7 +435,7 @@ The orchestrator parses Sprint Plan sections to iterate over sprints and determi
 
 When the user runs `agentic-dev update`:
 
-**Mode 1 — Targeted change request** (`--change-request "add dark mode to settings"`):
+**Mode 1 — Targeted change request** (interactive prompt):
 1. The Input Processor receives the change request + existing Structured Input
 2. It produces an **updated** Structured Input with changes marked (new features get new IDs, modified features are flagged)
 3. The Feature Analyst receives existing Features Request + updated Structured Input, produces updated Features Request

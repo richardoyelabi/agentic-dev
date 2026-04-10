@@ -500,7 +500,7 @@ All of these must resolve through `config.directory_map` instead.
 - New `adopt` command with `--from-figma`, `--extend`, `--frontend`, `--backend`, `--yes` options.
 - New `sync` command with `--from`, `--scope`, `--check` options.
 - `--check-sync` and `--force` flags added to `update`, `resume` commands.
-- `--from-sync` flag added to `update` command — reads `docs/sync_change_request.md` as the change request instead of `--change-request` text. This is how `to_code` sync resolutions are applied.
+- `--from-sync` flag added to `update` command — reads `docs/sync_change_request.md` as the change request instead of interactive input. This is how `to_code` sync resolutions are applied.
 - `adopt` and `sync` commands resolve project paths through the global registry (Section 2.4).
 
 ### 6.5 Input Processor Template
@@ -591,7 +591,8 @@ User: agentic-dev sync my-saas --from code
 ### 7.5 Check-Sync Before Update
 
 ```
-User: agentic-dev update my-saas --check-sync --change-request "Add dark mode"
+User: agentic-dev update my-saas --check-sync
+[prompted for input]: Add dark mode
 
 1. Lightweight drift check: compare file mtimes vs last_sync_at
 2. If drift detected:

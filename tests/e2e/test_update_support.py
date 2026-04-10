@@ -9,7 +9,7 @@ The tests run in strict order:
   1. Create a simple counter app (pauses at design checkpoint)
   2. Set autonomy to full, then resume to completion
   3. Remediate a bug fix via UAT report
-  4. Apply a targeted change via --change-request
+  4. Apply a targeted change via interactive input
   5. Apply a full re-specification via --full-spec
 """
 
