@@ -202,6 +202,17 @@ class QACycleCompleteEvent(LogEvent):
     sprint: int | None = None
 
 
+class ContentMarkerRecoveryEvent(LogEvent):
+    """Emitted when content-marker recovery replaces action output."""
+
+    event_type: str = "content_marker_recovery"
+    action_agent: str
+    session_id: str
+    original_length: int
+    recovered_length: int
+    sprint: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Sprint
 # ---------------------------------------------------------------------------

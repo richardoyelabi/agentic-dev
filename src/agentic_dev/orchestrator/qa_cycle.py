@@ -13,6 +13,7 @@ from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import (
     AgentEmptyRetryEvent,
+    ContentMarkerRecoveryEvent,
     QACycleStartEvent,
     QACycleVerdictEvent,
     QACycleCorrectionEvent,
@@ -170,6 +171,8 @@ async def run_qa_cycle(
     session_id: str | None = None,
     on_substep: Callable[[str], None] | None = None,
     skip_to_correction: bool = False,
+    mcp_config: Path | None = None,
+    content_markers: list[str] | None = None,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -200,7 +203,7 @@ async def run_qa_cycle(
     qa_key = qa_output_key or output_doc_name
     qa_report_name = f"qa_reports/{output_doc_name}"
 
-    action_config = to_run_config(action_agent)
+    action_config = to_run_config(action_agent, mcp_config=mcp_config)
     qa_config = to_run_config(qa_agent)
 
     if skip_to_correction:
@@ -234,6 +237,33 @@ async def run_qa_cycle(
         action_output_text = action_result.text
         action_cost = action_result.cost_usd
         action_session_id = action_result.session_id
+
+        # Content-marker recovery: if the result doesn't contain expected
+        # markers, the real document may be in an earlier session message.
+        if (
+            content_markers
+            and action_session_id
+            and not all(m in action_output_text for m in content_markers)
+        ):
+            recovered = ClaudeRunner._recover_longest_from_session(
+                action_session_id, workspace,
+            )
+            if recovered.strip() and all(
+                m in recovered for m in content_markers
+            ):
+                emit(_event_log, ContentMarkerRecoveryEvent(
+                    action_agent=action_agent.name,
+                    session_id=action_session_id,
+                    original_length=len(action_output_text),
+                    recovered_length=len(recovered),
+                    sprint=sprint,
+                    message=(
+                        f"Content-marker recovery for {action_agent.name}: "
+                        f"replaced {len(action_output_text)} chars with "
+                        f"{len(recovered)} chars from session {action_session_id}"
+                    ),
+                ))
+                action_output_text = recovered
 
         # 2. Save the action output
         doc_store.write(output_doc_name, action_output_text)

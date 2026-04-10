@@ -427,6 +427,119 @@ class TestRecoverResultFromSession:
         assert result == "Part one. Part two."
 
 
+class TestRecoverLongestFromSession:
+    """Tests for _recover_longest_from_session JSONL fallback."""
+
+    def _setup_jsonl(self, tmp_path: Path, session_id: str, lines_data: list[dict]) -> Path:
+        """Create a session JSONL with the given lines and return the project dir."""
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir(exist_ok=True)
+
+        encoded = str(project_dir).replace("/", "-")
+        sessions_dir = tmp_path / ".claude" / "projects" / encoded
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        jsonl_path = sessions_dir / f"{session_id}.jsonl"
+
+        jsonl_path.write_text(
+            "\n".join(json.dumps(line) for line in lines_data) + "\n",
+            encoding="utf-8",
+        )
+        return project_dir
+
+    def test_returns_longest_assistant_message(self, tmp_path: Path):
+        """Returns the longest assistant text, not the last one."""
+        session_id = "test-longest"
+        project_dir = self._setup_jsonl(tmp_path, session_id, [
+            {"type": "human", "message": {"content": "analyze this"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Short intro."},
+            ]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "# Backend Spec\n" + "x" * 2000},
+            ]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "The spec is rendered above."},
+            ]}},
+        ])
+
+        result = ClaudeRunner._recover_longest_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result.startswith("# Backend Spec")
+        assert len(result) > 2000
+
+    def test_returns_empty_when_file_missing(self, tmp_path: Path):
+        """Returns empty string when session JSONL does not exist."""
+        result = ClaudeRunner._recover_longest_from_session(
+            "nonexistent", tmp_path, claude_dir=tmp_path / ".claude",
+        )
+        assert result == ""
+
+    def test_returns_empty_when_no_text_blocks(self, tmp_path: Path):
+        """Returns empty string when assistant messages have only tool_use blocks."""
+        session_id = "test-no-text"
+        project_dir = self._setup_jsonl(tmp_path, session_id, [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Read", "input": {}},
+            ]}},
+        ])
+
+        result = ClaudeRunner._recover_longest_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result == ""
+
+    def test_ignores_human_messages(self, tmp_path: Path):
+        """Human messages are never returned, even if they are the longest."""
+        session_id = "test-ignore-human"
+        project_dir = self._setup_jsonl(tmp_path, session_id, [
+            {"type": "human", "message": {"content": [
+                {"type": "text", "text": "A" * 5000},
+            ]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Short reply."},
+            ]}},
+        ])
+
+        result = ClaudeRunner._recover_longest_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result == "Short reply."
+
+    def test_concatenates_multiple_text_blocks(self, tmp_path: Path):
+        """Multiple text blocks in one message are concatenated for length comparison."""
+        session_id = "test-concat"
+        project_dir = self._setup_jsonl(tmp_path, session_id, [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Part A. "},
+                {"type": "tool_use", "name": "Read", "input": {}},
+                {"type": "text", "text": "Part B."},
+            ]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Short."},
+            ]}},
+        ])
+
+        result = ClaudeRunner._recover_longest_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result == "Part A. Part B."
+
+    def test_single_assistant_message(self, tmp_path: Path):
+        """With only one assistant message, returns its text."""
+        session_id = "test-single"
+        project_dir = self._setup_jsonl(tmp_path, session_id, [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "The only message."},
+            ]}},
+        ])
+
+        result = ClaudeRunner._recover_longest_from_session(
+            session_id, project_dir, claude_dir=tmp_path / ".claude",
+        )
+        assert result == "The only message."
+
+
 class TestRetry:
     """Tests for rate limit retry logic in ClaudeRunner.run()."""
 
@@ -536,3 +649,97 @@ class TestRetry:
                     await runner.run(agent, "prompt", tmp_path)
 
         assert call_count == 3  # 1 initial + 2 retries
+
+
+class TestShortResultRecovery:
+    """Tests for the short-result recovery heuristic in ClaudeRunner.run()."""
+
+    @staticmethod
+    def _make_mock_process(stdout: str, returncode: int = 0, stderr: str = ""):
+        return TestRun._make_mock_process(stdout, returncode, stderr)
+
+    async def test_short_result_replaced_by_longer_session_content(self, tmp_path: Path):
+        """When result < 500 chars and session has 5x+ longer content, prefer session."""
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        long_spec = "# Backend Spec\n" + "x" * 2000
+        output_json = json.dumps({
+            "result": "The spec is rendered above.",
+            "session_id": "sess-short",
+            "total_cost_usd": 0.50,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch.object(
+                ClaudeRunner, "_recover_longest_from_session", return_value=long_spec,
+            ) as mock_longest:
+                result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_longest.assert_called_once_with("sess-short", tmp_path)
+        assert result.text == long_spec
+
+    async def test_short_result_kept_when_session_not_much_longer(self, tmp_path: Path):
+        """When session content is not 5x longer, keep the original result."""
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        output_json = json.dumps({
+            "result": "Short but valid output for a detector.",
+            "session_id": "sess-keep",
+            "total_cost_usd": 0.10,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch.object(
+                ClaudeRunner, "_recover_longest_from_session", return_value="Slightly longer text.",
+            ) as mock_longest:
+                result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_longest.assert_called_once()
+        assert result.text == "Short but valid output for a detector."
+
+    async def test_long_result_not_replaced(self, tmp_path: Path):
+        """When result >= 500 chars, never attempt longest-text recovery."""
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        long_result = "A" * 600
+        output_json = json.dumps({
+            "result": long_result,
+            "session_id": "sess-long",
+            "total_cost_usd": 0.20,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch.object(
+                ClaudeRunner, "_recover_longest_from_session",
+            ) as mock_longest:
+                result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_longest.assert_not_called()
+        assert result.text == long_result
+
+    async def test_empty_result_uses_existing_recovery(self, tmp_path: Path):
+        """Empty result still uses _recover_result_from_session (existing behavior)."""
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        output_json = json.dumps({
+            "result": "",
+            "session_id": "sess-empty",
+            "total_cost_usd": 0.05,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_process):
+            with patch.object(
+                ClaudeRunner, "_recover_result_from_session", return_value="Recovered last text.",
+            ) as mock_last:
+                with patch.object(
+                    ClaudeRunner, "_recover_longest_from_session",
+                ) as mock_longest:
+                    result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_last.assert_called_once_with("sess-empty", tmp_path)
+        mock_longest.assert_not_called()
+        assert result.text == "Recovered last text."
