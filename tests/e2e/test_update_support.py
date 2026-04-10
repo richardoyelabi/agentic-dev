@@ -247,8 +247,8 @@ class TestUpdateSupportE2E:
 
         result = _run_cli(
             "update", app_name,
-            "--change-request", "Add a reset button that sets the counter back to zero",
             "--path", str(projects_dir),
+            input_text="Add a reset button that sets the counter back to zero\n\n",
             timeout=3600,
         )
         assert result.returncode == 0, (

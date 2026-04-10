@@ -459,23 +459,21 @@ class TestLogsCommand:
 
 
 class TestUpdateCommand:
-    def test_requires_complete_state(self, project_with_state: Path) -> None:
+    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
+    def test_requires_complete_state(self, mock_collect, project_with_state: Path) -> None:
         """Update should fail when project is not in COMPLETE phase."""
         result = runner.invoke(
             app,
-            [
-                "update", "test-app",
-                "--change-request", "Add dark mode",
-                "--path", str(project_with_state),
-            ],
+            ["update", "test-app", "--path", str(project_with_state)],
         )
 
         assert result.exit_code == 1
         assert "COMPLETE" in result.output
 
     @patch("agentic_dev.cli._run_pipeline")
-    def test_change_request_saves_doc(
-        self, mock_run_pipeline, project_with_state: Path
+    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
+    def test_interactive_input_saves_doc(
+        self, mock_collect, mock_run_pipeline, project_with_state: Path
     ) -> None:
         state_mgr = StateManager(project_with_state / "test-app")
         state = state_mgr.load()
@@ -484,11 +482,7 @@ class TestUpdateCommand:
 
         result = runner.invoke(
             app,
-            [
-                "update", "test-app",
-                "--change-request", "Add dark mode",
-                "--path", str(project_with_state),
-            ],
+            ["update", "test-app", "--path", str(project_with_state)],
         )
 
         assert result.exit_code == 0, result.output
@@ -497,8 +491,9 @@ class TestUpdateCommand:
         assert "dark mode" in user_input_path.read_text(encoding="utf-8").lower()
 
     @patch("agentic_dev.cli._run_pipeline")
+    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
     def test_update_archives_docs(
-        self, mock_run_pipeline, project_with_state: Path
+        self, mock_collect, mock_run_pipeline, project_with_state: Path
     ) -> None:
         project_dir = project_with_state / "test-app"
         state_mgr = StateManager(project_dir)
@@ -512,11 +507,7 @@ class TestUpdateCommand:
 
         result = runner.invoke(
             app,
-            [
-                "update", "test-app",
-                "--change-request", "Add dark mode",
-                "--path", str(project_with_state),
-            ],
+            ["update", "test-app", "--path", str(project_with_state)],
         )
 
         assert result.exit_code == 0, result.output
@@ -526,8 +517,9 @@ class TestUpdateCommand:
         assert len(list(archive_dir.iterdir())) >= 1
 
     @patch("agentic_dev.cli._run_pipeline")
+    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
     def test_update_resets_state(
-        self, mock_run_pipeline, project_with_state: Path
+        self, mock_collect, mock_run_pipeline, project_with_state: Path
     ) -> None:
         state_mgr = StateManager(project_with_state / "test-app")
         state = state_mgr.load()
@@ -536,18 +528,15 @@ class TestUpdateCommand:
 
         runner.invoke(
             app,
-            [
-                "update", "test-app",
-                "--change-request", "Add dark mode",
-                "--path", str(project_with_state),
-            ],
+            ["update", "test-app", "--path", str(project_with_state)],
         )
 
         updated_state = state_mgr.load()
         assert updated_state.mode == "update"
         assert updated_state.phase == PipelinePhase.FEATURE_ANALYSIS
 
-    def test_no_option_fails(self, project_with_state: Path) -> None:
+    @patch("agentic_dev.cli._collect_user_requirements", return_value="")
+    def test_empty_input_fails(self, mock_collect, project_with_state: Path) -> None:
         state_mgr = StateManager(project_with_state / "test-app")
         state = state_mgr.load()
         state.phase = PipelinePhase.COMPLETE
@@ -563,7 +552,7 @@ class TestUpdateCommand:
     def test_missing_project_fails(self, tmp_path: Path) -> None:
         result = runner.invoke(
             app,
-            ["update", "nonexistent", "--change-request", "x", "--path", str(tmp_path)],
+            ["update", "nonexistent", "--path", str(tmp_path)],
         )
         assert result.exit_code == 1
 

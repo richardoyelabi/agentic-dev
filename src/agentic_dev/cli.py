@@ -445,7 +445,6 @@ def _start_update_cycle(
 @app.command()
 def update(
     app_name: str = typer.Argument(help="Name of the application to update"),
-    change_request: str | None = typer.Option(None, help="Targeted change description"),
     full_spec: str | None = typer.Option(None, help="Path to full updated spec file"),
     path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
@@ -466,19 +465,19 @@ def update(
 
         doc_store = DocumentStore(project_dir)
 
-        if change_request:
-            change_input = change_request
-        elif full_spec:
+        if full_spec:
             spec_path = Path(full_spec)
             if not spec_path.exists():
                 console.print(f"[bold red]Spec file not found: {full_spec}[/bold red]")
                 raise typer.Exit(code=1)
             change_input = spec_path.read_text(encoding="utf-8")
         else:
-            console.print(
-                "[bold red]Provide --change-request or --full-spec.[/bold red]"
-            )
-            raise typer.Exit(code=1)
+            change_input = _collect_user_requirements()
+            if not change_input:
+                console.print(
+                    "[bold red]No change description provided.[/bold red]"
+                )
+                raise typer.Exit(code=1)
 
         # Determine restart phase using document diff
         from agentic_dev.documents.diff import diff_structured_input  # noqa: WPS433
