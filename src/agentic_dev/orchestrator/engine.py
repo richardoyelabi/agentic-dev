@@ -154,6 +154,7 @@ class PipelineEngine:
             output_doc_name="structured_input",
         )
         self._doc_store.write("structured_input", output)
+        await self._commit_docs_changes("docs: structured input from requirements")
 
         state.project_type = self._parse_project_type(output)
 
@@ -198,6 +199,7 @@ class PipelineEngine:
         state.total_cost_usd += total_cost
         state.active_session_id = None
         self._record_agent_run(state, "feature_analyst", total_cost)
+        await self._commit_docs_changes("docs: feature analysis")
 
         return advance_phase(state, PipelinePhase.FEATURE_ANALYSIS_QA)
 
@@ -243,6 +245,7 @@ class PipelineEngine:
         state.total_cost_usd += total_cost
         state.active_session_id = None
         self._record_agent_run(state, "architect", total_cost)
+        await self._commit_docs_changes("docs: architecture specs")
 
         return advance_phase(state, PipelinePhase.ARCHITECTURE_QA)
 
@@ -296,6 +299,7 @@ class PipelineEngine:
         state.total_cost_usd += total_cost
         state.active_session_id = None
         self._record_agent_run(state, "sprint_planner", total_cost)
+        await self._commit_docs_changes("docs: sprint plan")
 
         return advance_phase(state, PipelinePhase.SPRINT_PLANNING_QA)
 
@@ -309,6 +313,7 @@ class PipelineEngine:
             self._doc_store.write("checkpoint_feedback", state.checkpoint_feedback)
             state.checkpoint_feedback = None
 
+        await self._commit_docs_changes("docs: checkpoint feedback")
         await self._setup_workspaces(state)
 
         return advance_phase(state, PipelinePhase.SPRINTING)
@@ -352,6 +357,20 @@ class PipelineEngine:
         for code_dir in dirs:
             if await has_changes(code_dir):
                 await commit(code_dir, message)
+
+    async def _commit_docs_changes(self, message: str) -> None:
+        """Commit changes in the docs directory if there are any.
+
+        Initializes the docs git repo on-the-fly for backward compatibility
+        with existing projects created before docs versioning was added.
+        """
+        docs_dir = self._doc_store.docs_dir
+        if not docs_dir.is_dir():
+            return
+        if not (docs_dir / ".git").is_dir():
+            await init_repo(docs_dir)
+        if await has_changes(docs_dir):
+            await commit(docs_dir, message)
 
     def _read_tech_stack(self, doc_name: str) -> dict[str, str]:
         """Read a spec document and parse its tech stack, returning defaults on failure."""
@@ -438,6 +457,9 @@ class PipelineEngine:
             if result.success:
                 sprint.status = SprintStatus.COMPLETE
                 await self._commit_sprint_changes(state, sprint)
+                await self._commit_docs_changes(
+                    f"docs: sprint {sprint.sprint_number} reports"
+                )
             else:
                 sprint.failed_at_step = sprint.status
                 sprint.status = SprintStatus.FAILED
@@ -471,6 +493,7 @@ class PipelineEngine:
             output_doc_name="uat_report",
         )
         self._doc_store.write("uat_report", output)
+        await self._commit_docs_changes("docs: UAT report")
 
         return advance_phase(state, PipelinePhase.COMPLETE)
 

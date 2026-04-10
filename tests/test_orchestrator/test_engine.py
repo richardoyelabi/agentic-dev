@@ -67,11 +67,12 @@ def registry() -> AgentRegistry:
 
 
 @pytest.fixture
-def doc_store() -> DocumentStore:
+def doc_store(tmp_path: Path) -> DocumentStore:
     store = MagicMock(spec=DocumentStore)
     store.read = MagicMock(return_value="document content")
     store.write = MagicMock()
     store.exists = MagicMock(return_value=False)
+    store.docs_dir = tmp_path / "docs"
     return store
 
 
@@ -1292,3 +1293,78 @@ class TestPreSprintMCPValidation:
         ]
         warnings = engine._validate_sprint_mcp_services(sprints)
         assert warnings == []
+
+
+class TestCommitDocsChanges:
+    """Tests for _commit_docs_changes backward-compat and commit behavior."""
+
+    @pytest.mark.asyncio
+    async def test_commits_when_changes_exist(self, engine, tmp_path) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / ".git").mkdir()
+        engine._doc_store.docs_dir = docs_dir
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock, return_value=True,
+        ) as mock_has, patch(
+            "agentic_dev.orchestrator.engine.commit",
+            new_callable=AsyncMock,
+        ) as mock_commit:
+            await engine._commit_docs_changes("test commit")
+
+        mock_has.assert_called_once_with(docs_dir)
+        mock_commit.assert_called_once_with(docs_dir, "test commit")
+
+    @pytest.mark.asyncio
+    async def test_inits_repo_when_git_missing(self, engine, tmp_path) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        engine._doc_store.docs_dir = docs_dir
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo",
+            new_callable=AsyncMock,
+        ) as mock_init, patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock, return_value=True,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit",
+            new_callable=AsyncMock,
+        ) as mock_commit:
+            await engine._commit_docs_changes("test commit")
+
+        mock_init.assert_called_once_with(docs_dir)
+        mock_commit.assert_called_once_with(docs_dir, "test commit")
+
+    @pytest.mark.asyncio
+    async def test_skips_when_docs_dir_missing(self, engine, tmp_path) -> None:
+        docs_dir = tmp_path / "docs"
+        engine._doc_store.docs_dir = docs_dir
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock,
+        ) as mock_has:
+            await engine._commit_docs_changes("test commit")
+
+        mock_has.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_commit_when_no_changes(self, engine, tmp_path) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / ".git").mkdir()
+        engine._doc_store.docs_dir = docs_dir
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock, return_value=False,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit",
+            new_callable=AsyncMock,
+        ) as mock_commit:
+            await engine._commit_docs_changes("test commit")
+
+        mock_commit.assert_not_called()

@@ -14,6 +14,7 @@ from agentic_dev.config import (
     resolve_project_path,
 )
 from agentic_dev.exceptions import WorkspaceError
+from agentic_dev.workspace.git import init_repo_sync
 
 
 class WorkspaceManager:
@@ -44,6 +45,7 @@ class WorkspaceManager:
         docs_dir = project_root / DOCS_DIR
         docs_dir.mkdir()
         (docs_dir / QA_REPORTS_DIR).mkdir()
+        init_repo_sync(docs_dir)
 
         return project_root
 
@@ -119,6 +121,7 @@ class WorkspaceManager:
             docs_dir = existing_docs
         docs_dir.mkdir(parents=True, exist_ok=True)
         (docs_dir / QA_REPORTS_DIR).mkdir(exist_ok=True)
+        init_repo_sync(docs_dir)
 
         register_project(app_name, project_path)
 

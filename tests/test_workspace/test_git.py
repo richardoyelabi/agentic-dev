@@ -10,6 +10,7 @@ from agentic_dev.workspace.git import (
     get_current_branch,
     has_changes,
     init_repo,
+    init_repo_sync,
 )
 
 
@@ -113,3 +114,16 @@ async def test_has_changes_returns_true_with_modified_file(git_dir: Path) -> Non
     (git_dir / "README.md").write_text("# Updated")
 
     assert await has_changes(git_dir) is True
+
+
+def test_init_repo_sync_creates_git_directory(git_dir: Path) -> None:
+    init_repo_sync(git_dir)
+
+    assert (git_dir / ".git").is_dir()
+
+
+def test_init_repo_sync_is_idempotent(git_dir: Path) -> None:
+    init_repo_sync(git_dir)
+    init_repo_sync(git_dir)
+
+    assert (git_dir / ".git").is_dir()

@@ -239,3 +239,60 @@ class TestRunAdoption:
             ]
             assert len(feature_calls) == 1
             assert feature_calls[0].kwargs.get("qa_output_key") == "features_output"
+
+    @pytest.mark.asyncio
+    async def test_adoption_commits_docs(self, tmp_path):
+        """Verify docs are committed at the end of adoption."""
+        from agentic_dev.documents.store import DocumentStore
+        from agentic_dev.orchestrator.qa_cycle import QACycleResult
+
+        mock_qa_result = QACycleResult(
+            output="# Spec content",
+            initial_qa_report="APPROVED",
+            final_qa_report="APPROVED",
+            action_cost=1.0,
+            initial_qa_cost=0.5,
+        )
+
+        (tmp_path / "docs").mkdir()
+        doc_store = DocumentStore(tmp_path)
+        (tmp_path / "client").mkdir()
+        (tmp_path / "server").mkdir()
+
+        mock_claude = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = MagicMock()
+        mock_renderer = MagicMock()
+
+        directory_map = DirectoryMap(frontend="client", backend="server")
+
+        with patch(
+            "agentic_dev.orchestrator.adoption.run_qa_cycle",
+            new_callable=AsyncMock,
+            return_value=mock_qa_result,
+        ), patch(
+            "agentic_dev.orchestrator.adoption.init_repo",
+            new_callable=AsyncMock,
+        ) as mock_init, patch(
+            "agentic_dev.orchestrator.adoption.has_changes",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "agentic_dev.orchestrator.adoption.commit",
+            new_callable=AsyncMock,
+        ) as mock_commit:
+            await run_adoption(
+                claude=mock_claude,
+                registry=mock_registry,
+                prompt_renderer=mock_renderer,
+                doc_store=doc_store,
+                project_dir=tmp_path,
+                directory_map=directory_map,
+                project_type=ProjectType.FULLSTACK,
+            )
+
+        mock_init.assert_called_once_with(doc_store.docs_dir)
+        mock_commit.assert_called_once_with(
+            doc_store.docs_dir,
+            "docs: adoption — reverse-engineered specs",
+        )

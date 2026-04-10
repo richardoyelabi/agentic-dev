@@ -21,6 +21,7 @@ from agentic_dev.logging.events import (
     SpecReverseEngineerEvent,
 )
 from agentic_dev.orchestrator.qa_cycle import QACycleResult, run_qa_cycle
+from agentic_dev.workspace.git import commit, has_changes, init_repo
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.models import ProjectType
 
@@ -164,6 +165,13 @@ async def run_adoption(
     # Save design analyses if provided
     if design_analyses:
         doc_store.write("design_analyses", design_analyses)
+
+    docs_dir = doc_store.docs_dir
+    if docs_dir.is_dir():
+        if not (docs_dir / ".git").is_dir():
+            await init_repo(docs_dir)
+        if await has_changes(docs_dir):
+            await commit(docs_dir, "docs: adoption — reverse-engineered specs")
 
     emit(_event_log, AdoptionCompleteEvent(
         total_cost_usd=result.total_cost,

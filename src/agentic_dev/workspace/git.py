@@ -1,6 +1,7 @@
 """Git operations for workspace management using async subprocess calls."""
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 
@@ -26,6 +27,21 @@ async def _run_git(path: Path, *args: str) -> str:
 async def init_repo(path: Path) -> None:
     """Initialize a new git repository at the given path."""
     await _run_git(path, "init")
+
+
+def init_repo_sync(path: Path) -> None:
+    """Initialize a new git repository at the given path (synchronous).
+
+    No-op if a .git directory already exists.
+    """
+    if (path / ".git").is_dir():
+        return
+    subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
 
 
 async def create_branch(path: Path, branch_name: str) -> None:

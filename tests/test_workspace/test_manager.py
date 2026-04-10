@@ -27,6 +27,11 @@ class TestCreateProject:
         assert not (project_root / "frontend").exists()
         assert not (project_root / "backend").exists()
 
+    def test_initializes_docs_git_repo(self, workspace: WorkspaceManager) -> None:
+        project_root = workspace.create_project("my-app")
+
+        assert (project_root / "docs" / ".git").is_dir()
+
     def test_returns_project_root_path(self, workspace: WorkspaceManager) -> None:
         project_root = workspace.create_project("my-app")
 
@@ -108,3 +113,26 @@ class TestListProjects:
         manager = WorkspaceManager(base_dir=tmp_path / "nonexistent")
 
         assert manager.list_projects() == []
+
+
+class TestAdoptProject:
+    def test_initializes_docs_git_repo(self, tmp_path: Path) -> None:
+        project_path = tmp_path / "existing-app"
+        project_path.mkdir()
+        workspace = WorkspaceManager(base_dir=tmp_path)
+
+        workspace.adopt_project(project_path, "existing-app")
+
+        assert (project_path / "docs" / ".git").is_dir()
+
+    def test_existing_docs_initializes_subdir_git_repo(
+        self, tmp_path: Path
+    ) -> None:
+        project_path = tmp_path / "has-docs"
+        project_path.mkdir()
+        (project_path / "docs").mkdir()
+        workspace = WorkspaceManager(base_dir=tmp_path)
+
+        workspace.adopt_project(project_path, "has-docs")
+
+        assert (project_path / "docs" / "agentic-dev" / ".git").is_dir()
