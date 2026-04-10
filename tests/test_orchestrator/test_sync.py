@@ -1,14 +1,18 @@
 """Tests for the sync orchestration module."""
 
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from agentic_dev.orchestrator.sync import (
     SyncApplyResult,
     _compose_change_request,
-    _group_items_by_spec,
     _parse_drift_report,
+    apply_sync_resolutions,
 )
-from agentic_dev.state.models import DriftItem
+from agentic_dev.state.models import DriftItem, SyncReport
 
 
 class TestSyncApplyResult:
@@ -119,20 +123,163 @@ class TestParseDriftReport:
             assert item.resolution is None
 
 
-class TestGroupItemsBySpec:
-    """Tests for grouping drift items by spec document."""
+class TestApplySyncResolutions:
+    """Tests for the broadcast spec update behavior."""
 
-    def test_groups_by_scope(self):
+    def _make_report(self, items: list[DriftItem]) -> SyncReport:
+        return SyncReport(
+            generated_at=datetime.now(timezone.utc),
+            items=items,
+        )
+
+    def _make_doc_store(self, existing_specs: list[str]) -> MagicMock:
+        store = MagicMock()
+        store.exists.side_effect = lambda name: name in existing_specs
+        store.read.return_value = "# Spec content"
+        return store
+
+    def _make_claude_result(self, text: str = "# Updated spec", cost: float = 0.05):
+        result = MagicMock()
+        result.text = text
+        result.cost_usd = cost
+        return result
+
+    @pytest.fixture
+    def mock_deps(self, tmp_path):
+        claude = MagicMock()
+        claude.run = AsyncMock()
+        registry = MagicMock()
+        agent_def = MagicMock()
+        agent_def.prompt_template = "spec_updater.md.j2"
+        agent_def.constraints = []
+        registry.get.return_value = agent_def
+        prompt_renderer = MagicMock()
+        prompt_renderer.render.return_value = "rendered prompt"
+        return claude, registry, prompt_renderer, tmp_path
+
+    async def test_broadcasts_to_all_existing_specs(self, mock_deps):
+        """to_spec items should be sent to every existing spec, not routed by scope."""
+        claude, registry, prompt_renderer, project_dir = mock_deps
+        doc_store = self._make_doc_store(["frontend_spec", "backend_spec", "api_contract"])
+        claude.run.return_value = self._make_claude_result()
+
         items = [
-            DriftItem(id="DRIFT-001", scope="api", category="difference", description="x"),
-            DriftItem(id="DRIFT-002", scope="frontend", category="in_code_not_spec", description="y"),
-            DriftItem(id="DRIFT-003", scope="api", category="in_spec_not_code", description="z"),
-            DriftItem(id="DRIFT-004", scope="backend", category="difference", description="w"),
+            DriftItem(
+                id="DRIFT-012",
+                scope="api",
+                category="in_code_not_spec",
+                description="BatchSlideCompletion model — tracks batch-level completions",
+                resolution="to_spec",
+            ),
         ]
-        groups = _group_items_by_spec(items)
-        assert len(groups["api_contract"]) == 2
-        assert len(groups["frontend_spec"]) == 1
-        assert len(groups["backend_spec"]) == 1
+        report = self._make_report(items)
+
+        result = await apply_sync_resolutions(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            project_dir=project_dir,
+            report=report,
+        )
+
+        assert result.specs_updated == 3
+        assert claude.run.call_count == 3
+
+    async def test_skips_nonexistent_specs(self, mock_deps):
+        """Only updates specs that exist in the doc store."""
+        claude, registry, prompt_renderer, project_dir = mock_deps
+        doc_store = self._make_doc_store(["backend_spec"])
+        claude.run.return_value = self._make_claude_result()
+
+        items = [
+            DriftItem(
+                id="DRIFT-001",
+                scope="api",
+                category="difference",
+                description="Some drift",
+                resolution="to_spec",
+            ),
+        ]
+        report = self._make_report(items)
+
+        result = await apply_sync_resolutions(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            project_dir=project_dir,
+            report=report,
+        )
+
+        assert result.specs_updated == 1
+        assert claude.run.call_count == 1
+
+    async def test_no_updater_calls_when_no_to_spec_items(self, mock_deps):
+        """Items without to_spec resolution should not trigger spec updates."""
+        claude, registry, prompt_renderer, project_dir = mock_deps
+        doc_store = self._make_doc_store(["frontend_spec", "backend_spec", "api_contract"])
+
+        items = [
+            DriftItem(
+                id="DRIFT-001",
+                scope="api",
+                category="difference",
+                description="Some drift",
+                resolution="to_code",
+            ),
+            DriftItem(
+                id="DRIFT-002",
+                scope="backend",
+                category="difference",
+                description="Another drift",
+                resolution="ignore",
+            ),
+        ]
+        report = self._make_report(items)
+
+        result = await apply_sync_resolutions(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            project_dir=project_dir,
+            report=report,
+        )
+
+        assert result.specs_updated == 0
+        claude.run.assert_not_called()
+
+    async def test_accumulates_cost_from_all_updaters(self, mock_deps):
+        """Total cost should sum across all spec updater calls."""
+        claude, registry, prompt_renderer, project_dir = mock_deps
+        doc_store = self._make_doc_store(["frontend_spec", "backend_spec"])
+        claude.run.side_effect = [
+            self._make_claude_result(cost=0.10),
+            self._make_claude_result(cost=0.15),
+        ]
+
+        items = [
+            DriftItem(
+                id="DRIFT-001",
+                scope="api",
+                category="difference",
+                description="Some drift",
+                resolution="to_spec",
+            ),
+        ]
+        report = self._make_report(items)
+
+        result = await apply_sync_resolutions(
+            claude=claude,
+            registry=registry,
+            prompt_renderer=prompt_renderer,
+            doc_store=doc_store,
+            project_dir=project_dir,
+            report=report,
+        )
+
+        assert result.total_cost == pytest.approx(0.25)
 
 
 class TestComposeChangeRequest:
