@@ -456,9 +456,9 @@ def update(
         state_mgr = StateManager(project_dir)
         state = state_mgr.load()
 
-        if state.phase != PipelinePhase.COMPLETE:
+        if state.phase not in {PipelinePhase.COMPLETE, PipelinePhase.ADOPTED}:
             console.print(
-                "[bold red]Project must be in COMPLETE state to update. "
+                "[bold red]Project must be in COMPLETE or ADOPTED state to update. "
                 f"Current phase: {state.phase}[/bold red]"
             )
             raise typer.Exit(code=1)

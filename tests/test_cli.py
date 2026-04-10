@@ -535,6 +535,26 @@ class TestUpdateCommand:
         assert updated_state.mode == "update"
         assert updated_state.phase == PipelinePhase.FEATURE_ANALYSIS
 
+    @patch("agentic_dev.cli._run_pipeline")
+    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
+    def test_update_from_adopted_state(
+        self, mock_collect, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.ADOPTED
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["update", "test-app", "--path", str(project_with_state)],
+        )
+
+        assert result.exit_code == 0, result.output
+        updated_state = state_mgr.load()
+        assert updated_state.mode == "update"
+        assert updated_state.phase == PipelinePhase.FEATURE_ANALYSIS
+
     @patch("agentic_dev.cli._collect_user_requirements", return_value="")
     def test_empty_input_fails(self, mock_collect, project_with_state: Path) -> None:
         state_mgr = StateManager(project_with_state / "test-app")

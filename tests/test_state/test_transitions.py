@@ -93,6 +93,21 @@ class TestResetForUpdate:
         assert result.error is None
         assert result.current_sprint is None
 
+    def test_reset_for_update_from_adopted(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.ADOPTED,
+            total_cost_usd=3.0,
+        )
+        result = reset_for_update(state, PipelinePhase.FEATURE_ANALYSIS, "update")
+
+        assert result.phase == PipelinePhase.FEATURE_ANALYSIS
+        assert result.mode == "update"
+        assert result.sprints == []
+        assert result.agent_runs == []
+        assert result.error is None
+        assert result.current_sprint is None
+
     def test_reset_for_update_preserves_cost(self) -> None:
         state = PipelineState(
             project_name="test",
