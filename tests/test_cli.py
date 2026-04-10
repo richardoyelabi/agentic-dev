@@ -191,6 +191,50 @@ class TestNewCommand:
         )
         assert result.exit_code == 1
 
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_from_file_reads_requirements(
+        self, mock_run_pipeline, tmp_path: Path
+    ) -> None:
+        """--from-file should read requirements from a file instead of interactive input."""
+        req_file = tmp_path / "requirements.txt"
+        req_file.write_text(
+            "Build a comprehensive todo app with tags and filters",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            ["new", "my-app", "--path", str(tmp_path), "--from-file", str(req_file)],
+        )
+
+        assert result.exit_code == 0, result.output
+        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        assert user_input_path.exists()
+        assert "comprehensive todo app" in user_input_path.read_text(encoding="utf-8").lower()
+
+    def test_from_file_nonexistent_fails(self, tmp_path: Path) -> None:
+        """--from-file with a missing file should exit with code 1."""
+        result = runner.invoke(
+            app,
+            ["new", "my-app", "--path", str(tmp_path), "--from-file", "/nonexistent/file.txt"],
+        )
+
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_from_file_empty_fails(self, mock_run_pipeline, tmp_path: Path) -> None:
+        """--from-file with an empty file should exit with code 1."""
+        req_file = tmp_path / "empty.txt"
+        req_file.write_text("", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["new", "my-app", "--path", str(tmp_path), "--from-file", str(req_file)],
+        )
+
+        assert result.exit_code == 1
+
 
 class TestStatusCommand:
     def test_displays_state(self, project_with_state: Path) -> None:
@@ -575,6 +619,68 @@ class TestUpdateCommand:
             ["update", "nonexistent", "--path", str(tmp_path)],
         )
         assert result.exit_code == 1
+
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_from_file_reads_requirements(
+        self, mock_run_pipeline, project_with_state: Path
+    ) -> None:
+        """--from-file should read change description from a file."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        req_file = project_with_state / "changes.txt"
+        req_file.write_text("Add dark mode support", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["update", "test-app", "--from-file", str(req_file), "--path", str(project_with_state)],
+        )
+
+        assert result.exit_code == 0, result.output
+        user_input_path = project_with_state / "test-app" / "docs" / "user_input.md"
+        assert "dark mode" in user_input_path.read_text(encoding="utf-8").lower()
+
+    def test_from_file_nonexistent_fails(self, project_with_state: Path) -> None:
+        """--from-file with a missing file should exit with code 1."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        result = runner.invoke(
+            app,
+            ["update", "test-app", "--from-file", "/no/such/file.txt", "--path", str(project_with_state)],
+        )
+
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_from_file_and_full_spec_mutually_exclusive(
+        self, project_with_state: Path
+    ) -> None:
+        """Providing both --from-file and --full-spec should error."""
+        state_mgr = StateManager(project_with_state / "test-app")
+        state = state_mgr.load()
+        state.phase = PipelinePhase.COMPLETE
+        state_mgr.save(state)
+
+        req_file = project_with_state / "changes.txt"
+        req_file.write_text("Add dark mode", encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            [
+                "update", "test-app",
+                "--from-file", str(req_file),
+                "--full-spec", str(req_file),
+                "--path", str(project_with_state),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "cannot use both" in result.output.lower()
 
 
 class TestRemediateCommand:

@@ -14,6 +14,12 @@ agentic-dev new my-app
 
 You'll be prompted to describe your application. Be as detailed as you want — the Input Processor will normalize and structure your requirements.
 
+If your requirements are in a file (especially useful for long documents with blank lines, which would otherwise truncate interactive input), pass it with `--from-file`:
+
+```bash
+agentic-dev new my-app --from-file requirements.md
+```
+
 You can also specify preferences:
 - Tech stack: "Use Next.js for frontend, Django REST Framework for backend"
 - Database: "Use PostgreSQL with Supabase"
@@ -146,9 +152,14 @@ The command archives previous documents, determines which pipeline phase to rest
 # Interactive — you'll be prompted to type or paste your change description
 agentic-dev update my-app
 
+# From a file — read change description from a file (handles long docs with blank lines)
+agentic-dev update my-app --from-file changes.md
+
 # Full re-specification — replace requirements entirely from a file
 agentic-dev update my-app --full-spec requirements-v2.txt
 ```
+
+`--from-file` and `--full-spec` are mutually exclusive — use one or the other. `--full-spec` additionally triggers a structured diff against the previous spec to determine the optimal pipeline restart point.
 
 ## Adopting an Existing Project
 

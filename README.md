@@ -50,6 +50,7 @@ Create a new project and start the development pipeline.
 ```
 Options:
   --path TEXT           Directory to create the project in (default: ~/projects)
+  --from-file TEXT      Path to a file containing project requirements
   --from-figma TEXT     Figma URL to import designs from (supports value::annotation, repeatable)
   --from-codebase TEXT  Path to existing codebase to use as reference context (supports value::annotation, repeatable)
 ```
@@ -105,12 +106,15 @@ Request **intentional changes** to an existing project — adding features, modi
 
 Use `sync` instead if you've edited code or specs manually and need to resolve the resulting drift.
 
-When `--full-spec` is not provided, you'll be prompted to type or paste your change description interactively.
+When neither `--from-file` nor `--full-spec` is provided, you'll be prompted to type or paste your change description interactively.
 
 ```
 Options:
-  --full-spec TEXT  Path to full updated spec file
+  --from-file TEXT  Path to a file containing change requirements
+  --full-spec TEXT  Path to full updated spec file (triggers structured diff for optimal restart point)
 ```
+
+`--from-file` and `--full-spec` are mutually exclusive.
 
 ### `agentic-dev status [app-name]`
 

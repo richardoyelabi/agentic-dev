@@ -152,6 +152,23 @@ def _collect_user_requirements() -> str:
     return "\n".join(lines).strip()
 
 
+def _read_requirements_file(file_path: str) -> str:
+    """Read and validate a requirements file, exiting on error."""
+    path = Path(file_path)
+    if not path.exists():
+        console.print(f"[bold red]Requirements file not found: {file_path}[/bold red]")
+        raise typer.Exit(code=1)
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        console.print(f"[bold red]Cannot read file {file_path}: {exc}[/bold red]")
+        raise typer.Exit(code=1)
+    if not content.strip():
+        console.print(f"[bold red]Requirements file is empty: {file_path}[/bold red]")
+        raise typer.Exit(code=1)
+    return content.strip()
+
+
 def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
     """Create and run the PipelineEngine, handling checkpoint pauses and errors."""
     from agentic_dev.agents.registry import AgentRegistry  # noqa: WPS433
@@ -259,6 +276,9 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
 def new(
     app_name: str = typer.Argument(help="Name of the application to create"),
     path: str | None = typer.Option(None, help="Directory to create the project in"),
+    from_file: str | None = typer.Option(
+        None, "--from-file", help="Path to a file containing project requirements"
+    ),
     from_figma: list[str] | None = typer.Option(
         None, help="Figma URL to import designs from (use '::' for annotation, repeatable)"
     ),
@@ -280,7 +300,10 @@ def new(
         _save_config(project_dir, CheckpointConfig())
 
         # Collect user requirements
-        user_input = _collect_user_requirements()
+        if from_file:
+            user_input = _read_requirements_file(from_file)
+        else:
+            user_input = _collect_user_requirements()
 
         from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
 
@@ -446,6 +469,9 @@ def _start_update_cycle(
 def update(
     app_name: str = typer.Argument(help="Name of the application to update"),
     full_spec: str | None = typer.Option(None, help="Path to full updated spec file"),
+    from_file: str | None = typer.Option(
+        None, "--from-file", help="Path to a file containing change requirements"
+    ),
     path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
     """Trigger an update cycle on an existing project."""
@@ -465,12 +491,21 @@ def update(
 
         doc_store = DocumentStore(project_dir)
 
+        if full_spec and from_file:
+            console.print(
+                "[bold red]Cannot use both --full-spec and --from-file. "
+                "Please provide only one.[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
         if full_spec:
             spec_path = Path(full_spec)
             if not spec_path.exists():
                 console.print(f"[bold red]Spec file not found: {full_spec}[/bold red]")
                 raise typer.Exit(code=1)
             change_input = spec_path.read_text(encoding="utf-8")
+        elif from_file:
+            change_input = _read_requirements_file(from_file)
         else:
             change_input = _collect_user_requirements()
             if not change_input:
