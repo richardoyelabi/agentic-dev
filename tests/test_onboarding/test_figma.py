@@ -77,7 +77,7 @@ class TestAnalyzeFigmaDesign:
         config = mock_runner.run.call_args.kwargs["agent"]
         assert config.name == "onboarding_figma"
         assert config.model == "sonnet"
-        assert config.permission_mode == "plan"
+        assert config.permission_mode == "bypassPermissions"
         assert config.allowed_tools == ["Read", "Glob", "Grep"]
         assert config.max_turns == 30
         assert config.use_bare_mode is True

@@ -100,7 +100,7 @@ async def analyze_figma_design(
     config = AgentRunConfig(
         name="onboarding_figma",
         model="sonnet",
-        permission_mode="plan",
+        permission_mode="bypassPermissions",
         allowed_tools=["Read", "Glob", "Grep"],
         max_turns=30,
         use_bare_mode=True,
