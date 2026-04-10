@@ -1005,7 +1005,7 @@ def sync(
         # Display report
         console.print(f"\n[bold]Sync Report:[/bold] {report.summary}\n")
         for item in report.items:
-            console.print(f"  {item.id} [{item.scope}] ({item.category}): {item.description}")
+            console.print(f"  {item.id} \\[{item.scope}] ({item.category}): {item.description}")
 
         if check:
             console.print(f"\n[dim]{len(report.items)} drift item(s) found. Run without --check to resolve.[/dim]")
@@ -1029,6 +1029,12 @@ def sync(
                 _resolve_items_interactively(unresolved)
         else:
             _resolve_items_interactively(report.items)
+
+        # Snapshot spec line counts before applying resolutions
+        spec_line_counts_before: dict[str, int] = {}
+        for spec_name in ("frontend_spec", "backend_spec", "api_contract"):
+            if doc_store.exists(spec_name):
+                spec_line_counts_before[spec_name] = len(doc_store.read(spec_name).splitlines())
 
         # Apply resolutions
         apply_result = asyncio.run(apply_sync_resolutions(
@@ -1057,6 +1063,19 @@ def sync(
             f"  Ignored: {apply_result.items_ignored}\n"
             f"  Deferred: {apply_result.items_deferred}"
         )
+
+        if apply_result.specs_updated > 0:
+            console.print("\n[bold]Spec changes:[/bold]")
+            for spec_name in ("frontend_spec", "backend_spec", "api_contract"):
+                if not doc_store.exists(spec_name):
+                    continue
+                after = len(doc_store.read(spec_name).splitlines())
+                before = spec_line_counts_before.get(spec_name, 0)
+                delta = after - before
+                if delta == 0 and spec_name not in spec_line_counts_before:
+                    continue
+                sign = f"+{delta}" if delta > 0 else str(delta)
+                console.print(f"  {spec_name}: {before} -> {after} lines ({sign})")
 
         if apply_result.code_changes_queued > 0:
             console.print(

@@ -137,10 +137,11 @@ async def apply_sync_resolutions(
     ignore_items = [i for i in report.items if i.resolution == "ignore"]
     defer_items = [i for i in report.items if i.resolution == "defer"]
 
-    # Apply to_spec resolutions using spec_updater
+    # Apply to_spec resolutions by broadcasting to all existing specs.
+    # Each spec_updater agent receives all items and incorporates only
+    # those relevant to its spec, eliminating scope-based misrouting.
     if to_spec_items:
-        specs_to_update = _group_items_by_spec(to_spec_items)
-        for spec_name, items in specs_to_update.items():
+        for spec_name in ("frontend_spec", "backend_spec", "api_contract"):
             if not doc_store.exists(spec_name):
                 continue
             cost = await _update_spec(
@@ -150,7 +151,7 @@ async def apply_sync_resolutions(
                 doc_store=doc_store,
                 project_dir=project_dir,
                 spec_name=spec_name,
-                resolved_items=items,
+                resolved_items=to_spec_items,
             )
             result.total_cost += cost
             result.specs_updated += 1
@@ -341,20 +342,6 @@ def _parse_drift_report(text: str) -> SyncReport:
         items=items,
         summary=summary_line or f"{len(items)} drift item(s) found",
     )
-
-
-def _group_items_by_spec(items: list[DriftItem]) -> dict[str, list[DriftItem]]:
-    """Group drift items by which spec document they affect."""
-    groups: dict[str, list[DriftItem]] = {}
-    scope_to_spec = {
-        "api": "api_contract",
-        "frontend": "frontend_spec",
-        "backend": "backend_spec",
-    }
-    for item in items:
-        spec_name = scope_to_spec.get(item.scope, "api_contract")
-        groups.setdefault(spec_name, []).append(item)
-    return groups
 
 
 async def _update_spec(
