@@ -227,6 +227,12 @@ class SprintRunner:
         extra_context: dict[str, str] = {}
         if self._doc_store.exists("checkpoint_feedback"):
             extra_context["user_feedback"] = self._doc_store.read("checkpoint_feedback")
+        if (
+            self._pipeline_state is not None
+            and self._pipeline_state.mode == "update"
+            and self._doc_store.exists("user_input")
+        ):
+            extra_context["change_request"] = self._doc_store.read("user_input")
 
         # Backend QA cycle
         backend_result = None

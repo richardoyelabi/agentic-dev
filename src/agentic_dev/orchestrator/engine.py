@@ -179,9 +179,40 @@ class PipelineEngine:
             return ProjectType(match.group(1))
         return ProjectType.FULLSTACK
 
+    async def _merge_change_request(self, state: PipelineState) -> None:
+        """Merge a pending change_request into structured_input.
+
+        Runs the ``input_updater`` agent which surgically applies the change
+        request to the existing structured input.  The change_request document
+        is deleted afterwards so the merge is not repeated on pipeline resume.
+        """
+        output = await self._run_single_agent(
+            agent_name="input_updater",
+            input_docs={
+                "structured_input": self._doc_store.read("structured_input"),
+                "change_request": self._doc_store.read("change_request"),
+            },
+            output_doc_name="structured_input",
+        )
+        self._doc_store.write("structured_input", output)
+        self._doc_store.delete("change_request")
+        await self._commit_docs_changes("docs: updated structured input from change request")
+        state.project_type = self._parse_project_type(output)
+
+    def _update_extra_context(self, state: PipelineState) -> dict[str, str]:
+        """Build extra_context dict with change_request when in update mode."""
+        extra_context: dict[str, str] = {}
+        if state.mode == "update" and self._doc_store.exists("user_input"):
+            extra_context["change_request"] = self._doc_store.read("user_input")
+        return extra_context
+
     async def _run_feature_analysis(self, state: PipelineState) -> PipelineState:
         """Run feature_analyst + feature_analyst_qa via QA cycle."""
+        if self._doc_store.exists("change_request"):
+            await self._merge_change_request(state)
+
         structured_input = self._doc_store.read("structured_input")
+        extra_context = self._update_extra_context(state)
 
         result = await run_qa_cycle(
             claude=self._claude,
@@ -193,6 +224,7 @@ class PipelineEngine:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             session_id=state.active_session_id,
+            extra_context=extra_context,
         )
 
         total_cost = result.total_cost
@@ -214,6 +246,7 @@ class PipelineEngine:
         )
         project_type_str = state.project_type.value if state.project_type else "fullstack"
         extra_context = {"project_type": project_type_str}
+        extra_context.update(self._update_extra_context(state))
 
         result = await run_qa_cycle(
             claude=self._claude,
@@ -266,6 +299,8 @@ class PipelineEngine:
             input_docs["backend_spec"] = ""
             input_docs["api_contract"] = ""
 
+        extra_context = self._update_extra_context(state)
+
         result = await run_qa_cycle(
             claude=self._claude,
             action_agent=self._registry.get("sprint_planner"),
@@ -276,6 +311,7 @@ class PipelineEngine:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             session_id=state.active_session_id,
+            extra_context=extra_context,
         )
 
         # Populate sprint states from the plan output

@@ -124,6 +124,28 @@ class TestArchiveCycle:
         assert store.read("features.md") == "original"
 
 
+class TestDelete:
+    def test_delete_removes_existing_document(self, store):
+        store.write("features", "content")
+        assert store.exists("features") is True
+
+        store.delete("features")
+        assert store.exists("features") is False
+
+    def test_delete_nonexistent_is_silent(self, store):
+        store.delete("nonexistent")
+
+    def test_delete_without_extension(self, store):
+        store.write("features.md", "content")
+        store.delete("features")
+        assert store.exists("features") is False
+
+    def test_delete_with_extension(self, store):
+        store.write("features", "content")
+        store.delete("features.md")
+        assert store.exists("features") is False
+
+
 class TestAutoMdExtension:
     """DocumentStore should auto-append .md extension for easier viewing."""
 

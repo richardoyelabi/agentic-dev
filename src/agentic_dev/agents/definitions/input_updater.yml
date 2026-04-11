@@ -1,0 +1,19 @@
+name: input_updater
+description: "Merges a targeted change request into an existing structured input document"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 5
+  max_budget_usd: 1.00
+prompt_template: input_updater.md.j2
+input_documents: [structured_input, change_request]
+output_documents: [structured_input]
+qa_agent: null
+constraints:
+  - "Preserve everything not addressed by the change request"
+  - "Mark features that already exist in the codebase with the [EXISTING-F...] prefix"
+  - "New features get fresh [F00N] IDs continuing the sequence"
+  - "Maintain the Structured Input format exactly"
+  - "Preserve all unaffected preferences without modification"

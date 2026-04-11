@@ -67,6 +67,16 @@ class DocumentStore:
         """Check whether a document exists."""
         return self._resolve(doc_name).exists()
 
+    def delete(self, doc_name: str) -> None:
+        """Delete a document from the docs directory.
+
+        Silently succeeds if the document does not exist.
+        """
+        target = self._resolve(doc_name)
+        if target.exists():
+            with file_lock(self.lock_file):
+                target.unlink()
+
     def list_documents(self) -> list[str]:
         """List all .md files in the docs directory (non-recursive top level)."""
         if not self.docs_dir.exists():

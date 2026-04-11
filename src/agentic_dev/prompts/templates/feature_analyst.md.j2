@@ -12,6 +12,10 @@ Expand the Structured Input below into a detailed Features Request document. For
 
 {{ structured_input }}
 
+{% if change_request is defined and change_request %}
+{% include "_partials/update_context.md.j2" %}
+{% endif %}
+
 # Constraints
 
 {% for c in constraints %}

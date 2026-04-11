@@ -256,6 +256,11 @@ AGENT_TEMPLATES = {
         "resolved_items": [{"id": "DRIFT-001", "category": "in_code_not_spec", "description": "POST /api/webhooks"}],
         "constraints": ["Maintain ID sequences"],
     },
+    "input_updater.md.j2": {
+        "structured_input": "# Structured Input\n## Feature Requirements\n- [F001] Auth\n- [F002] Dashboard",
+        "change_request": "Add a notifications feature and remove the dashboard",
+        "constraints": ["Preserve existing features"],
+    },
     "uat.md.j2": {
         "features": "# Features Request",
         "frontend_spec": "# Frontend Spec",

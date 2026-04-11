@@ -49,6 +49,10 @@ The following design analyses were extracted from Figma files. Incorporate these
 {{ design_analyses }}
 {% endif %}
 
+{% if change_request is defined and change_request %}
+{% include "_partials/update_context.md.j2" %}
+{% endif %}
+
 # Constraints
 
 {% for c in constraints %}

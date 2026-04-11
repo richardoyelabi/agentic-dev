@@ -31,6 +31,10 @@ Break the features from the Features Request into feature-based sprints. Each sp
 
 {% endif %}
 
+{% if change_request is defined and change_request %}
+{% include "_partials/update_context.md.j2" %}
+{% endif %}
+
 # Constraints
 
 {% for c in constraints %}

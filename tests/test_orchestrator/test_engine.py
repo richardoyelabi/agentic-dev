@@ -1368,3 +1368,102 @@ class TestCommitDocsChanges:
             await engine._commit_docs_changes("test commit")
 
         mock_commit.assert_not_called()
+
+
+class TestMergeChangeRequest:
+    """Tests for _merge_change_request and update-mode context passing."""
+
+    @pytest.mark.asyncio
+    async def test_merge_runs_input_updater_when_change_request_exists(
+        self, engine, claude, doc_store
+    ):
+        """When change_request exists, _merge_change_request runs input_updater."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="update")
+
+        doc_store.read.side_effect = lambda name: {
+            "structured_input": "# Structured Input\n- [F001] Auth",
+            "change_request": "Add notifications feature",
+        }.get(name.replace(".md", ""), "")
+
+        claude.run.return_value = _make_claude_result(
+            "# Structured Input\n- [EXISTING-F001] Auth\n- [F002] Notifications"
+        )
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._merge_change_request(state)
+
+        # Verify input_updater agent was invoked
+        claude.run.assert_called_once()
+
+        # Verify updated structured_input was written
+        doc_store.write.assert_any_call(
+            "structured_input",
+            "# Structured Input\n- [EXISTING-F001] Auth\n- [F002] Notifications",
+        )
+
+        # Verify change_request was deleted after merge
+        doc_store.delete.assert_called_once_with("change_request")
+
+    @pytest.mark.asyncio
+    async def test_feature_analysis_calls_merge_when_change_request_exists(
+        self, engine, doc_store
+    ):
+        """_run_feature_analysis should call _merge_change_request when change_request doc exists."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="update")
+
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "change_request"
+
+        with patch.object(
+            engine, "_merge_change_request", new_callable=AsyncMock
+        ) as mock_merge, patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new_callable=AsyncMock,
+            return_value=MagicMock(total_cost=0.1, output="features output"),
+        ), patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock
+        ):
+            await engine._run_feature_analysis(state)
+
+        mock_merge.assert_called_once_with(state)
+
+    @pytest.mark.asyncio
+    async def test_feature_analysis_skips_merge_when_no_change_request(
+        self, engine, doc_store
+    ):
+        """_run_feature_analysis should NOT call _merge_change_request without change_request doc."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS)
+
+        doc_store.exists.return_value = False
+
+        with patch.object(
+            engine, "_merge_change_request", new_callable=AsyncMock
+        ) as mock_merge, patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new_callable=AsyncMock,
+            return_value=MagicMock(total_cost=0.1, output="features output"),
+        ), patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock
+        ):
+            await engine._run_feature_analysis(state)
+
+        mock_merge.assert_not_called()
+
+    def test_update_extra_context_includes_change_request_in_update_mode(
+        self, engine, doc_store
+    ):
+        """_update_extra_context returns change_request when mode is 'update'."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="update")
+        doc_store.exists.return_value = True
+        doc_store.read.return_value = "Add notifications feature"
+
+        result = engine._update_extra_context(state)
+
+        assert result == {"change_request": "Add notifications feature"}
+
+    def test_update_extra_context_empty_in_new_mode(self, engine, doc_store):
+        """_update_extra_context returns empty dict when mode is not 'update'."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="new")
+
+        result = engine._update_extra_context(state)
+
+        assert result == {}

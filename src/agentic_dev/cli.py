@@ -439,10 +439,15 @@ def _start_update_cycle(
     change_input: str,
     mode: str,
     restart_phase: PipelinePhase,
+    is_targeted: bool = False,
 ) -> None:
     """Archive docs, write change input, reset state, and run the pipeline.
 
     Shared by the ``update`` and ``remediate`` commands.
+
+    When *is_targeted* is True the change input describes incremental changes
+    rather than a full replacement.  A ``change_request`` document is written
+    so the pipeline engine can merge it into the existing structured input.
     """
     from agentic_dev.state.transitions import reset_for_update  # noqa: WPS433
 
@@ -457,6 +462,8 @@ def _start_update_cycle(
     console.print(f"[cyan]Archived documents to docs/archive/{cycle_label}/[/cyan]")
 
     doc_store.write("user_input", change_input)
+    if is_targeted:
+        doc_store.write("change_request", change_input)
 
     state = reset_for_update(state, restart_phase, mode)
     state_mgr.save(state)
@@ -530,6 +537,7 @@ def update(
             change_input=change_input,
             mode="update",
             restart_phase=restart_phase,
+            is_targeted=not full_spec,
         )
 
     except AgenticDevError as exc:

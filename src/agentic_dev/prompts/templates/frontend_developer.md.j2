@@ -16,6 +16,10 @@ Implement the frontend code for the current sprint. Write all components, pages,
 
 {% include "_partials/api_contract_context.md.j2" %}
 
+{% if change_request is defined and change_request %}
+{% include "_partials/update_context.md.j2" %}
+{% endif %}
+
 # Constraints
 
 {% for c in constraints %}
