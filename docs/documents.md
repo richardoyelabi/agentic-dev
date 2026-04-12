@@ -13,7 +13,10 @@
 | Integration Guide | Integration Agent | User, UAT | `integration_guide.md` |
 | QA Reports | All QA agents | Action agents | `qa_reports/<agent>_qa.md` |
 | UAT Report | UAT Agent | User | `uat_report.md` |
-| Design Analyses | Figma Analyzer | Architect, Spec Reverse Engineer | `design_analyses.md` |
+| Design Analyses | Figma Analyzer | Architect, Spec Reverse Engineer, Design Diff | `design_analyses.md` |
+| Figma Sources | CLI (`new`, `adopt`, `update`) | Frontend Dev, Frontend QA | `figma_sources.md` |
+| Design Changes | Design Diff | All downstream agents, UAT | `design_changes.md` |
+| Spec Changes | Spec Diff | All downstream agents, UAT | `spec_changes.md` |
 | Sync Change Request | Sync resolver | Update command (`--from-sync`) | `sync_change_request.md` |
 
 ## No-Duplication Principle
@@ -25,31 +28,42 @@
 
 ## Document Flow
 
+Text and design are **parallel channels** — both flow independently and are distributed to all downstream agents.
+
 ```
-User Input
-    │
-    ▼
-Structured Input
-    │
-    ▼
-Features Request ──── (QA review)
-    │
-    ├──► Frontend Spec ┐
-    ├──► Backend Spec  ├── (QA review)
-    └──► API Contract  ┘
-              │
-              ▼
-         Sprint Plan ──── (QA review)
-              │
-              ▼
-    ┌─── Sprint N ───┐
-    │ Backend code    │
-    │ Frontend code   │── (per-sprint QA)
-    │ Integration     │
-    └─────────────────┘
-              │
-              ▼
-         UAT Report
+Text Input                   Figma URLs
+    │                            │
+    ▼                            ▼
+Structured Input           Design Analyses
+    │                            │
+    │    (on update)             │    (on update)
+    │   Spec Diff                │   Design Diff
+    │       │                    │       │
+    │       ▼                    │       ▼
+    │  Spec Changes         Design Changes
+    │       │                    │
+    └───────┴────────────────────┘
+                    │
+                    ▼ (extra_context to all agents below)
+            Features Request ──── (QA review)
+                    │
+          ┌─────────┼─────────┐
+          ▼         ▼         ▼
+    Frontend Spec  Backend Spec  API Contract ── (QA review)
+                    │
+                    ▼
+               Sprint Plan ──── (QA review)
+                    │
+                    ▼
+         ┌─── Sprint N ──────────────┐
+         │ Backend code               │
+         │ Frontend code (+ Figma)    │── (per-sprint QA)
+         │ Integration                │
+         └────────────────────────────┘
+                    │
+                    ▼
+               UAT Report
+               (receives change_request + spec_changes + design_changes)
 ```
 
 ## Document Schemas

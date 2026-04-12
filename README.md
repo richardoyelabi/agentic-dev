@@ -4,12 +4,14 @@ Autonomous software development agency powered by Claude Code CLI. Takes a produ
 
 ## Features
 
-- **22 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
+- **25 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
 - **Independent QA review** at every stage with one-cycle correction
 - **Feature-based sprints** break large projects into manageable chunks
 - **Configurable checkpoints** for human review (default: pause after design)
 - **Full autonomy mode** for end-to-end unattended execution
-- **Update support** for both targeted changes and full re-specifications
+- **Update support** for targeted changes, full re-specifications, and design updates via `--from-figma`
+- **Figma as first-class design input** — design and text are parallel, equal channels; frontend agents get direct Figma MCP access during implementation
+- **Automatic design and spec diffing** — `design_diff` and `spec_diff` agents produce change summaries that flow to all downstream agents
 - **Adopt existing projects** with full spec reverse-engineering from codebases and Figma designs
 - **Continuous sync** between code, specs, and Figma with flexible source-of-truth resolution
 
@@ -110,11 +112,12 @@ When neither `--from-file` nor `--full-spec` is provided, you'll be prompted to 
 
 ```
 Options:
-  --from-file TEXT  Path to a file containing change requirements
-  --full-spec TEXT  Path to full updated spec file (triggers structured diff for optimal restart point)
+  --from-file TEXT   Path to a file containing change requirements
+  --full-spec TEXT   Path to full updated spec file (triggers structured diff for optimal restart point)
+  --from-figma TEXT  Figma URL to import updated designs from (supports value::annotation, repeatable)
 ```
 
-`--from-file` and `--full-spec` are mutually exclusive.
+`--from-file` and `--full-spec` are mutually exclusive. `--from-figma` is compatible with all options — it adds a parallel design channel alongside text changes. When Figma is provided, the pipeline automatically diffs old vs new design analyses and distributes the change summary to all downstream agents.
 
 ### `agentic-dev status [app-name]`
 
@@ -146,14 +149,14 @@ Show cost breakdown by agent and sprint.
 
 ## Architecture
 
-The agency consists of 7 teams with 22 agents:
+The agency consists of 7 teams with 25 agents:
 
 | Team | Agents | Purpose |
 |---|---|---|
-| Design & Architecture | Input Processor, Feature Analyst + QA, Architect + QA, Sprint Planner + QA | Requirements analysis, specifications, sprint planning |
+| Design & Architecture | Input Processor, Input Updater, Feature Analyst + QA, Architect + QA, Sprint Planner + QA, Design Diff, Spec Diff | Requirements analysis, specifications, sprint planning, change diffing |
 | Adoption | Structure Detector, Spec Reverse Engineer + QA, Feature Extractor + QA | Reverse-engineer specs from existing codebases |
 | Sync | Code Analyzer, Drift Detector, Spec Updater | Detect and resolve drift between code and specs |
-| Frontend | Frontend Developer + QA | UI implementation per sprint |
+| Frontend | Frontend Developer + QA | UI implementation per sprint (with direct Figma MCP access) |
 | Backend | Backend Developer + QA | API and business logic per sprint |
 | Integration | Integration Agent + QA | Third-party service connections |
 | QA | UAT Agent | User acceptance testing |
@@ -161,13 +164,16 @@ The agency consists of 7 teams with 22 agents:
 ### Pipeline Flow
 
 ```
-New project:    User Input → Design Phase → [CHECKPOINT] → Sprint 1..N → UAT → Done
+New project:    Text + Figma → Design Phase → [CHECKPOINT] → Sprint 1..N → UAT → Done
 Adopt project:  Existing Code → Spec Generation → [ADOPTED] → (update/sync as needed)
 Adopt + extend: Existing Code → Spec Generation → Design Phase → Sprint 1..N → UAT → Done
+Update:         Text changes + Figma changes (parallel) → Diff → Design Phase → Sprint 1..N → Done
 Sync:           Code + Specs → Drift Detection → User Resolution → Spec/Code Updates
 ```
 
-Each sprint: Backend → Frontend → Integration (if needed)
+Text and design are **parallel input channels** — both flow independently through the pipeline. When Figma designs change, `design_diff` computes what changed; when full specs change, `spec_diff` computes what changed. Both summaries flow to every downstream agent including UAT.
+
+Each sprint: Backend → Frontend (with Figma MCP access) → Integration (if needed)
 
 ### QA Pattern
 
@@ -181,6 +187,10 @@ Every agent has an independent QA counterpart. QA receives only the agent's inpu
 - **Backend Spec** — Data models, services, business logic
 - **API Contract** — Single source of truth for frontend/backend interface
 - **Sprint Plan** — Feature-based sprint decomposition
+- **Design Analyses** — Extracted pages, components, tokens, and navigation from Figma
+- **Figma Sources** — Figma URLs passed to frontend agents for direct MCP access
+- **Design Changes** — Summary of what changed between old and new design analyses (`design_diff`)
+- **Spec Changes** — Summary of what changed between old and new full specs (`spec_diff`)
 - **QA Reports** — Review feedback at every stage
 - **UAT Report** — Final acceptance test results
 

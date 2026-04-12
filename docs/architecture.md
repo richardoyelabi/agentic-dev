@@ -77,6 +77,12 @@ Creates and adopts project directories. Initializes git repos. Generates CLAUDE.
 ### `mcp/claude_settings.py`
 Discovers MCP servers from Claude Code's native settings files (`~/.claude/settings.json`, project `.claude/settings.json`, `.claude/settings.local.json`). Provides fuzzy matching to find servers by service name. Agents inherit configured MCP servers automatically — no `--mcp-config` flag needed.
 
+### `onboarding/figma.py`
+Figma-specific helpers. `analyze_figma_designs()` runs Claude agents with Figma MCP to extract design analyses. `write_figma_sources()` persists Figma URLs as the `figma_sources` doc. `run_design_diff()` invokes the `design_diff` agent to compare old vs new design analyses and produce a `design_changes` summary. `check_figma_mcp_available()` validates the Figma MCP server is configured in the Claude Code environment.
+
+### `documents/diff.py`
+Spec diffing helpers. `run_spec_diff()` invokes the `spec_diff` agent to compare old vs new structured input and produce a `spec_changes` summary. Used during `--full-spec` update cycles.
+
 ### `mcp/catalog.py`
 Text-based service detection using regex patterns. Scans sprint plan text for references to known services (figma, github, stripe, supabase).
 
@@ -88,12 +94,18 @@ Global settings, constants, and project configuration models. Contains `ProjectC
 
 ## Data Flow
 
+Text and design are parallel input channels that merge into `extra_context` flowing to all downstream agents.
+
 1. User input → Input Processor → Structured Input
-2. Structured Input → Feature Analyst (+QA) → Features Request
-3. Features Request → Architect (+QA) → Frontend Spec + Backend Spec + API Contract
-4. All specs → Sprint Planner (+QA) → Sprint Plan
-5. Per sprint: specs + sprint scope → Dev agents (+QA) → Code
-6. All code → UAT → Report
+2. Figma URLs → Figma Analyzer → Design Analyses + Figma Sources (stored independently)
+3. On update (`--full-spec`): old + new Structured Input → Spec Diff → Spec Changes
+4. On update (`--from-figma`): old + new Design Analyses → Design Diff → Design Changes
+5. Structured Input → Feature Analyst (+QA) → Features Request
+6. Features Request → Architect (+QA) → Frontend Spec + Backend Spec + API Contract
+7. All specs → Sprint Planner (+QA) → Sprint Plan
+8. Per sprint: specs + sprint scope + extra_context → Dev agents (+QA) → Code
+   - Frontend agents also receive Figma Sources + `figma_mcp_available` for direct design access
+9. All code + extra_context → UAT → Report
 
 ## State Machine
 

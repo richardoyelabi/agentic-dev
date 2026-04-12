@@ -97,10 +97,12 @@ You can also combine reference sources with your own requirements. Describe what
 
 #### How Results Flow Through the Pipeline
 
+Text and design are **parallel input channels** — they are stored and processed independently, not merged together.
+
 1. Each source is analyzed concurrently by a dedicated Claude agent
-2. Analysis results are appended to your requirements text with section headers (e.g., `## Source: Codebase - Frontend React app`)
-3. The combined text is saved as `docs/user_input.md` and passed to the **Input Processor**, which merges detected tech stack, features, and patterns with your stated preferences
-4. Figma analyses are additionally saved as `docs/design_analyses.md` and passed directly to the **Architect** for frontend specification
+2. Codebase analyses are appended to your requirements text and saved as `docs/user_input.md`; the **Input Processor** merges detected tech stack, features, and patterns with your stated preferences
+3. Figma analyses are saved as `docs/design_analyses.md` — a separate document that flows directly to the **Architect** for frontend specification
+4. Figma URLs are saved as `docs/figma_sources.md` and passed to frontend agents during sprinting, giving the **Frontend Developer** and **Frontend QA** direct Figma MCP access for pixel-accurate implementation
 
 ## The Design Phase
 
@@ -157,9 +159,17 @@ agentic-dev update my-app --from-file changes.md
 
 # Full re-specification — replace requirements entirely from a file
 agentic-dev update my-app --full-spec requirements-v2.txt
+
+# Design update — import updated Figma designs (compatible with all options above)
+agentic-dev update my-app --from-figma "https://figma.com/file/..."
+
+# Combined — update text requirements and designs together
+agentic-dev update my-app --from-file changes.md --from-figma "https://figma.com/file/..."
 ```
 
-`--from-file` and `--full-spec` are mutually exclusive — use one or the other. `--full-spec` additionally triggers a structured diff against the previous spec to determine the optimal pipeline restart point.
+`--from-file` and `--full-spec` are mutually exclusive — use one or the other. `--full-spec` additionally triggers a `spec_diff` agent that compares old vs new structured input and produces a human-readable `spec_changes` summary for all downstream agents.
+
+`--from-figma` is a **parallel design channel** — it is compatible with all text options. When provided, the pipeline reads the old design analyses before archiving, runs the new Figma analysis, then invokes the `design_diff` agent to produce a `design_changes` summary. This summary flows to every downstream agent, including UAT. Text and design changes are always independent: you can update either or both in a single `update` run.
 
 ## Adopting an Existing Project
 
