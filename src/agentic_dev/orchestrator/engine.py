@@ -204,6 +204,8 @@ class PipelineEngine:
         extra_context: dict[str, str] = {}
         if state.mode == "update" and self._doc_store.exists("user_input"):
             extra_context["change_request"] = self._doc_store.read("user_input")
+        if self._doc_store.exists("spec_changes"):
+            extra_context["spec_changes"] = self._doc_store.read("spec_changes")
         if self._doc_store.exists("design_changes"):
             extra_context["design_changes"] = self._doc_store.read("design_changes")
         return extra_context

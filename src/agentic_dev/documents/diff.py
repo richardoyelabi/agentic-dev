@@ -1,6 +1,9 @@
 """Document diffing for detecting changes between structured input versions."""
 
+from __future__ import annotations
+
 import re
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -85,3 +88,55 @@ def determine_restart_phase(
         return "architecture"
 
     return "feature_analysis"
+
+
+async def run_spec_diff(
+    claude: "ClaudeRunner",
+    old_structured_input: str,
+    new_structured_input: str,
+    working_dir: Path,
+) -> str:
+    """Compare old and new structured input to produce a change summary.
+
+    Uses the ``spec_diff`` agent to identify what changed between two
+    versions of a Structured Input document.
+
+    Returns:
+        A textual summary of spec changes.
+    """
+    from agentic_dev.orchestrator.agent_bridge import AgentRunConfig  # noqa: WPS433
+    from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
+
+    config = AgentRunConfig(
+        name="spec_diff",
+        model="opus",
+        permission_mode="bypassPermissions",
+        allowed_tools=[],
+        max_turns=5,
+        use_bare_mode=True,
+        mcp_config=None,
+        system_prompt=None,
+    )
+
+    renderer = PromptRenderer()
+    prompt = renderer.render(
+        "spec_diff.md.j2",
+        {
+            "old_structured_input": old_structured_input,
+            "new_structured_input": new_structured_input,
+            "constraints": [
+                "Identify all added, removed, and modified features",
+                "Identify changes to preferences, tech stack, and project type",
+                "Identify changes to non-functional requirements",
+                "Do not describe unchanged elements",
+                "Be specific about what changed — include old and new values where applicable",
+            ],
+        },
+    )
+
+    result = await claude.run(
+        agent=config,
+        prompt=prompt,
+        working_dir=working_dir,
+    )
+    return result.text

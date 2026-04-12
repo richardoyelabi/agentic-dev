@@ -439,6 +439,7 @@ def _start_update_cycle(
     is_targeted: bool = False,
     design_input: str | None = None,
     design_changes: str | None = None,
+    spec_changes: str | None = None,
 ) -> None:
     """Archive docs, write change input, reset state, and run the pipeline.
 
@@ -454,6 +455,10 @@ def _start_update_cycle(
     When *design_changes* is provided (a diff summary produced by the
     ``design_diff`` agent), it is written as a ``design_changes`` document so
     downstream agents know what changed.
+
+    When *spec_changes* is provided (a diff summary produced by the
+    ``spec_diff`` agent for ``--full-spec`` updates), it is written as a
+    ``change_request`` document so downstream agents know what changed.
     """
     from agentic_dev.state.transitions import reset_for_update  # noqa: WPS433
 
@@ -478,6 +483,9 @@ def _start_update_cycle(
 
     if design_changes:
         doc_store.write("design_changes", design_changes)
+
+    if spec_changes:
+        doc_store.write("spec_changes", spec_changes)
 
     state = reset_for_update(state, restart_phase, mode)
     state_mgr.save(state)
@@ -524,12 +532,32 @@ def update(
 
         # -- Text channel --
         change_input: str | None = None
+        spec_changes: str | None = None
         if full_spec:
             spec_path = Path(full_spec)
             if not spec_path.exists():
                 console.print(f"[bold red]Spec file not found: {full_spec}[/bold red]")
                 raise typer.Exit(code=1)
             change_input = spec_path.read_text(encoding="utf-8")
+
+            # Read old structured_input before it gets archived for diff
+            old_structured_input = (
+                doc_store.read("structured_input")
+                if doc_store.exists("structured_input")
+                else ""
+            )
+            if old_structured_input:
+                from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+                from agentic_dev.documents.diff import run_spec_diff  # noqa: WPS433
+
+                console.print("[cyan]Comparing old and new specs...[/cyan]")
+                log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
+                spec_changes = asyncio.run(
+                    run_spec_diff(
+                        ClaudeRunner(log_dir=log_dir),
+                        old_structured_input, change_input, project_dir,
+                    )
+                )
         elif from_file:
             change_input = _read_requirements_file(from_file)
         elif not from_figma:
@@ -621,6 +649,7 @@ def update(
             is_targeted=is_targeted,
             design_input=design_input,
             design_changes=design_changes,
+            spec_changes=spec_changes,
         )
 
     except AgenticDevError as exc:

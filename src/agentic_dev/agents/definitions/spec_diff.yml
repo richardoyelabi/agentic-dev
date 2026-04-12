@@ -1,0 +1,19 @@
+name: spec_diff
+description: "Compares old and new structured input specs to produce a summary of what changed"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 5
+  max_budget_usd: 1.00
+prompt_template: spec_diff.md.j2
+input_documents: [old_structured_input, new_structured_input]
+output_documents: [spec_changes]
+qa_agent: null
+constraints:
+  - "Identify all added, removed, and modified features"
+  - "Identify changes to preferences, tech stack, and project type"
+  - "Identify changes to non-functional requirements"
+  - "Do not describe unchanged elements"
+  - "Be specific about what changed — include old and new values where applicable"

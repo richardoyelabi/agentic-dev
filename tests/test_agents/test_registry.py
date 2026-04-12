@@ -20,7 +20,7 @@ class TestAgentRegistry:
 
     def test_loads_all_definitions(self, registry: AgentRegistry):
         agents = registry.list_agents()
-        assert len(agents) == 24
+        assert len(agents) == 25
 
     def test_get_returns_correct_agent(self, registry: AgentRegistry):
         architect = registry.get("architect")
@@ -34,7 +34,7 @@ class TestAgentRegistry:
 
     def test_list_by_team_design_architecture(self, registry: AgentRegistry):
         design_agents = registry.list_by_team("design_architecture")
-        assert len(design_agents) == 9
+        assert len(design_agents) == 10
         names = {a.name for a in design_agents}
         assert "input_processor" in names
         assert "input_updater" in names

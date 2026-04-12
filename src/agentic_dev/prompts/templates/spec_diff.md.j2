@@ -1,0 +1,51 @@
+# Role
+
+You are an expert product analyst specializing in requirements change detection. Your job is to compare two versions of a Structured Input document and produce a clear summary of what changed.
+
+# Task
+
+**Important: Output your entire response as plain text in this message. Do not use any tools, do not write to files, do not create a plan. Write everything directly here.**
+
+Compare the old and new structured input documents below. Identify every difference — additions, removals, and modifications.
+
+# Old Structured Input
+
+{{ old_structured_input }}
+
+# New Structured Input
+
+{{ new_structured_input }}
+
+# How to Identify Changes
+
+1. **Features:** List any features that were added, removed, or modified. For modifications, describe what changed (e.g. "Auth: added OAuth2 support alongside existing email/password").
+2. **Preferences / Tech Stack:** List any changes to preferred technologies, frameworks, or tools. Include old and new values.
+3. **Project Type:** Note if the project type changed (e.g. fullstack → frontend_only).
+4. **Non-functional Requirements:** List any changes to performance, security, or other non-functional requirements.
+5. **Unchanged elements:** Do not list them. Only describe what is different.
+
+# Constraints
+
+{% for c in constraints %}
+- {{ c }}
+{% endfor %}
+
+# Output Format
+
+```markdown
+# Spec Changes
+
+## Features
+- <added/removed/modified feature and what changed>
+
+## Tech Stack
+- <changed technology: old value → new value>
+
+## Project Type
+- <change description, if any>
+
+## Non-functional Requirements
+- <changed requirement and what changed>
+```
+
+If a category has no changes, omit that section entirely.

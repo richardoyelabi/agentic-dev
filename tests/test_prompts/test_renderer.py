@@ -262,6 +262,11 @@ AGENT_TEMPLATES = {
         "change_request": "Add a notifications feature and remove the dashboard",
         "constraints": ["Preserve existing features"],
     },
+    "spec_diff.md.j2": {
+        "old_structured_input": "# Structured Input\n## Feature Requirements\n- [F001] Auth\n- [F002] Dashboard",
+        "new_structured_input": "# Structured Input\n## Feature Requirements\n- [F001] Auth with OAuth2\n- [F003] Settings page",
+        "constraints": ["Identify all changes"],
+    },
     "design_diff.md.j2": {
         "old_design_analyses": "# Design Analysis\n## Pages\n### Home\n- **Layout:** Grid\n## Components\n### Button\n- **Purpose:** Primary action\n- **Border radius:** 4px",
         "new_design_analyses": "# Design Analysis\n## Pages\n### Home\n- **Layout:** Grid\n## Components\n### Button\n- **Purpose:** Primary action\n- **Border radius:** 8px\n### Card\n- **Purpose:** Content container",
