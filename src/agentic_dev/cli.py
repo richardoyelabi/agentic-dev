@@ -332,6 +332,7 @@ def new(
             from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
             from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
             from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
+            from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
 
             if not check_mcp_prerequisites(["figma"], console):
                 raise typer.Exit(code=1)
@@ -345,29 +346,25 @@ def new(
             )
             design_sections: list[str] = []
             for src, result in zip(figma_sources, figma_results):
-                header = "\n\n---\n## Source: Figma Design"
-                if src.annotation:
-                    header += f" - {src.annotation}"
-                header += f"\n**URL:** `{src.value}`\n\n"
-                user_input = (user_input or "") + header + result.text
-
                 doc_header = "## Source: Figma Design"
                 if src.annotation:
                     doc_header += f" - {src.annotation}"
                 doc_header += f"\n**URL:** `{src.value}`\n\n"
                 design_sections.append(doc_header + result.text)
 
-        if not user_input:
+        if not user_input and not figma_sources:
             console.print("[bold red]No requirements provided. Aborting.[/bold red]")
             raise typer.Exit(code=1)
 
         # Save user input to docs/
         doc_store = DocumentStore(project_dir)
-        doc_store.write("user_input", user_input)
-        console.print("[green]Saved requirements to docs/user_input.md[/green]")
+        if user_input:
+            doc_store.write("user_input", user_input)
+            console.print("[green]Saved requirements to docs/user_input.md[/green]")
 
         if figma_sources:
             doc_store.write("design_analyses", "\n\n---\n".join(design_sections))
+            write_figma_sources(doc_store, figma_sources)
 
         _run_pipeline(project_dir, state)
 
@@ -436,10 +433,12 @@ def _start_update_cycle(
     project_dir: Path,
     state: PipelineState,
     state_mgr: StateManager,
-    change_input: str,
+    change_input: str | None,
     mode: str,
     restart_phase: PipelinePhase,
     is_targeted: bool = False,
+    design_input: str | None = None,
+    design_changes: str | None = None,
 ) -> None:
     """Archive docs, write change input, reset state, and run the pipeline.
 
@@ -448,6 +447,13 @@ def _start_update_cycle(
     When *is_targeted* is True the change input describes incremental changes
     rather than a full replacement.  A ``change_request`` document is written
     so the pipeline engine can merge it into the existing structured input.
+
+    When *design_input* is provided, a ``design_input`` document is written as
+    an audit trail and ``design_analyses`` is overwritten with the new analysis.
+
+    When *design_changes* is provided (a diff summary produced by the
+    ``design_diff`` agent), it is written as a ``design_changes`` document so
+    downstream agents know what changed.
     """
     from agentic_dev.state.transitions import reset_for_update  # noqa: WPS433
 
@@ -461,9 +467,17 @@ def _start_update_cycle(
     doc_store.archive_cycle(cycle_label)
     console.print(f"[cyan]Archived documents to docs/archive/{cycle_label}/[/cyan]")
 
-    doc_store.write("user_input", change_input)
-    if is_targeted:
-        doc_store.write("change_request", change_input)
+    if change_input:
+        doc_store.write("user_input", change_input)
+        if is_targeted:
+            doc_store.write("change_request", change_input)
+
+    if design_input:
+        doc_store.write("design_input", design_input)
+        doc_store.write("design_analyses", design_input)
+
+    if design_changes:
+        doc_store.write("design_changes", design_changes)
 
     state = reset_for_update(state, restart_phase, mode)
     state_mgr.save(state)
@@ -478,6 +492,9 @@ def update(
     full_spec: str | None = typer.Option(None, help="Path to full updated spec file"),
     from_file: str | None = typer.Option(
         None, "--from-file", help="Path to a file containing change requirements"
+    ),
+    from_figma: list[str] | None = typer.Option(
+        None, help="Figma URL to import designs from (use '::' for annotation, repeatable)"
     ),
     path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
@@ -505,6 +522,8 @@ def update(
             )
             raise typer.Exit(code=1)
 
+        # -- Text channel --
+        change_input: str | None = None
         if full_spec:
             spec_path = Path(full_spec)
             if not spec_path.exists():
@@ -513,31 +532,95 @@ def update(
             change_input = spec_path.read_text(encoding="utf-8")
         elif from_file:
             change_input = _read_requirements_file(from_file)
-        else:
+        elif not from_figma:
             change_input = _collect_user_requirements()
             if not change_input:
                 console.print(
                     "[bold red]No change description provided.[/bold red]"
                 )
                 raise typer.Exit(code=1)
+        else:
+            change_input = _collect_user_requirements()
+            # Figma is provided, so empty text is acceptable
+
+        # -- Design channel --
+        from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
+
+        figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
+        design_input: str | None = None
+        design_changes: str | None = None
+
+        if figma_sources:
+            from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+            from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
+            from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
+            from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
+
+            if not check_mcp_prerequisites(["figma"], console):
+                raise typer.Exit(code=1)
+
+            # Read old design_analyses before it gets archived
+            old_design_analyses = (
+                doc_store.read("design_analyses")
+                if doc_store.exists("design_analyses")
+                else ""
+            )
+
+            for src in figma_sources:
+                label = f"{src.value} ({src.annotation})" if src.annotation else src.value
+                console.print(f"[cyan]Importing designs from Figma: {label}[/cyan]")
+
+            log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
+            figma_claude = ClaudeRunner(log_dir=log_dir)
+            figma_results = asyncio.run(
+                analyze_figma_designs(figma_claude, figma_sources, project_dir)
+            )
+            design_sections: list[str] = []
+            for src, result in zip(figma_sources, figma_results):
+                doc_header = "## Source: Figma Design"
+                if src.annotation:
+                    doc_header += f" - {src.annotation}"
+                doc_header += f"\n**URL:** `{src.value}`\n\n"
+                design_sections.append(doc_header + result.text)
+            design_input = "\n\n---\n".join(design_sections)
+
+            write_figma_sources(doc_store, figma_sources)
+
+            # Run design_diff agent to produce a change summary
+            if old_design_analyses:
+                from agentic_dev.onboarding.figma import run_design_diff  # noqa: WPS433
+
+                console.print("[cyan]Comparing old and new designs...[/cyan]")
+                design_changes = asyncio.run(
+                    run_design_diff(figma_claude, old_design_analyses, design_input, project_dir)
+                )
+
+        if not change_input and not figma_sources:
+            console.print("[bold red]No change description provided.[/bold red]")
+            raise typer.Exit(code=1)
 
         # Determine restart phase using document diff
         from agentic_dev.documents.diff import diff_structured_input  # noqa: WPS433
 
+        is_targeted = not full_spec
         restart_phase = PipelinePhase.FEATURE_ANALYSIS
         if full_spec and doc_store.exists("structured_input.md"):
             old_input = doc_store.read("structured_input.md")
-            diff_result = diff_structured_input(old_input, change_input)
+            diff_result = diff_structured_input(old_input, change_input or "")
             restart_phase = PipelinePhase(diff_result.restart_from.upper())
+        elif figma_sources and not change_input:
+            restart_phase = PipelinePhase.ARCHITECTURE
 
         _start_update_cycle(
             project_dir=project_dir,
             state=state,
             state_mgr=state_mgr,
-            change_input=change_input,
+            change_input=change_input or None,
             mode="update",
             restart_phase=restart_phase,
-            is_targeted=not full_spec,
+            is_targeted=is_targeted,
+            design_input=design_input,
+            design_changes=design_changes,
         )
 
     except AgenticDevError as exc:
@@ -894,6 +977,7 @@ def adopt(
             from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
             from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
             from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
+            from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
 
             if not check_mcp_prerequisites(["figma"], console):
                 raise typer.Exit(code=1)
@@ -928,6 +1012,9 @@ def adopt(
         claude = ClaudeRunner(log_dir=log_dir)
         registry = AgentRegistry(definitions_dir=AGENT_DEFINITIONS_DIR)
         doc_store = DocumentStore(path)
+
+        if figma_sources:
+            write_figma_sources(doc_store, figma_sources)
         prompt_renderer = PromptRenderer(templates_dir=PROMPT_TEMPLATES_DIR)
 
         adoption_result = asyncio.run(run_adoption(
@@ -1063,9 +1150,14 @@ def sync(
                 item.resolution = "to_code"
             console.print("\n[cyan]Auto-resolving all items as 'to_code' (specs are truth)[/cyan]")
         elif from_source == "figma":
+            _figma_to_code = {"in_spec_not_code", "difference"}
+            _figma_to_spec = {"design_drift", "in_code_not_spec"}
             for item in report.items:
                 if item.scope == "figma":
-                    item.resolution = "to_spec"
+                    if item.category in _figma_to_code:
+                        item.resolution = "to_code"
+                    elif item.category in _figma_to_spec:
+                        item.resolution = "to_spec"
             unresolved = [i for i in report.items if i.resolution is None]
             if unresolved:
                 _resolve_items_interactively(unresolved)

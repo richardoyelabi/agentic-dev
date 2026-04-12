@@ -249,6 +249,7 @@ AGENT_TEMPLATES = {
         "code_snapshots": "# Code Snapshot: Backend\n## Endpoints\n- GET /api/users",
         "spec_documents": "# API Contract\n## Endpoints\n### [E001] GET /api/users",
         "figma_analysis": "",
+        "figma_sources": "",
         "sync_ignores": [],
     },
     "spec_updater.md.j2": {
@@ -261,12 +262,19 @@ AGENT_TEMPLATES = {
         "change_request": "Add a notifications feature and remove the dashboard",
         "constraints": ["Preserve existing features"],
     },
+    "design_diff.md.j2": {
+        "old_design_analyses": "# Design Analysis\n## Pages\n### Home\n- **Layout:** Grid\n## Components\n### Button\n- **Purpose:** Primary action\n- **Border radius:** 4px",
+        "new_design_analyses": "# Design Analysis\n## Pages\n### Home\n- **Layout:** Grid\n## Components\n### Button\n- **Purpose:** Primary action\n- **Border radius:** 8px\n### Card\n- **Purpose:** Content container",
+        "constraints": ["Identify all changes"],
+    },
     "uat.md.j2": {
         "features": "# Features Request",
         "frontend_spec": "# Frontend Spec",
         "backend_spec": "# Backend Spec",
         "api_contract": "# API Contract",
         "sprint_plan": "# Sprint Plan",
+        "change_request": "",
+        "design_changes": "",
     },
 }
 
@@ -559,3 +567,61 @@ class TestInputProcessorOnboardingGuidance:
         assert "React 18" in result
         assert "Admin dashboard" in result
         assert "{{" not in result
+
+
+class TestFigmaPromptSections:
+    """Verify frontend templates include Figma sections when figma_sources is provided."""
+
+    def test_frontend_developer_includes_figma_section_when_available(self, real_renderer):
+        context = {
+            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+        }
+        result = real_renderer.render("frontend_developer.md.j2", context)
+        assert "Figma Design Reference" in result
+        assert "visual source of truth" in result.lower()
+        assert "figma.com/file/abc" in result
+
+    def test_frontend_developer_excludes_figma_section_without_sources(self, real_renderer):
+        result = real_renderer.render(
+            "frontend_developer.md.j2",
+            AGENT_TEMPLATES["frontend_developer.md.j2"],
+        )
+        assert "Figma Design Reference" not in result
+
+    def test_frontend_developer_figma_mcp_unavailable_fallback(self, real_renderer):
+        context = {
+            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "false",
+        }
+        result = real_renderer.render("frontend_developer.md.j2", context)
+        assert "Figma Design Reference" in result
+        assert "not available" in result.lower()
+
+    def test_frontend_qa_includes_figma_section_when_available(self, real_renderer):
+        context = {
+            **AGENT_TEMPLATES["frontend_qa.md.j2"],
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+        }
+        result = real_renderer.render("frontend_qa.md.j2", context)
+        assert "Figma Design Reference" in result
+        assert "figma.com/file/abc" in result
+
+    def test_frontend_qa_includes_design_fidelity_criterion(self, real_renderer):
+        context = {
+            **AGENT_TEMPLATES["frontend_qa.md.j2"],
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+        }
+        result = real_renderer.render("frontend_qa.md.j2", context)
+        assert "match the design" in result.lower()
+
+    def test_frontend_qa_excludes_figma_section_without_sources(self, real_renderer):
+        result = real_renderer.render(
+            "frontend_qa.md.j2",
+            AGENT_TEMPLATES["frontend_qa.md.j2"],
+        )
+        assert "Figma Design Reference" not in result

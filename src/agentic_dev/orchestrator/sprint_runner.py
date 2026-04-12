@@ -12,6 +12,7 @@ from agentic_dev.config import DirectoryMap
 from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
+from agentic_dev.onboarding.figma import FigmaMCPNotConfigured, check_figma_mcp_available
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import (
@@ -233,6 +234,21 @@ class SprintRunner:
             and self._doc_store.exists("user_input")
         ):
             extra_context["change_request"] = self._doc_store.read("user_input")
+
+        if self._doc_store.exists("design_changes"):
+            extra_context["design_changes"] = self._doc_store.read("design_changes")
+
+        if self._doc_store.exists("figma_sources"):
+            extra_context["figma_sources"] = self._doc_store.read("figma_sources")
+            try:
+                check_figma_mcp_available()
+                extra_context["figma_mcp_available"] = "true"
+            except FigmaMCPNotConfigured:
+                _event_log.warning(
+                    "Figma MCP server not configured. Frontend agents will "
+                    "fall back to text-based design references."
+                )
+                extra_context["figma_mcp_available"] = "false"
 
         # Backend QA cycle
         backend_result = None

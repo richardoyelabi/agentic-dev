@@ -1453,7 +1453,7 @@ class TestMergeChangeRequest:
     ):
         """_update_extra_context returns change_request when mode is 'update'."""
         state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="update")
-        doc_store.exists.return_value = True
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "user_input"
         doc_store.read.return_value = "Add notifications feature"
 
         result = engine._update_extra_context(state)
@@ -1467,3 +1467,79 @@ class TestMergeChangeRequest:
         result = engine._update_extra_context(state)
 
         assert result == {}
+
+
+class TestDesignChangesContext:
+    """Tests for design_changes flowing through _update_extra_context."""
+
+    def test_update_extra_context_includes_design_changes(self, engine, doc_store):
+        """_update_extra_context returns design_changes when doc exists."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="update")
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {
+            "user_input", "design_changes",
+        }
+        doc_store.read.side_effect = lambda name: {
+            "user_input": "Add dark mode",
+            "design_changes": "## Components\n- Button: color changed #3B82F6 → #2563EB",
+        }.get(name.replace(".md", ""), "")
+
+        result = engine._update_extra_context(state)
+
+        assert result["change_request"] == "Add dark mode"
+        assert "Button" in result["design_changes"]
+
+    def test_update_extra_context_design_changes_without_update_mode(self, engine, doc_store):
+        """design_changes is included even outside update mode (could be from initial Figma)."""
+        state = _make_state(PipelinePhase.ARCHITECTURE, mode="new")
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "design_changes"
+        doc_store.read.return_value = "## Components\n- Card: added"
+
+        result = engine._update_extra_context(state)
+
+        assert "change_request" not in result
+        assert result["design_changes"] == "## Components\n- Card: added"
+
+    def test_update_extra_context_no_design_changes(self, engine, doc_store):
+        """No design_changes key when doc does not exist."""
+        state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="update")
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "user_input"
+        doc_store.read.return_value = "Add dark mode"
+
+        result = engine._update_extra_context(state)
+
+        assert "design_changes" not in result
+
+
+class TestUATExtraContext:
+    """Tests for UAT receiving extra_context."""
+
+    @pytest.mark.asyncio
+    async def test_uat_receives_change_context(self, engine, claude, doc_store):
+        """_run_uat should pass extra_context from _update_extra_context."""
+        state = _make_state(PipelinePhase.UAT, mode="update")
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {
+            "features", "frontend_spec", "user_input", "design_changes",
+        }
+        doc_store.read.side_effect = lambda name: {
+            "features": "# Features",
+            "frontend_spec": "# Frontend Spec",
+            "user_input": "Add dark mode",
+            "design_changes": "## Components\n- Button: color changed",
+        }.get(name.replace(".md", ""), "")
+
+        claude.run.return_value = _make_claude_result("# UAT Report\n## Overall Result: PASS")
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_uat(state)
+
+        # Verify the prompt renderer was called with extra_context
+        render_call = engine._prompt_renderer.render_agent_prompt
+        call_kwargs = render_call.call_args.kwargs if render_call.call_args.kwargs else {}
+        call_args_dict = dict(zip(
+            ["template_name", "input_documents", "constraints", "extra_context"],
+            render_call.call_args.args,
+        )) if render_call.call_args.args else {}
+        all_kwargs = {**call_args_dict, **call_kwargs}
+        assert all_kwargs.get("extra_context") is not None
+        assert "change_request" in all_kwargs["extra_context"]
+        assert "design_changes" in all_kwargs["extra_context"]

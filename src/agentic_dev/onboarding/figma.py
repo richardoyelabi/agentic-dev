@@ -10,6 +10,7 @@ import asyncio
 from pathlib import Path
 
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
+from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgenticDevError
 from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
 from agentic_dev.onboarding.models import AnnotatedSource
@@ -145,3 +146,73 @@ async def analyze_figma_designs(
         for src in sources
     ]
     return list(await asyncio.gather(*tasks))
+
+
+def write_figma_sources(doc_store: DocumentStore, sources: list[AnnotatedSource]) -> None:
+    """Persist Figma URLs and annotations to a ``figma_sources`` document.
+
+    Writes nothing if *sources* is empty.
+    """
+    if not sources:
+        return
+
+    lines = ["# Figma Sources", ""]
+    for src in sources:
+        lines.append(f"- URL: {src.value}")
+        if src.annotation:
+            lines.append(f"  Annotation: {src.annotation}")
+        lines.append("")
+
+    doc_store.write("figma_sources", "\n".join(lines))
+
+
+async def run_design_diff(
+    claude: ClaudeRunner,
+    old_design_analyses: str,
+    new_design_analyses: str,
+    working_dir: Path,
+) -> str:
+    """Compare old and new design analyses to produce a change summary.
+
+    Uses the ``design_diff`` agent to identify what changed between two
+    versions of a Design Analysis document.
+
+    Returns:
+        A textual summary of design changes.
+    """
+    config = AgentRunConfig(
+        name="design_diff",
+        model="opus",
+        permission_mode="bypassPermissions",
+        allowed_tools=[],
+        max_turns=5,
+        use_bare_mode=True,
+        mcp_config=None,
+        system_prompt=None,
+    )
+
+    from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
+
+    renderer = PromptRenderer()
+    prompt = renderer.render(
+        "design_diff.md.j2",
+        {
+            "old_design_analyses": old_design_analyses,
+            "new_design_analyses": new_design_analyses,
+            "constraints": [
+                "Identify all added, removed, and modified pages",
+                "Identify all added, removed, and modified components with their visual changes",
+                "Identify all changed design tokens (colors, typography, spacing)",
+                "Identify navigation and user flow changes",
+                "Do not describe unchanged elements",
+                "Be specific about what changed — include old and new values where applicable",
+            ],
+        },
+    )
+
+    result = await claude.run(
+        agent=config,
+        prompt=prompt,
+        working_dir=working_dir,
+    )
+    return result.text

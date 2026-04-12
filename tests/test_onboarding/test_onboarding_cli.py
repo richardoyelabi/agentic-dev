@@ -74,10 +74,12 @@ class TestOnboardingCLI:
         content = user_input_path.read_text(encoding="utf-8")
         assert "Build a dashboard" in content
         assert "Codebase Analysis" in content
-        assert "Design Analysis" in content
-        codebase_pos = content.index("Codebase Analysis")
-        design_pos = content.index("Design Analysis")
-        assert codebase_pos < design_pos
+        # Figma analysis should be in design_analyses, not user_input
+        assert "Design Analysis" not in content
+
+        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_path.exists()
+        assert "Design Analysis" in design_path.read_text(encoding="utf-8")
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")
@@ -106,8 +108,13 @@ class TestOnboardingCLI:
 
         user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
-        assert "Design Analysis" in content
         assert "Build a landing page" in content
+        # Figma analysis should be in design_analyses, not user_input
+        assert "Design Analysis" not in content
+
+        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_path.exists()
+        assert "Design Analysis" in design_path.read_text(encoding="utf-8")
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
@@ -242,7 +249,12 @@ class TestOnboardingCLI:
         user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content
-        assert "Design Analysis" in content
+        # Figma analysis should be in design_analyses, not user_input
+        assert "Design Analysis" not in content
+
+        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_path.exists()
+        assert "Design Analysis" in design_path.read_text(encoding="utf-8")
 
 
 class TestMultiSourceOnboarding:
@@ -305,10 +317,12 @@ class TestMultiSourceOnboarding:
         assert result.exit_code == 0, result.output
         assert mock_analyze_figma.call_count == 2
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
-        content = user_input_path.read_text(encoding="utf-8")
-        assert "App UI" in content
-        assert "Admin Panel" in content
+        # Figma analysis should be in design_analyses, not user_input
+        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_path.exists()
+        design_content = design_path.read_text(encoding="utf-8")
+        assert "App UI" in design_content
+        assert "Admin Panel" in design_content
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
@@ -368,10 +382,12 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
-        content = user_input_path.read_text(encoding="utf-8")
-        assert "Source: Figma Design - Admin dashboard" in content
-        assert "https://figma.com/file/abc" in content
+        # Figma analysis should be in design_analyses, not user_input
+        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_path.exists()
+        design_content = design_path.read_text(encoding="utf-8")
+        assert "Source: Figma Design - Admin dashboard" in design_content
+        assert "https://figma.com/file/abc" in design_content
 
         # Verify annotation was passed to the Figma analyzer (4th positional arg)
         call_args = mock_analyze_figma.call_args
@@ -418,8 +434,14 @@ class TestMultiSourceOnboarding:
         content = user_input_path.read_text(encoding="utf-8")
         assert "Source: Codebase - Frontend" in content
         assert "Source: Codebase - Backend API" in content
-        assert "Source: Figma Design - App UI" in content
-        assert "Source: Figma Design - Design tokens" in content
+        # Figma analysis should be in design_analyses, not user_input
+        assert "Source: Figma Design" not in content
+
+        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
+        assert design_path.exists()
+        design_content = design_path.read_text(encoding="utf-8")
+        assert "Source: Figma Design - App UI" in design_content
+        assert "Source: Figma Design - Design tokens" in design_content
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.figma.analyze_figma_design")

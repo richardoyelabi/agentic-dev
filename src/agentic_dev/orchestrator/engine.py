@@ -200,10 +200,12 @@ class PipelineEngine:
         state.project_type = self._parse_project_type(output)
 
     def _update_extra_context(self, state: PipelineState) -> dict[str, str]:
-        """Build extra_context dict with change_request when in update mode."""
+        """Build extra_context dict with change context when in update mode."""
         extra_context: dict[str, str] = {}
         if state.mode == "update" and self._doc_store.exists("user_input"):
             extra_context["change_request"] = self._doc_store.read("user_input")
+        if self._doc_store.exists("design_changes"):
+            extra_context["design_changes"] = self._doc_store.read("design_changes")
         return extra_context
 
     async def _run_feature_analysis(self, state: PipelineState) -> PipelineState:
@@ -523,10 +525,13 @@ class PipelineEngine:
             if self._doc_store.exists(doc_name):
                 input_docs[doc_name] = self._doc_store.read(doc_name)
 
+        extra_context = self._update_extra_context(state)
+
         output = await self._run_single_agent(
             agent_name="uat",
             input_docs=input_docs,
             output_doc_name="uat_report",
+            extra_context=extra_context,
         )
         self._doc_store.write("uat_report", output)
         await self._commit_docs_changes("docs: UAT report")
@@ -538,6 +543,7 @@ class PipelineEngine:
         agent_name: str,
         input_docs: dict[str, str],
         output_doc_name: str,
+        extra_context: dict[str, str] | None = None,
     ) -> str:
         """Run a single agent without a QA cycle."""
         agent_def = self._registry.get(agent_name)
@@ -545,6 +551,7 @@ class PipelineEngine:
             template_name=agent_def.prompt_template,
             input_documents=input_docs,
             constraints=agent_def.constraints,
+            extra_context=extra_context,
         )
         config = to_run_config(agent_def)
         result = await self._claude.run(

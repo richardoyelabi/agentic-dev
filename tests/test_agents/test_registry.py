@@ -20,7 +20,7 @@ class TestAgentRegistry:
 
     def test_loads_all_definitions(self, registry: AgentRegistry):
         agents = registry.list_agents()
-        assert len(agents) == 23
+        assert len(agents) == 24
 
     def test_get_returns_correct_agent(self, registry: AgentRegistry):
         architect = registry.get("architect")
@@ -34,10 +34,11 @@ class TestAgentRegistry:
 
     def test_list_by_team_design_architecture(self, registry: AgentRegistry):
         design_agents = registry.list_by_team("design_architecture")
-        assert len(design_agents) == 8
+        assert len(design_agents) == 9
         names = {a.name for a in design_agents}
         assert "input_processor" in names
         assert "input_updater" in names
+        assert "design_diff" in names
         assert "architect" in names
         assert "sprint_planner_qa" in names
 
@@ -69,6 +70,17 @@ class TestAgentRegistry:
     ):
         agents = registry.list_by_team("nonexistent_team")
         assert agents == []
+
+    def test_design_diff_agent_loaded(self, registry: AgentRegistry):
+        design_diff = registry.get("design_diff")
+        assert design_diff.team == "design_architecture"
+        assert design_diff.claude.model == "opus"
+        assert design_diff.claude.allowed_tools == []
+        assert design_diff.claude.max_turns == 5
+        assert design_diff.input_documents == ["old_design_analyses", "new_design_analyses"]
+        assert design_diff.output_documents == ["design_changes"]
+        assert design_diff.qa_agent is None
+        assert len(design_diff.constraints) >= 4
 
     def test_agent_fields_loaded_correctly(self, registry: AgentRegistry):
         frontend_dev = registry.get("frontend_developer")

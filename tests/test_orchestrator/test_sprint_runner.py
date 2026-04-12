@@ -536,3 +536,81 @@ class TestIntegrationMCPConfig:
         mock_discover.return_value = ClaudeMCPEnvironment(servers={})
         config = runner._resolve_integration_mcp_config(["nonexistent"])
         assert config is None
+
+
+class TestFigmaExtraContext:
+    """Tests for passing figma_sources to frontend agents via extra_context."""
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle", new_callable=AsyncMock)
+    @patch("agentic_dev.orchestrator.sprint_runner.check_figma_mcp_available")
+    async def test_figma_sources_passed_in_extra_context(
+        self, mock_check_figma, mock_qa_cycle, frontend_only_runner, doc_store
+    ):
+        """When figma_sources doc exists and MCP available, extra_context includes figma_sources."""
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "figma_sources"
+        doc_store.read.side_effect = lambda name: {
+            "frontend_spec": "# Frontend Spec",
+            "api_contract": "",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+        }.get(name.replace(".md", ""), "")
+
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="frontend output", session_id="s1",
+        )
+
+        await frontend_only_runner.run_sprint(1, "Build UI")
+
+        # The frontend QA cycle call should have figma_sources in input_docs
+        call_kwargs = mock_qa_cycle.call_args.kwargs
+        assert "figma_sources" in call_kwargs["input_docs"]
+        assert "figma.com/file/abc" in call_kwargs["input_docs"]["figma_sources"]
+        assert call_kwargs["input_docs"]["figma_mcp_available"] == "true"
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle", new_callable=AsyncMock)
+    @patch("agentic_dev.orchestrator.sprint_runner.check_figma_mcp_available")
+    async def test_figma_mcp_unavailable_sets_false(
+        self, mock_check_figma, mock_qa_cycle, frontend_only_runner, doc_store
+    ):
+        """When figma_sources exists but MCP unavailable, figma_mcp_available is 'false'."""
+        from agentic_dev.onboarding.figma import FigmaMCPNotConfigured
+
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "figma_sources"
+        doc_store.read.side_effect = lambda name: {
+            "frontend_spec": "# Frontend Spec",
+            "api_contract": "",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+        }.get(name.replace(".md", ""), "")
+
+        mock_check_figma.side_effect = FigmaMCPNotConfigured()
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="frontend output", session_id="s1",
+        )
+
+        await frontend_only_runner.run_sprint(1, "Build UI")
+
+        call_kwargs = mock_qa_cycle.call_args.kwargs
+        assert call_kwargs["input_docs"]["figma_mcp_available"] == "false"
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle", new_callable=AsyncMock)
+    async def test_no_figma_sources_no_extra_context(
+        self, mock_qa_cycle, frontend_only_runner, doc_store
+    ):
+        """When figma_sources doc does not exist, no figma keys in extra_context."""
+        doc_store.exists.return_value = False
+        doc_store.read.side_effect = lambda name: {
+            "frontend_spec": "# Frontend Spec",
+            "api_contract": "",
+        }.get(name.replace(".md", ""), "")
+
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="frontend output", session_id="s1",
+        )
+
+        await frontend_only_runner.run_sprint(1, "Build UI")
+
+        call_kwargs = mock_qa_cycle.call_args.kwargs
+        assert "figma_sources" not in call_kwargs["input_docs"]
+        assert "figma_mcp_available" not in call_kwargs["input_docs"]

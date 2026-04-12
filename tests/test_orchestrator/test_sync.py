@@ -8,10 +8,12 @@ import pytest
 
 from agentic_dev.orchestrator.sync import (
     SyncApplyResult,
+    _collect_design_context,
     _compose_change_request,
     _parse_drift_report,
     apply_sync_resolutions,
 )
+from agentic_dev.documents.store import DocumentStore
 from agentic_dev.state.models import DriftItem, SyncReport
 
 
@@ -311,3 +313,39 @@ class TestComposeChangeRequest:
     def test_empty_list_produces_header(self):
         result = _compose_change_request([])
         assert "# Sync Change Request" in result
+
+
+class TestCollectDesignContext:
+    """Tests for _collect_design_context helper."""
+
+    def test_returns_design_analyses_when_exists(self):
+        doc_store = MagicMock(spec=DocumentStore)
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {"design_analyses", "figma_sources"}
+        doc_store.read.side_effect = lambda name: {
+            "design_analyses": "# Design Analysis\n## Pages\n### Home",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+        }.get(name.replace(".md", ""), "")
+
+        figma_analysis, figma_sources = _collect_design_context(doc_store)
+
+        assert "Design Analysis" in figma_analysis
+        assert "figma.com/file/abc" in figma_sources
+
+    def test_returns_empty_strings_when_docs_missing(self):
+        doc_store = MagicMock(spec=DocumentStore)
+        doc_store.exists.return_value = False
+
+        figma_analysis, figma_sources = _collect_design_context(doc_store)
+
+        assert figma_analysis == ""
+        assert figma_sources == ""
+
+    def test_returns_analyses_without_figma_sources(self):
+        doc_store = MagicMock(spec=DocumentStore)
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "design_analyses"
+        doc_store.read.return_value = "# Design Analysis\n## Pages"
+
+        figma_analysis, figma_sources = _collect_design_context(doc_store)
+
+        assert "Design Analysis" in figma_analysis
+        assert figma_sources == ""

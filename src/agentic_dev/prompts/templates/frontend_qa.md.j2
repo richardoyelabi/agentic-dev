@@ -28,6 +28,30 @@ Review the frontend code produced for the current sprint against the Frontend Sp
 4. **Is it safe?** — No XSS vulnerabilities. Auth tokens handled securely. Sensitive data not exposed in client-side state. Input validation on forms.
 5. **No obvious scaling issues?** — No unnecessary re-renders. Large lists are virtualized or paginated. API calls are not duplicated.
 6. **Is it documented?** — README.md exists with accurate setup, run, and test instructions. ARCHITECTURE.md exists and accurately describes the current codebase structure. Documentation covers features added in this sprint. No stale references to removed or renamed files, components, or patterns — cross-reference documentation claims against the actual codebase.
+{% if figma_sources is defined and figma_sources %}
+7. **Does it match the design?** — Components match the Figma design for layout, spacing, colors, typography, and visual hierarchy.{% if figma_mcp_available == "true" %} Use Figma MCP tools to compare.{% else %} Compare against the design analyses text.{% endif %}
+
+{% endif %}
+
+{% if design_changes is defined and design_changes %}
+# Design Changes
+
+The following design elements changed in this update. Focus visual fidelity checks on these components. Verify unchanged areas were not affected.
+
+{{ design_changes }}
+{% endif %}
+
+{% if figma_sources is defined and figma_sources %}
+# Figma Design Reference
+
+{% if figma_mcp_available == "true" %}
+You have access to Figma MCP tools. Use them to verify visual fidelity.
+{% else %}
+Figma MCP tools are not available. Use the design analyses in the Frontend Spec as your visual reference for evaluating design fidelity.
+{% endif %}
+
+{{ figma_sources }}
+{% endif %}
 
 # Output Format
 

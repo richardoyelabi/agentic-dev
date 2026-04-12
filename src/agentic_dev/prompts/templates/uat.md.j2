@@ -32,6 +32,22 @@ Test every acceptance criterion from the Features Request. For each criterion, v
 
 {{ sprint_plan }}
 
+{% if change_request is defined and change_request %}
+# Update Context: Text Changes
+
+The following text changes were requested in this update cycle. Verify they were implemented correctly.
+
+{{ change_request }}
+{% endif %}
+
+{% if design_changes is defined and design_changes %}
+# Update Context: Design Changes
+
+The following design elements changed in this update cycle. Verify the design changes were implemented and unchanged areas were not affected.
+
+{{ design_changes }}
+{% endif %}
+
 # Testing Approach
 
 For each feature and acceptance criterion:
