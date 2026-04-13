@@ -164,7 +164,6 @@ AGENT_TEMPLATES = {
     "architect.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
         "structured_input": "# Structured Input\n- [F001] Auth",
-        "design_analyses": "",
         "constraints": ["Minimalism first"],
         "correction_mode": False,
         "project_type": "fullstack",
@@ -172,7 +171,6 @@ AGENT_TEMPLATES = {
     "architect_qa.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
         "structured_input": "# Structured Input\n- [F001] Auth",
-        "design_analyses": "",
         "architecture": "# Frontend Spec\n## Pages\n# Backend Spec\n## Models\n# API Contract\n## Endpoints",
         "project_type": "fullstack",
     },
@@ -267,10 +265,10 @@ AGENT_TEMPLATES = {
         "new_structured_input": "# Structured Input\n## Feature Requirements\n- [F001] Auth with OAuth2\n- [F003] Settings page",
         "constraints": ["Identify all changes"],
     },
-    "design_diff.md.j2": {
-        "old_design_analyses": "# Design Analysis\n## Pages\n### Home\n- **Layout:** Grid\n## Components\n### Button\n- **Purpose:** Primary action\n- **Border radius:** 4px",
-        "new_design_analyses": "# Design Analysis\n## Pages\n### Home\n- **Layout:** Grid\n## Components\n### Button\n- **Purpose:** Primary action\n- **Border radius:** 8px\n### Card\n- **Purpose:** Content container",
-        "constraints": ["Identify all changes"],
+    "design_change_detection.md.j2": {
+        "existing_spec": "# Frontend Spec\n## Pages\n### Home\n## Components\n### Button\n- **Border radius:** 4px",
+        "figma_urls": "- https://figma.com/file/abc123/MyDesign",
+        "sentinel": "NO_DESIGN_CHANGES",
     },
     "uat.md.j2": {
         "features": "# Features Request",
@@ -353,7 +351,6 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         result = real_renderer.render("architect.md.j2", {
             "features": f"Features: {self.MARKER}",
             "structured_input": "structured input content",
-            "design_analyses": "",
             "constraints": [],
             "correction_mode": False,
             "project_type": "fullstack",
@@ -368,7 +365,6 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         result = real_renderer.render("architect_qa.md.j2", {
             "features": f"Features: {self.MARKER}",
             "structured_input": "structured input",
-            "design_analyses": "",
             "architecture": f"Architecture: {self.MARKER}",
             "project_type": "fullstack",
         })
@@ -463,53 +459,53 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "likely still using 'sprint_plan'"
         )
 
-    def test_architect_renders_design_analyses_when_non_empty(self, real_renderer):
-        """When design_analyses is non-empty, the section renders in the template."""
+    def test_architect_renders_figma_sources_when_provided(self, real_renderer):
+        """When figma_sources is provided, the Figma section renders."""
         result = real_renderer.render("architect.md.j2", {
             "features": "# Features Request\n## Feature: [F001] Auth",
             "structured_input": "# Structured Input\n- [F001] Auth",
-            "design_analyses": "## Design Tokens\nColors: blue-500, gray-100",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
             "constraints": [],
             "correction_mode": False,
             "project_type": "fullstack",
         })
-        assert "Design Analyses (from Figma)" in result
-        assert "blue-500" in result
+        assert "Figma Design Reference" in result
+        assert "figma.com/file/abc" in result
 
-    def test_architect_omits_design_analyses_when_empty(self, real_renderer):
-        """When design_analyses is empty string, no design section renders."""
+    def test_architect_omits_figma_section_when_absent(self, real_renderer):
+        """When figma_sources is not provided, no Figma section renders."""
         result = real_renderer.render("architect.md.j2", {
             "features": "# Features Request\n## Feature: [F001] Auth",
             "structured_input": "# Structured Input\n- [F001] Auth",
-            "design_analyses": "",
             "constraints": [],
             "correction_mode": False,
             "project_type": "fullstack",
         })
-        assert "Design Analyses" not in result
+        assert "Figma Design Reference" not in result
 
-    def test_architect_qa_renders_design_analyses_when_non_empty(self, real_renderer):
-        """When design_analyses is non-empty, the section renders in the QA template."""
+    def test_architect_qa_renders_figma_sources_when_provided(self, real_renderer):
+        """When figma_sources is provided, the Figma section renders in QA."""
         result = real_renderer.render("architect_qa.md.j2", {
             "features": "# Features Request",
             "structured_input": "# Structured Input",
-            "design_analyses": "## Components\nNavbar, Footer",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/xyz",
+            "figma_mcp_available": "true",
             "architecture": "# Frontend Spec\n## Pages",
             "project_type": "fullstack",
         })
-        assert "Design Analyses (from Figma)" in result
-        assert "Navbar, Footer" in result
+        assert "Figma Design Reference" in result
+        assert "figma.com/file/xyz" in result
 
-    def test_architect_qa_omits_design_analyses_when_empty(self, real_renderer):
-        """When design_analyses is empty string, no design section renders in QA."""
+    def test_architect_qa_omits_figma_section_when_absent(self, real_renderer):
+        """When figma_sources is not provided, no Figma section renders in QA."""
         result = real_renderer.render("architect_qa.md.j2", {
             "features": "# Features Request",
             "structured_input": "# Structured Input",
-            "design_analyses": "",
             "architecture": "# Frontend Spec\n## Pages",
             "project_type": "fullstack",
         })
-        assert "Design Analyses" not in result
+        assert "Figma Design Reference" not in result
 
     def test_uat_receives_features(self, real_renderer):
         """engine.py passes 'features' key, not 'features_request'."""

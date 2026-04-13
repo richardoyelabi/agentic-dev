@@ -52,7 +52,6 @@ async def run_adoption(
     project_dir: Path,
     directory_map: DirectoryMap,
     project_type: ProjectType,
-    design_analyses: str = "",
 ) -> AdoptionResult:
     """Run the full adoption pipeline to reverse-engineer specs from code.
 
@@ -67,7 +66,6 @@ async def run_adoption(
         project_dir: Root path of the project being adopted.
         directory_map: Mapping of frontend/backend directories.
         project_type: Detected project type.
-        design_analyses: Optional Figma design analyses to incorporate.
 
     Returns:
         AdoptionResult with cost and document stats.
@@ -167,10 +165,6 @@ async def run_adoption(
     structured_input = _build_structured_input(doc_store, project_type)
     doc_store.write("structured_input", structured_input)
     result.documents_produced.append("structured_input")
-
-    # Save design analyses if provided
-    if design_analyses:
-        doc_store.write("design_analyses", design_analyses)
 
     docs_dir = doc_store.docs_dir
     if docs_dir.is_dir():

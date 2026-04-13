@@ -37,16 +37,22 @@ The API Contract is the **single source of truth** for the frontend/backend inte
 
 {{ structured_input }}
 
-{% if design_analyses %}
-# Input: Design Analyses (from Figma)
+{% if figma_sources is defined and figma_sources %}
+# Figma Design Reference
 
-The following design analyses were extracted from Figma files. Incorporate these into the **Frontend Spec**:
-- Use the exact **design tokens** (colors, typography, spacing) in a Design Tokens subsection
+{% if figma_mcp_available == "true" %}
+Use Figma MCP tools to inspect the designs below. Incorporate into the **Frontend Spec**:
+- Extract exact **design tokens** (colors, typography, spacing) into a Design Tokens subsection
 - Reference **component names** from the designs when defining Shared Components
 - Reflect **page layouts** in the Pages & Routes section
 - Map **navigation flows** to routes and transitions
 
-{{ design_analyses }}
+{{ figma_sources }}
+{% else %}
+Figma MCP tools are not available. Proceed without direct design reference.
+
+{{ figma_sources }}
+{% endif %}
 {% endif %}
 
 {% if change_request is defined and change_request %}

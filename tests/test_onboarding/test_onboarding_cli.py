@@ -9,7 +9,6 @@ from typer.testing import CliRunner
 from agentic_dev.claude.runner import ClaudeResult
 from agentic_dev.cli import app
 from agentic_dev.exceptions import AgentRunError
-from agentic_dev.onboarding.figma import FigmaMCPNotConfigured
 
 
 runner = CliRunner()
@@ -39,20 +38,15 @@ def _make_claude_result(
 
 class TestOnboardingCLI:
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_from_codebase_and_figma_together(
         self,
         mock_analyze_codebase,
-        mock_analyze_figma,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
         mock_analyze_codebase.return_value = _make_claude_result(
             text="# Codebase Analysis\nDetected: Django backend",
-        )
-        mock_analyze_figma.return_value = _make_claude_result(
-            text="# Design Analysis\nPages: Home, Settings",
         )
 
         result = runner.invoke(
@@ -68,31 +62,24 @@ class TestOnboardingCLI:
 
         assert result.exit_code == 0, result.output
         mock_analyze_codebase.assert_called_once()
-        mock_analyze_figma.assert_called_once()
 
         user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Build a dashboard" in content
         assert "Codebase Analysis" in content
-        # Figma analysis should be in design_analyses, not user_input
-        assert "Design Analysis" not in content
+        # Figma URL should not be concatenated into user_input
+        assert "figma.com/file/abc" not in content
 
-        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_path.exists()
-        assert "Design Analysis" in design_path.read_text(encoding="utf-8")
+        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        assert figma_sources_path.exists()
+        assert "https://figma.com/file/abc" in figma_sources_path.read_text(encoding="utf-8")
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_from_figma_alone(
         self,
-        mock_analyze_figma,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
-        mock_analyze_figma.return_value = _make_claude_result(
-            text="# Design Analysis\nComponents: Navbar, Footer",
-        )
-
         result = runner.invoke(
             app,
             [
@@ -104,17 +91,16 @@ class TestOnboardingCLI:
         )
 
         assert result.exit_code == 0, result.output
-        mock_analyze_figma.assert_called_once()
 
         user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Build a landing page" in content
-        # Figma analysis should be in design_analyses, not user_input
-        assert "Design Analysis" not in content
+        # Figma URL should not be concatenated into user_input
+        assert "figma.com/file/xyz" not in content
 
-        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_path.exists()
-        assert "Design Analysis" in design_path.read_text(encoding="utf-8")
+        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        assert figma_sources_path.exists()
+        assert "https://figma.com/file/xyz" in figma_sources_path.read_text(encoding="utf-8")
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
@@ -144,15 +130,13 @@ class TestOnboardingCLI:
         assert "Codebase Analysis" in content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
+    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=False)
     def test_from_figma_mcp_not_configured(
         self,
-        mock_analyze_figma,
+        mock_mcp,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
-        mock_analyze_figma.side_effect = FigmaMCPNotConfigured()
-
         result = runner.invoke(
             app,
             [
@@ -191,45 +175,15 @@ class TestOnboardingCLI:
         assert result.exit_code == 1
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
-    def test_from_figma_agent_fails(
-        self,
-        mock_analyze_figma,
-        mock_run_pipeline,
-        tmp_path: Path,
-    ) -> None:
-        mock_analyze_figma.side_effect = AgentRunError(
-            agent_name="onboarding_figma",
-            message="rate limited",
-        )
-
-        result = runner.invoke(
-            app,
-            [
-                "new", "my-app",
-                "--path", str(tmp_path),
-                "--from-figma", "https://figma.com/file/abc",
-            ],
-            input="Build something\n\n\n",
-        )
-
-        assert result.exit_code == 1
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_both_flags_no_user_requirements(
         self,
         mock_analyze_codebase,
-        mock_analyze_figma,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
         mock_analyze_codebase.return_value = _make_claude_result(
             text="# Codebase Analysis\nDetected: Express API",
-        )
-        mock_analyze_figma.return_value = _make_claude_result(
-            text="# Design Analysis\nTokens: blue-500, gray-100",
         )
 
         result = runner.invoke(
@@ -249,12 +203,11 @@ class TestOnboardingCLI:
         user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content
-        # Figma analysis should be in design_analyses, not user_input
-        assert "Design Analysis" not in content
+        # Figma URL should not be concatenated into user_input
+        assert "figma.com/file/abc" not in content
 
-        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_path.exists()
-        assert "Design Analysis" in design_path.read_text(encoding="utf-8")
+        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        assert figma_sources_path.exists()
 
 
 class TestMultiSourceOnboarding:
@@ -291,18 +244,11 @@ class TestMultiSourceOnboarding:
         assert "Backend: Django" in content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_multiple_figma(
         self,
-        mock_analyze_figma,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
-        mock_analyze_figma.side_effect = [
-            _make_claude_result(text="# Design Analysis\nApp UI"),
-            _make_claude_result(text="# Design Analysis\nAdmin Panel"),
-        ]
-
         result = runner.invoke(
             app,
             [
@@ -315,14 +261,12 @@ class TestMultiSourceOnboarding:
         )
 
         assert result.exit_code == 0, result.output
-        assert mock_analyze_figma.call_count == 2
 
-        # Figma analysis should be in design_analyses, not user_input
-        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_path.exists()
-        design_content = design_path.read_text(encoding="utf-8")
-        assert "App UI" in design_content
-        assert "Admin Panel" in design_content
+        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        assert figma_sources_path.exists()
+        figma_sources_content = figma_sources_path.read_text(encoding="utf-8")
+        assert "https://figma.com/file/a" in figma_sources_content
+        assert "https://figma.com/file/b" in figma_sources_content
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
@@ -359,17 +303,11 @@ class TestMultiSourceOnboarding:
         assert annotation == "Frontend React app"
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     def test_figma_with_annotation(
         self,
-        mock_analyze_figma,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
-        mock_analyze_figma.return_value = _make_claude_result(
-            text="# Design Analysis\nDashboard layouts",
-        )
-
         result = runner.invoke(
             app,
             [
@@ -382,35 +320,23 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
 
-        # Figma analysis should be in design_analyses, not user_input
-        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_path.exists()
-        design_content = design_path.read_text(encoding="utf-8")
-        assert "Source: Figma Design - Admin dashboard" in design_content
-        assert "https://figma.com/file/abc" in design_content
-
-        # Verify annotation was passed to the Figma analyzer (4th positional arg)
-        call_args = mock_analyze_figma.call_args
-        annotation = call_args.kwargs.get("annotation") or call_args[0][3]
-        assert annotation == "Admin dashboard"
+        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        assert figma_sources_path.exists()
+        figma_sources_content = figma_sources_path.read_text(encoding="utf-8")
+        assert "https://figma.com/file/abc" in figma_sources_content
+        assert "Admin dashboard" in figma_sources_content
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
     def test_mixed_multiple_sources(
         self,
         mock_analyze_codebase,
-        mock_analyze_figma,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
         mock_analyze_codebase.side_effect = [
             _make_claude_result(text="# Codebase Analysis\nReact frontend"),
             _make_claude_result(text="# Codebase Analysis\nExpress API"),
-        ]
-        mock_analyze_figma.side_effect = [
-            _make_claude_result(text="# Design Analysis\nMain UI"),
-            _make_claude_result(text="# Design Analysis\nDesign system"),
         ]
 
         result = runner.invoke(
@@ -428,88 +354,23 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
         assert mock_analyze_codebase.call_count == 2
-        assert mock_analyze_figma.call_count == 2
 
         user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Source: Codebase - Frontend" in content
         assert "Source: Codebase - Backend API" in content
-        # Figma analysis should be in design_analyses, not user_input
-        assert "Source: Figma Design" not in content
+        # Figma URLs should not be concatenated into user_input
+        assert "figma.com/file/a" not in content
 
-        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_path.exists()
-        design_content = design_path.read_text(encoding="utf-8")
-        assert "Source: Figma Design - App UI" in design_content
-        assert "Source: Figma Design - Design tokens" in design_content
+        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        assert figma_sources_path.exists()
 
     @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
-    def test_design_analyses_document_created_with_figma(
+    def test_figma_sources_contains_all_urls_with_annotations(
         self,
-        mock_analyze_figma,
         mock_run_pipeline,
         tmp_path: Path,
     ) -> None:
-        mock_analyze_figma.return_value = _make_claude_result(
-            text="# Design Analysis\nTokens: blue-500",
-        )
-
-        result = runner.invoke(
-            app,
-            [
-                "new", "my-app",
-                "--path", str(tmp_path),
-                "--from-figma", "https://figma.com/file/abc",
-            ],
-            input="Build a dashboard\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        design_analyses_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_analyses_path.exists(), "design_analyses.md should be created"
-        content = design_analyses_path.read_text(encoding="utf-8")
-        assert "Tokens: blue-500" in content
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
-    def test_design_analyses_not_created_without_figma(
-        self,
-        mock_analyze_codebase,
-        mock_run_pipeline,
-        tmp_path: Path,
-    ) -> None:
-        mock_analyze_codebase.return_value = _make_claude_result(
-            text="# Codebase Analysis\nDetected: Python",
-        )
-
-        result = runner.invoke(
-            app,
-            [
-                "new", "my-app",
-                "--path", str(tmp_path),
-                "--from-codebase", "/some/path",
-            ],
-            input="Extend this app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        design_analyses_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert not design_analyses_path.exists(), "design_analyses.md should NOT be created without --from-figma"
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.figma.analyze_figma_design")
-    def test_design_analyses_contains_all_sources_with_headers(
-        self,
-        mock_analyze_figma,
-        mock_run_pipeline,
-        tmp_path: Path,
-    ) -> None:
-        mock_analyze_figma.side_effect = [
-            _make_claude_result(text="# Design Analysis\nApp UI tokens"),
-            _make_claude_result(text="# Design Analysis\nAdmin Panel tokens"),
-        ]
-
         result = runner.invoke(
             app,
             [
@@ -522,15 +383,13 @@ class TestMultiSourceOnboarding:
         )
 
         assert result.exit_code == 0, result.output
-        design_analyses_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_analyses_path.exists()
-        content = design_analyses_path.read_text(encoding="utf-8")
-        assert "Source: Figma Design - App UI" in content
-        assert "Source: Figma Design - Admin Panel" in content
+        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        assert figma_sources_path.exists()
+        content = figma_sources_path.read_text(encoding="utf-8")
         assert "https://figma.com/file/a" in content
         assert "https://figma.com/file/b" in content
-        assert "App UI tokens" in content
-        assert "Admin Panel tokens" in content
+        assert "App UI" in content
+        assert "Admin Panel" in content
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.onboarding.analyzer.analyze_codebase")

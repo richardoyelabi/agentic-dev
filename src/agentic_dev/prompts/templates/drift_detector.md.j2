@@ -16,10 +16,18 @@ Compare the code snapshots below against the spec documents and produce a Sync R
 
 {{ spec_documents }}
 
-{% if figma_analysis %}
-# Figma Design Analysis
+{% if figma_sources is defined and figma_sources %}
+# Figma Design Reference
 
-{{ figma_analysis }}
+{% if figma_mcp_available == "true" %}
+Use Figma MCP tools to inspect the current designs and detect any drift between the code/specs and the live Figma state.
+
+{{ figma_sources }}
+{% else %}
+Figma MCP tools are not available. Skip Figma drift detection.
+
+{{ figma_sources }}
+{% endif %}
 {% endif %}
 
 {% if sync_ignores %}

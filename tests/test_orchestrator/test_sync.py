@@ -318,34 +318,34 @@ class TestComposeChangeRequest:
 class TestCollectDesignContext:
     """Tests for _collect_design_context helper."""
 
-    def test_returns_design_analyses_when_exists(self):
+    @patch("agentic_dev.onboarding.figma.check_figma_mcp_available")
+    def test_returns_figma_sources_and_mcp_available(self, mock_check):
+        mock_check.return_value = None
         doc_store = MagicMock(spec=DocumentStore)
-        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {"design_analyses", "figma_sources"}
-        doc_store.read.side_effect = lambda name: {
-            "design_analyses": "# Design Analysis\n## Pages\n### Home",
-            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
-        }.get(name.replace(".md", ""), "")
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "figma_sources"
+        doc_store.read.return_value = "# Figma Sources\n- URL: https://figma.com/file/abc"
 
-        figma_analysis, figma_sources = _collect_design_context(doc_store)
+        figma_sources, figma_mcp_available = _collect_design_context(doc_store)
 
-        assert "Design Analysis" in figma_analysis
         assert "figma.com/file/abc" in figma_sources
+        assert figma_mcp_available == "true"
 
-    def test_returns_empty_strings_when_docs_missing(self):
+    def test_returns_empty_when_no_figma_sources(self):
         doc_store = MagicMock(spec=DocumentStore)
         doc_store.exists.return_value = False
 
-        figma_analysis, figma_sources = _collect_design_context(doc_store)
+        figma_sources, figma_mcp_available = _collect_design_context(doc_store)
 
-        assert figma_analysis == ""
         assert figma_sources == ""
+        assert figma_mcp_available == "false"
 
-    def test_returns_analyses_without_figma_sources(self):
+    @patch("agentic_dev.onboarding.figma.check_figma_mcp_available", side_effect=Exception("not configured"))
+    def test_mcp_unavailable_returns_false(self, mock_check):
         doc_store = MagicMock(spec=DocumentStore)
-        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "design_analyses"
-        doc_store.read.return_value = "# Design Analysis\n## Pages"
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "figma_sources"
+        doc_store.read.return_value = "# Figma Sources\n- URL: https://figma.com/file/abc"
 
-        figma_analysis, figma_sources = _collect_design_context(doc_store)
+        figma_sources, figma_mcp_available = _collect_design_context(doc_store)
 
-        assert "Design Analysis" in figma_analysis
-        assert figma_sources == ""
+        assert "figma.com/file/abc" in figma_sources
+        assert figma_mcp_available == "false"

@@ -243,11 +243,21 @@ class PipelineEngine:
         """Run architect + architect_qa. Parse multi-document output."""
         features = self._doc_store.read("features")
         structured_input = self._doc_store.read("structured_input")
-        design_analyses = (
-            self._doc_store.read("design_analyses")
-            if self._doc_store.exists("design_analyses")
+        figma_sources = (
+            self._doc_store.read("figma_sources")
+            if self._doc_store.exists("figma_sources")
             else ""
         )
+        figma_mcp_available = "false"
+        if figma_sources:
+            try:
+                from agentic_dev.onboarding.figma import check_figma_mcp_available  # noqa: WPS433
+
+                check_figma_mcp_available()
+                figma_mcp_available = "true"
+            except Exception:  # noqa: BLE001
+                pass
+
         project_type_str = state.project_type.value if state.project_type else "fullstack"
         extra_context = {"project_type": project_type_str}
         extra_context.update(self._update_extra_context(state))
@@ -259,7 +269,8 @@ class PipelineEngine:
             input_docs={
                 "structured_input": structured_input,
                 "features": features,
-                "design_analyses": design_analyses,
+                "figma_sources": figma_sources,
+                "figma_mcp_available": figma_mcp_available,
             },
             output_doc_name="architecture",
             workspace=self._project_dir,

@@ -38,7 +38,7 @@ class TestAgentRegistry:
         names = {a.name for a in design_agents}
         assert "input_processor" in names
         assert "input_updater" in names
-        assert "design_diff" in names
+        assert "design_change_detection" in names
         assert "architect" in names
         assert "sprint_planner_qa" in names
 
@@ -71,16 +71,16 @@ class TestAgentRegistry:
         agents = registry.list_by_team("nonexistent_team")
         assert agents == []
 
-    def test_design_diff_agent_loaded(self, registry: AgentRegistry):
-        design_diff = registry.get("design_diff")
-        assert design_diff.team == "design_architecture"
-        assert design_diff.claude.model == "opus"
-        assert design_diff.claude.allowed_tools == []
-        assert design_diff.claude.max_turns == 5
-        assert design_diff.input_documents == ["old_design_analyses", "new_design_analyses"]
-        assert design_diff.output_documents == ["design_changes"]
-        assert design_diff.qa_agent is None
-        assert len(design_diff.constraints) >= 4
+    def test_design_change_detection_agent_loaded(self, registry: AgentRegistry):
+        agent = registry.get("design_change_detection")
+        assert agent.team == "design_architecture"
+        assert agent.claude.model == "opus"
+        assert agent.claude.allowed_tools == ["Read", "Glob", "Grep"]
+        assert agent.claude.max_turns == 15
+        assert agent.input_documents == ["frontend_spec", "figma_sources"]
+        assert agent.output_documents == ["design_changes"]
+        assert agent.qa_agent is None
+        assert len(agent.constraints) >= 4
 
     def test_agent_fields_loaded_correctly(self, registry: AgentRegistry):
         frontend_dev = registry.get("frontend_developer")

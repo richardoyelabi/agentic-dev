@@ -1,15 +1,17 @@
-"""Figma design import for onboarding existing designs into the agency workflow.
+"""Figma design integration for the agency workflow.
 
-Uses a Claude agent with the Figma MCP server to extract design information
-and produce a Design Analysis document.
+Provides helpers for checking Figma MCP availability, persisting Figma
+source URLs, and detecting design changes between update cycles by
+comparing the live Figma state against existing specs.
 """
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
-from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
+from pydantic import BaseModel
+
+from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgenticDevError
 from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
@@ -17,39 +19,14 @@ from agentic_dev.onboarding.models import AnnotatedSource
 from agentic_dev.orchestrator.agent_bridge import AgentRunConfig
 
 
-FIGMA_PROMPT_TEMPLATE = """\
-You are an expert UI/UX analyst. Using the Figma MCP tools available to you, \
-analyze the Figma file at the following URL:
+NO_DESIGN_CHANGES_SENTINEL = "NO_DESIGN_CHANGES"
 
-{figma_url}
 
-Extract all design information and produce a structured Design Analysis document \
-in the following format:
+class DesignChangeResult(BaseModel):
+    """Result of comparing live Figma designs against existing specs."""
 
-# Design Analysis
-
-## Pages
-### <page name>
-- **Layout:** <description of layout structure>
-- **Components:** <list of components used>
-
-## Components
-### <component name>
-- **Purpose:** <what it represents>
-- **Variants:** <variants if any>
-- **Props:** <configurable properties>
-
-## Design Tokens
-- **Colors:** <color palette with hex values>
-- **Typography:** <font families, sizes, weights>
-- **Spacing:** <spacing scale>
-
-## Navigation
-- <describe the navigation structure and user flows>
-
-## Notes
-- <anything notable about the design that would inform development>
-"""
+    has_changes: bool
+    summary: str
 
 
 class FigmaMCPNotConfigured(AgenticDevError):
@@ -75,79 +52,6 @@ def check_figma_mcp_available() -> None:
         raise FigmaMCPNotConfigured()
 
 
-async def analyze_figma_design(
-    claude: ClaudeRunner,
-    figma_url: str,
-    working_dir: Path,
-    annotation: str = "",
-) -> ClaudeResult:
-    """Analyze a Figma design using a Claude agent with Figma MCP tools.
-
-    Args:
-        claude: The ClaudeRunner instance.
-        figma_url: URL to the Figma file to analyze.
-        working_dir: Working directory for the agent.
-        annotation: Optional human description of what this Figma file represents
-            (e.g. "Main app UI", "Admin dashboard").
-
-    Returns:
-        ClaudeResult containing the Design Analysis document.
-
-    Raises:
-        FigmaMCPNotConfigured: If Figma MCP server is not configured.
-    """
-    check_figma_mcp_available()
-
-    config = AgentRunConfig(
-        name="onboarding_figma",
-        model="sonnet",
-        permission_mode="bypassPermissions",
-        allowed_tools=["Read", "Glob", "Grep"],
-        max_turns=30,
-        use_bare_mode=True,
-        mcp_config=None,
-        system_prompt=None,
-    )
-
-    prompt = FIGMA_PROMPT_TEMPLATE.format(figma_url=figma_url)
-    if annotation:
-        prompt = (
-            f"Context: This Figma file is described as: \"{annotation}\"\n\n"
-            + prompt
-        )
-
-    return await claude.run(
-        agent=config,
-        prompt=prompt,
-        working_dir=working_dir,
-    )
-
-
-async def analyze_figma_designs(
-    claude: ClaudeRunner,
-    sources: list[AnnotatedSource],
-    working_dir: Path,
-) -> list[ClaudeResult]:
-    """Analyze multiple Figma design files concurrently.
-
-    Args:
-        claude: The ClaudeRunner instance.
-        sources: List of annotated Figma URL sources to analyze.
-        working_dir: Working directory for the agents.
-
-    Returns:
-        List of ClaudeResults in the same order as the input sources.
-
-    Raises:
-        FigmaMCPNotConfigured: If Figma MCP server is not configured.
-    """
-    tasks = [
-        analyze_figma_design(claude, src.value, working_dir, src.annotation)
-        for src in sources
-    ]
-    return list(await asyncio.gather(*tasks))
-
-
 def write_figma_sources(doc_store: DocumentStore, sources: list[AnnotatedSource]) -> None:
     """Persist Figma URLs and annotations to a ``figma_sources`` document.
 
@@ -166,26 +70,46 @@ def write_figma_sources(doc_store: DocumentStore, sources: list[AnnotatedSource]
     doc_store.write("figma_sources", "\n".join(lines))
 
 
-async def run_design_diff(
-    claude: ClaudeRunner,
-    old_design_analyses: str,
-    new_design_analyses: str,
-    working_dir: Path,
-) -> str:
-    """Compare old and new design analyses to produce a change summary.
+def _parse_design_change_result(text: str) -> DesignChangeResult:
+    """Parse agent output into a DesignChangeResult.
 
-    Uses the ``design_diff`` agent to identify what changed between two
-    versions of a Design Analysis document.
+    If the output contains the ``NO_DESIGN_CHANGES`` sentinel the result
+    is marked as having no changes.  Otherwise the full text is treated
+    as the change summary.
+    """
+    if NO_DESIGN_CHANGES_SENTINEL in text:
+        return DesignChangeResult(has_changes=False, summary="")
+    return DesignChangeResult(has_changes=True, summary=text.strip())
+
+
+async def detect_design_changes(
+    claude: ClaudeRunner,
+    sources: list[AnnotatedSource],
+    existing_spec: str,
+    working_dir: Path,
+) -> DesignChangeResult:
+    """Detect design changes by comparing live Figma state against existing specs.
+
+    Uses a Claude agent with Figma MCP tools to inspect the current
+    design files and compare them against what the frontend spec describes.
+    Only reports actual structural/visual design changes — not phrasing
+    differences between LLM-generated documents.
+
+    Args:
+        claude: The ClaudeRunner instance.
+        sources: Figma URLs with optional annotations.
+        existing_spec: The current frontend_spec text to compare against.
+        working_dir: Working directory for the agent.
 
     Returns:
-        A textual summary of design changes.
+        DesignChangeResult indicating whether changes were found and a summary.
     """
     config = AgentRunConfig(
-        name="design_diff",
+        name="design_change_detection",
         model="opus",
         permission_mode="bypassPermissions",
-        allowed_tools=[],
-        max_turns=5,
+        allowed_tools=["Read", "Glob", "Grep"],
+        max_turns=15,
         use_bare_mode=True,
         mcp_config=None,
         system_prompt=None,
@@ -193,20 +117,18 @@ async def run_design_diff(
 
     from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
 
+    figma_urls_block = "\n".join(
+        f"- {src.value}" + (f" ({src.annotation})" if src.annotation else "")
+        for src in sources
+    )
+
     renderer = PromptRenderer()
     prompt = renderer.render(
-        "design_diff.md.j2",
+        "design_change_detection.md.j2",
         {
-            "old_design_analyses": old_design_analyses,
-            "new_design_analyses": new_design_analyses,
-            "constraints": [
-                "Identify all added, removed, and modified pages",
-                "Identify all added, removed, and modified components with their visual changes",
-                "Identify all changed design tokens (colors, typography, spacing)",
-                "Identify navigation and user flow changes",
-                "Do not describe unchanged elements",
-                "Be specific about what changed — include old and new values where applicable",
-            ],
+            "existing_spec": existing_spec,
+            "figma_urls": figma_urls_block,
+            "sentinel": NO_DESIGN_CHANGES_SENTINEL,
         },
     )
 
@@ -215,4 +137,4 @@ async def run_design_diff(
         prompt=prompt,
         working_dir=working_dir,
     )
-    return result.text
+    return _parse_design_change_result(result.text)

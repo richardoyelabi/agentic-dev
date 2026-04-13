@@ -9,11 +9,12 @@ from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.mcp.claude_settings import ClaudeMCPEnvironment, MCPServerEntry
 from agentic_dev.onboarding.figma import (
-    FIGMA_PROMPT_TEMPLATE,
+    DesignChangeResult,
     FigmaMCPNotConfigured,
-    analyze_figma_design,
-    analyze_figma_designs,
+    NO_DESIGN_CHANGES_SENTINEL,
+    _parse_design_change_result,
     check_figma_mcp_available,
+    detect_design_changes,
 )
 from agentic_dev.onboarding.models import AnnotatedSource
 
@@ -64,78 +65,98 @@ class TestCheckFigmaMcpAvailable:
             check_figma_mcp_available()
 
 
-class TestAnalyzeFigmaDesign:
+class TestParseDesignChangeResult:
+    def test_no_changes_sentinel_returns_no_changes(self) -> None:
+        result = _parse_design_change_result(NO_DESIGN_CHANGES_SENTINEL)
+
+        assert result.has_changes is False
+        assert result.summary == ""
+
+    def test_change_summary_returns_has_changes(self) -> None:
+        text = "Button color changed from blue to red. New modal added on dashboard."
+        result = _parse_design_change_result(text)
+
+        assert result.has_changes is True
+        assert text in result.summary
+
+    def test_sentinel_anywhere_in_text(self) -> None:
+        text = f"After careful analysis: {NO_DESIGN_CHANGES_SENTINEL} was found."
+        result = _parse_design_change_result(text)
+
+        assert result.has_changes is False
+        assert result.summary == ""
+
+
+class TestDetectDesignChanges:
+    @pytest.mark.asyncio
     @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_constructs_correct_agent_config(
         self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
         mock_discover.return_value = _figma_env()
-        mock_runner = _make_mock_runner()
+        mock_runner = _make_mock_runner(_make_claude_result(text="some changes"))
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
 
-        await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
+        await detect_design_changes(mock_runner, sources, "existing spec text", tmp_path)
 
         config = mock_runner.run.call_args.kwargs["agent"]
-        assert config.name == "onboarding_figma"
-        assert config.model == "sonnet"
-        assert config.permission_mode == "bypassPermissions"
+        assert config.name == "design_change_detection"
+        assert config.model == "opus"
         assert config.allowed_tools == ["Read", "Glob", "Grep"]
-        assert config.max_turns == 30
+        assert config.max_turns == 15
         assert config.use_bare_mode is True
-        assert config.mcp_config is None
-        assert config.system_prompt is None
 
+    @pytest.mark.asyncio
     @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
-    async def test_formats_prompt_with_figma_url(
+    async def test_prompt_includes_spec_and_urls(
         self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
         mock_discover.return_value = _figma_env()
-        mock_runner = _make_mock_runner()
+        mock_runner = _make_mock_runner(_make_claude_result(text="some changes"))
+        existing_spec = "# Frontend Spec\nButton component described here."
+        sources = [
+            AnnotatedSource(value=SAMPLE_FIGMA_URL, annotation="Main app"),
+            AnnotatedSource(value="https://www.figma.com/file/xyz/Other"),
+        ]
 
-        await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
+        await detect_design_changes(mock_runner, sources, existing_spec, tmp_path)
 
         prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert existing_spec in prompt
         assert SAMPLE_FIGMA_URL in prompt
-        assert "Design Analysis" in prompt
+        assert "https://www.figma.com/file/xyz/Other" in prompt
 
+    @pytest.mark.asyncio
     @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
-    async def test_passes_working_dir(
+    async def test_returns_no_changes_when_sentinel_present(
         self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
         mock_discover.return_value = _figma_env()
-        mock_runner = _make_mock_runner()
-
-        await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
-
-        working_dir = mock_runner.run.call_args.kwargs["working_dir"]
-        assert working_dir == tmp_path
-
-    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
-    async def test_returns_claude_result(
-        self, mock_discover: MagicMock, tmp_path: Path
-    ) -> None:
-        mock_discover.return_value = _figma_env()
-        expected = _make_claude_result(
-            text="# Design Analysis\nComponents: Button, Card",
-            cost_usd=0.35,
+        mock_runner = _make_mock_runner(
+            _make_claude_result(text=f"Analysis complete. {NO_DESIGN_CHANGES_SENTINEL}")
         )
-        mock_runner = _make_mock_runner(return_value=expected)
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
 
-        result = await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
+        result = await detect_design_changes(mock_runner, sources, "spec text", tmp_path)
 
-        assert result is expected
+        assert result.has_changes is False
 
+    @pytest.mark.asyncio
     @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
-    async def test_raises_figma_mcp_not_configured(
+    async def test_returns_changes_with_summary(
         self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:
-        mock_discover.return_value = _empty_env()
-        mock_runner = _make_mock_runner()
+        change_text = "Header color changed. New sidebar component added."
+        mock_discover.return_value = _figma_env()
+        mock_runner = _make_mock_runner(_make_claude_result(text=change_text))
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
 
-        with pytest.raises(FigmaMCPNotConfigured):
-            await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
+        result = await detect_design_changes(mock_runner, sources, "spec text", tmp_path)
 
-        mock_runner.run.assert_not_called()
+        assert result.has_changes is True
+        assert change_text in result.summary
 
+    @pytest.mark.asyncio
     @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_propagates_agent_run_error(
         self, mock_discover: MagicMock, tmp_path: Path
@@ -143,65 +164,10 @@ class TestAnalyzeFigmaDesign:
         mock_discover.return_value = _figma_env()
         mock_runner = _make_mock_runner()
         mock_runner.run.side_effect = AgentRunError(
-            agent_name="onboarding_figma",
-            message="MCP connection failed",
+            agent_name="design_change_detection",
+            message="Agent failed unexpectedly",
         )
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
 
-        with pytest.raises(AgentRunError, match="onboarding_figma"):
-            await analyze_figma_design(mock_runner, SAMPLE_FIGMA_URL, tmp_path)
-
-    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
-    async def test_annotation_prepended_to_prompt(
-        self, mock_discover: MagicMock, tmp_path: Path
-    ) -> None:
-        mock_discover.return_value = _figma_env()
-        mock_runner = _make_mock_runner()
-
-        await analyze_figma_design(
-            mock_runner, SAMPLE_FIGMA_URL, tmp_path, annotation="Admin dashboard"
-        )
-
-        prompt = mock_runner.run.call_args.kwargs["prompt"]
-        assert prompt.startswith("Context: This Figma file is described as:")
-        assert "Admin dashboard" in prompt
-        assert SAMPLE_FIGMA_URL in prompt
-
-    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
-    async def test_empty_annotation_uses_original_prompt(
-        self, mock_discover: MagicMock, tmp_path: Path
-    ) -> None:
-        mock_discover.return_value = _figma_env()
-        mock_runner = _make_mock_runner()
-
-        await analyze_figma_design(
-            mock_runner, SAMPLE_FIGMA_URL, tmp_path, annotation=""
-        )
-
-        prompt = mock_runner.run.call_args.kwargs["prompt"]
-        expected = FIGMA_PROMPT_TEMPLATE.format(figma_url=SAMPLE_FIGMA_URL)
-        assert prompt == expected
-
-
-class TestAnalyzeFigmaDesigns:
-    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
-    async def test_runs_all_sources(
-        self, mock_discover: MagicMock, tmp_path: Path
-    ) -> None:
-        mock_discover.return_value = _figma_env()
-        results = [
-            _make_claude_result(text="Design 1"),
-            _make_claude_result(text="Design 2"),
-        ]
-        mock_runner = MagicMock(spec=ClaudeRunner)
-        mock_runner.run = AsyncMock(side_effect=results)
-
-        sources = [
-            AnnotatedSource(value="https://figma.com/file/a", annotation="App UI"),
-            AnnotatedSource(value="https://figma.com/file/b", annotation="Admin"),
-        ]
-        actual = await analyze_figma_designs(mock_runner, sources, tmp_path)
-
-        assert len(actual) == 2
-        assert actual[0].text == "Design 1"
-        assert actual[1].text == "Design 2"
-        assert mock_runner.run.call_count == 2
+        with pytest.raises(AgentRunError, match="design_change_detection"):
+            await detect_design_changes(mock_runner, sources, "spec text", tmp_path)

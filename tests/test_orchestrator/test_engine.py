@@ -554,21 +554,21 @@ class TestProjectTypeDetection:
         assert any_has_project_type
 
     @pytest.mark.asyncio
-    async def test_architecture_passes_design_analyses_when_exists(
+    async def test_architecture_passes_figma_sources_when_exists(
         self, engine, state_manager, claude, doc_store, prompt_renderer
     ):
-        """When design_analyses exists, it is included in architect input_docs."""
+        """When figma_sources exists, it is included in architect input_docs."""
         state = _make_state(PipelinePhase.ARCHITECTURE)
         state_manager.load = MagicMock(return_value=state)
 
         def exists_side_effect(name):
-            return name == "design_analyses"
+            return name == "figma_sources"
 
         doc_store.exists = MagicMock(side_effect=exists_side_effect)
 
         def read_side_effect(name):
-            if name == "design_analyses":
-                return "## Design Tokens\nColors: blue-500"
+            if name == "figma_sources":
+                return "# Figma Sources\n- URL: https://figma.com/file/abc"
             return "document content"
 
         doc_store.read = MagicMock(side_effect=read_side_effect)
@@ -583,23 +583,26 @@ class TestProjectTypeDetection:
             _make_claude_result("APPROVED", cost=0.10),
         ]
 
-        with patch.object(
-            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
-        ):
-            with pytest.raises(AgentRunError):
-                await engine.run()
+        with patch("agentic_dev.onboarding.figma.check_figma_mcp_available"):
+            with patch.object(
+                engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
+            ):
+                with pytest.raises(AgentRunError):
+                    await engine.run()
 
         render_calls = prompt_renderer.render_agent_prompt.call_args_list
         arch_call = render_calls[0]
         input_docs = arch_call.kwargs["input_documents"]
-        assert "design_analyses" in input_docs
-        assert "blue-500" in input_docs["design_analyses"]
+        assert "figma_sources" in input_docs
+        assert "figma.com/file/abc" in input_docs["figma_sources"]
+        assert "figma_mcp_available" in input_docs
+        assert input_docs["figma_mcp_available"] == "true"
 
     @pytest.mark.asyncio
-    async def test_architecture_passes_empty_design_analyses_when_absent(
+    async def test_architecture_passes_empty_figma_sources_when_absent(
         self, engine, state_manager, claude, doc_store, prompt_renderer
     ):
-        """When design_analyses does not exist, empty string is passed."""
+        """When figma_sources does not exist, empty string and false are passed."""
         state = _make_state(PipelinePhase.ARCHITECTURE)
         state_manager.load = MagicMock(return_value=state)
 
@@ -624,8 +627,10 @@ class TestProjectTypeDetection:
         render_calls = prompt_renderer.render_agent_prompt.call_args_list
         arch_call = render_calls[0]
         input_docs = arch_call.kwargs["input_documents"]
-        assert "design_analyses" in input_docs
-        assert input_docs["design_analyses"] == ""
+        assert "figma_sources" in input_docs
+        assert input_docs["figma_sources"] == ""
+        assert "figma_mcp_available" in input_docs
+        assert input_docs["figma_mcp_available"] == "false"
 
     @pytest.mark.asyncio
     async def test_sprint_planning_reads_only_available_docs(

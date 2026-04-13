@@ -85,7 +85,7 @@ async def run_sync(
     spec_documents = _collect_specs(doc_store)
 
     # Step 2b: Collect design context
-    figma_analysis, figma_sources = _collect_design_context(doc_store)
+    figma_sources, figma_mcp_available = _collect_design_context(doc_store)
 
     # Step 3: Run drift_detector
     drift_report = await _detect_drift(
@@ -96,8 +96,8 @@ async def run_sync(
         code_snapshots=snapshots,
         spec_documents=spec_documents,
         sync_ignores=sync_ignores or [],
-        figma_analysis=figma_analysis,
         figma_sources=figma_sources,
+        figma_mcp_available=figma_mcp_available,
     )
 
     emit(_event_log, DriftDetectionEvent(
@@ -234,19 +234,24 @@ def _collect_specs(doc_store: DocumentStore) -> str:
 
 
 def _collect_design_context(doc_store: DocumentStore) -> tuple[str, str]:
-    """Read design_analyses and figma_sources if they exist.
+    """Read figma_sources and check MCP availability.
 
     Returns:
-        A tuple of (figma_analysis, figma_sources) strings.
-        Empty strings if the documents do not exist.
+        A tuple of (figma_sources, figma_mcp_available) strings.
+        Empty string and ``"false"`` if the documents do not exist.
     """
-    figma_analysis = ""
     figma_sources = ""
-    if doc_store.exists("design_analyses"):
-        figma_analysis = doc_store.read("design_analyses")
+    figma_mcp_available = "false"
     if doc_store.exists("figma_sources"):
         figma_sources = doc_store.read("figma_sources")
-    return figma_analysis, figma_sources
+        try:
+            from agentic_dev.onboarding.figma import check_figma_mcp_available  # noqa: WPS433
+
+            check_figma_mcp_available()
+            figma_mcp_available = "true"
+        except Exception:  # noqa: BLE001
+            pass
+    return figma_sources, figma_mcp_available
 
 
 async def _detect_drift(
@@ -257,8 +262,8 @@ async def _detect_drift(
     code_snapshots: str,
     spec_documents: str,
     sync_ignores: list[str],
-    figma_analysis: str = "",
     figma_sources: str = "",
+    figma_mcp_available: str = "false",
 ) -> SyncReport:
     """Run drift_detector agent and parse the output into a SyncReport."""
     agent_def = registry.get("drift_detector")
@@ -269,8 +274,8 @@ async def _detect_drift(
         {
             "code_snapshots": code_snapshots,
             "spec_documents": spec_documents,
-            "figma_analysis": figma_analysis,
             "figma_sources": figma_sources,
+            "figma_mcp_available": figma_mcp_available,
             "sync_ignores": sync_ignores,
         },
     )

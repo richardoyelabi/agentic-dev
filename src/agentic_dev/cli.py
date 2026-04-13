@@ -329,9 +329,7 @@ def new(
                 user_input = (user_input or "") + header + result.text
 
         if figma_sources:
-            from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
             from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
-            from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
             from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
 
             if not check_mcp_prerequisites(["figma"], console):
@@ -339,18 +337,7 @@ def new(
 
             for src in figma_sources:
                 label = f"{src.value} ({src.annotation})" if src.annotation else src.value
-                console.print(f"[cyan]Importing designs from Figma: {label}[/cyan]")
-
-            figma_results = asyncio.run(
-                analyze_figma_designs(ClaudeRunner(), figma_sources, project_dir)
-            )
-            design_sections: list[str] = []
-            for src, result in zip(figma_sources, figma_results):
-                doc_header = "## Source: Figma Design"
-                if src.annotation:
-                    doc_header += f" - {src.annotation}"
-                doc_header += f"\n**URL:** `{src.value}`\n\n"
-                design_sections.append(doc_header + result.text)
+                console.print(f"[cyan]Registered Figma source: {label}[/cyan]")
 
         if not user_input and not figma_sources:
             console.print("[bold red]No requirements provided. Aborting.[/bold red]")
@@ -363,7 +350,6 @@ def new(
             console.print("[green]Saved requirements to docs/user_input.md[/green]")
 
         if figma_sources:
-            doc_store.write("design_analyses", "\n\n---\n".join(design_sections))
             write_figma_sources(doc_store, figma_sources)
 
         _run_pipeline(project_dir, state)
@@ -437,7 +423,6 @@ def _start_update_cycle(
     mode: str,
     restart_phase: PipelinePhase,
     is_targeted: bool = False,
-    design_input: str | None = None,
     design_changes: str | None = None,
     spec_changes: str | None = None,
 ) -> None:
@@ -449,12 +434,9 @@ def _start_update_cycle(
     rather than a full replacement.  A ``change_request`` document is written
     so the pipeline engine can merge it into the existing structured input.
 
-    When *design_input* is provided, a ``design_input`` document is written as
-    an audit trail and ``design_analyses`` is overwritten with the new analysis.
-
-    When *design_changes* is provided (a diff summary produced by the
-    ``design_diff`` agent), it is written as a ``design_changes`` document so
-    downstream agents know what changed.
+    When *design_changes* is provided (a change summary produced by the
+    design change detection agent), it is written as a ``design_changes``
+    document so downstream agents know what changed.
 
     When *spec_changes* is provided (a diff summary produced by the
     ``spec_diff`` agent for ``--full-spec`` updates), it is written as a
@@ -476,10 +458,6 @@ def _start_update_cycle(
         doc_store.write("user_input", change_input)
         if is_targeted:
             doc_store.write("change_request", change_input)
-
-    if design_input:
-        doc_store.write("design_input", design_input)
-        doc_store.write("design_analyses", design_input)
 
     if design_changes:
         doc_store.write("design_changes", design_changes)
@@ -575,53 +553,33 @@ def update(
         from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
 
         figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
-        design_input: str | None = None
         design_changes: str | None = None
 
         if figma_sources:
             from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
             from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
-            from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
+            from agentic_dev.onboarding.figma import detect_design_changes  # noqa: WPS433
             from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
 
             if not check_mcp_prerequisites(["figma"], console):
                 raise typer.Exit(code=1)
 
-            # Read old design_analyses before it gets archived
-            old_design_analyses = (
-                doc_store.read("design_analyses")
-                if doc_store.exists("design_analyses")
-                else ""
-            )
-
-            for src in figma_sources:
-                label = f"{src.value} ({src.annotation})" if src.annotation else src.value
-                console.print(f"[cyan]Importing designs from Figma: {label}[/cyan]")
-
-            log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
-            figma_claude = ClaudeRunner(log_dir=log_dir)
-            figma_results = asyncio.run(
-                analyze_figma_designs(figma_claude, figma_sources, project_dir)
-            )
-            design_sections: list[str] = []
-            for src, result in zip(figma_sources, figma_results):
-                doc_header = "## Source: Figma Design"
-                if src.annotation:
-                    doc_header += f" - {src.annotation}"
-                doc_header += f"\n**URL:** `{src.value}`\n\n"
-                design_sections.append(doc_header + result.text)
-            design_input = "\n\n---\n".join(design_sections)
-
             write_figma_sources(doc_store, figma_sources)
 
-            # Run design_diff agent to produce a change summary
-            if old_design_analyses:
-                from agentic_dev.onboarding.figma import run_design_diff  # noqa: WPS433
+            # Detect design changes by comparing live Figma against existing specs
+            if doc_store.exists("frontend_spec"):
+                existing_spec = doc_store.read("frontend_spec")
+                log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
+                figma_claude = ClaudeRunner(log_dir=log_dir)
 
-                console.print("[cyan]Comparing old and new designs...[/cyan]")
-                design_changes = asyncio.run(
-                    run_design_diff(figma_claude, old_design_analyses, design_input, project_dir)
+                console.print("[cyan]Detecting design changes against existing specs...[/cyan]")
+                change_result = asyncio.run(
+                    detect_design_changes(figma_claude, figma_sources, existing_spec, project_dir)
                 )
+                if change_result.has_changes:
+                    design_changes = change_result.summary
+                else:
+                    console.print("[green]No design changes detected.[/green]")
 
         if not change_input and not figma_sources:
             console.print("[bold red]No change description provided.[/bold red]")
@@ -647,7 +605,6 @@ def update(
             mode="update",
             restart_phase=restart_phase,
             is_targeted=is_targeted,
-            design_input=design_input,
             design_changes=design_changes,
             spec_changes=spec_changes,
         )
@@ -1000,12 +957,9 @@ def adopt(
         from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
 
         figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
-        design_analyses = ""
 
         if figma_sources:
-            from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
             from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
-            from agentic_dev.onboarding.figma import analyze_figma_designs  # noqa: WPS433
             from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
 
             if not check_mcp_prerequisites(["figma"], console):
@@ -1013,21 +967,7 @@ def adopt(
 
             for src in figma_sources:
                 label = f"{src.value} ({src.annotation})" if src.annotation else src.value
-                console.print(f"[cyan]Importing designs from Figma: {label}[/cyan]")
-
-            log_dir = path / AGENTIC_DEV_METADATA_DIR / "logs"
-            figma_claude = ClaudeRunner(log_dir=log_dir)
-            figma_results = asyncio.run(
-                analyze_figma_designs(figma_claude, figma_sources, path)
-            )
-            design_sections = []
-            for src, result in zip(figma_sources, figma_results):
-                header = "## Source: Figma Design"
-                if src.annotation:
-                    header += f" - {src.annotation}"
-                header += f"\n**URL:** `{src.value}`\n\n"
-                design_sections.append(header + result.text)
-            design_analyses = "\n\n---\n".join(design_sections)
+                console.print(f"[cyan]Registered Figma source: {label}[/cyan]")
 
         console.print("\n[bold cyan]Running spec reverse-engineering...[/bold cyan]")
 
@@ -1054,7 +994,6 @@ def adopt(
             project_dir=path,
             directory_map=directory_map,
             project_type=project_type,
-            design_analyses=design_analyses,
         ))
 
         state = state_mgr.load()

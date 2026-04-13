@@ -241,20 +241,10 @@ class TestNewCommandFigma:
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
     def test_figma_does_not_concatenate_into_user_input(
-        self, mock_analyze, mock_mcp, mock_pipeline, tmp_path: Path
+        self, mock_mcp, mock_pipeline, tmp_path: Path
     ) -> None:
-        """Figma analysis should NOT be appended to user_input."""
-        from agentic_dev.claude.runner import ClaudeResult
-
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nPages: Home",
-            session_id="s1",
-            cost_usd=0.1,
-            exit_code=0,
-            raw_json={},
-        )]
+        """Figma URLs should NOT be appended to user_input."""
         result = runner.invoke(
             app,
             ["new", "my-app", "--path", str(tmp_path),
@@ -265,25 +255,15 @@ class TestNewCommandFigma:
         assert result.exit_code == 0, result.output
         user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
-        assert "Design Analysis" not in content
+        assert "figma.com/file/abc" not in content
         assert "todo" in content.lower()
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
     def test_figma_writes_figma_sources_doc(
-        self, mock_analyze, mock_mcp, mock_pipeline, tmp_path: Path
+        self, mock_mcp, mock_pipeline, tmp_path: Path
     ) -> None:
         """--from-figma should persist URLs in figma_sources document."""
-        from agentic_dev.claude.runner import ClaudeResult
-
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nPages: Home",
-            session_id="s1",
-            cost_usd=0.1,
-            exit_code=0,
-            raw_json={},
-        )]
         result = runner.invoke(
             app,
             ["new", "my-app", "--path", str(tmp_path),
@@ -300,48 +280,10 @@ class TestNewCommandFigma:
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
-    def test_figma_writes_design_analyses_doc(
-        self, mock_analyze, mock_mcp, mock_pipeline, tmp_path: Path
-    ) -> None:
-        """--from-figma should still write design_analyses document."""
-        from agentic_dev.claude.runner import ClaudeResult
-
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nPages: Home",
-            session_id="s1",
-            cost_usd=0.1,
-            exit_code=0,
-            raw_json={},
-        )]
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path),
-             "--from-figma", "https://figma.com/file/abc"],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        design_path = tmp_path / "my-app" / "docs" / "design_analyses.md"
-        assert design_path.exists()
-        assert "Design Analysis" in design_path.read_text(encoding="utf-8")
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
     def test_figma_only_does_not_abort(
-        self, mock_analyze, mock_mcp, mock_pipeline, tmp_path: Path
+        self, mock_mcp, mock_pipeline, tmp_path: Path
     ) -> None:
         """--from-figma alone (no text input) should NOT abort."""
-        from agentic_dev.claude.runner import ClaudeResult
-
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nPages: Home",
-            session_id="s1",
-            cost_usd=0.1,
-            exit_code=0,
-            raw_json={},
-        )]
         result = runner.invoke(
             app,
             ["new", "my-app", "--path", str(tmp_path),
@@ -811,18 +753,11 @@ class TestUpdateCommandFigma:
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
     def test_figma_only_runs_pipeline(
-        self, mock_analyze, mock_mcp, mock_pipeline, project_with_state: Path
+        self, mock_mcp, mock_pipeline, project_with_state: Path
     ) -> None:
         """--from-figma alone should drive an update without text input."""
-        from agentic_dev.claude.runner import ClaudeResult
-
         self._set_complete(project_with_state)
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nPages: Home",
-            session_id="s1", cost_usd=0.1, exit_code=0, raw_json={},
-        )]
 
         result = runner.invoke(
             app,
@@ -835,18 +770,11 @@ class TestUpdateCommandFigma:
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
-    def test_figma_writes_design_docs(
-        self, mock_analyze, mock_mcp, mock_pipeline, project_with_state: Path
+    def test_figma_writes_figma_sources(
+        self, mock_mcp, mock_pipeline, project_with_state: Path
     ) -> None:
-        """--from-figma should write design_input, figma_sources, and design_analyses."""
-        from agentic_dev.claude.runner import ClaudeResult
-
+        """--from-figma should write figma_sources."""
         self._set_complete(project_with_state)
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nUpdated layout",
-            session_id="s1", cost_usd=0.1, exit_code=0, raw_json={},
-        )]
 
         runner.invoke(
             app,
@@ -856,26 +784,16 @@ class TestUpdateCommandFigma:
 
         project_dir = project_with_state / "test-app"
         doc_store = DocumentStore(project_dir)
-        assert doc_store.exists("design_input")
-        assert doc_store.exists("design_analyses")
         assert doc_store.exists("figma_sources")
-        assert doc_store.exists("design_analyses")
         assert "Main UI" in doc_store.read("figma_sources")
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
     def test_figma_only_does_not_write_user_input(
-        self, mock_analyze, mock_mcp, mock_pipeline, project_with_state: Path
+        self, mock_mcp, mock_pipeline, project_with_state: Path
     ) -> None:
         """--from-figma alone should not write user_input or change_request."""
-        from agentic_dev.claude.runner import ClaudeResult
-
         self._set_complete(project_with_state)
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nNew design",
-            session_id="s1", cost_usd=0.1, exit_code=0, raw_json={},
-        )]
 
         runner.invoke(
             app,
@@ -890,18 +808,11 @@ class TestUpdateCommandFigma:
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
     def test_figma_only_restarts_from_architecture(
-        self, mock_analyze, mock_mcp, mock_pipeline, project_with_state: Path
+        self, mock_mcp, mock_pipeline, project_with_state: Path
     ) -> None:
         """Figma-only update should restart from ARCHITECTURE phase."""
-        from agentic_dev.claude.runner import ClaudeResult
-
         self._set_complete(project_with_state)
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nNew design",
-            session_id="s1", cost_usd=0.1, exit_code=0, raw_json={},
-        )]
 
         runner.invoke(
             app,
@@ -916,19 +827,12 @@ class TestUpdateCommandFigma:
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
     def test_figma_with_text_writes_both_channels(
-        self, mock_analyze, mock_mcp, mock_collect, mock_pipeline,
+        self, mock_mcp, mock_collect, mock_pipeline,
         project_with_state: Path
     ) -> None:
         """--from-figma with text input writes both text and design channels."""
-        from agentic_dev.claude.runner import ClaudeResult
-
         self._set_complete(project_with_state)
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nNew design",
-            session_id="s1", cost_usd=0.1, exit_code=0, raw_json={},
-        )]
 
         runner.invoke(
             app,
@@ -940,23 +844,15 @@ class TestUpdateCommandFigma:
         doc_store = DocumentStore(project_dir)
         assert doc_store.exists("user_input")
         assert "dark mode" in doc_store.read("user_input").lower()
-        assert doc_store.exists("design_input")
-        assert doc_store.exists("design_analyses")
+        assert doc_store.exists("figma_sources")
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    @patch("agentic_dev.onboarding.figma.analyze_figma_designs")
-    def test_figma_with_full_spec_writes_design_docs(
-        self, mock_analyze, mock_mcp, mock_pipeline, project_with_state: Path
+    def test_figma_with_full_spec_writes_figma_sources(
+        self, mock_mcp, mock_pipeline, project_with_state: Path
     ) -> None:
-        """--full-spec + --from-figma should write design_input and design_analyses."""
-        from agentic_dev.claude.runner import ClaudeResult
-
+        """--full-spec + --from-figma should write figma_sources."""
         self._set_complete(project_with_state)
-        mock_analyze.return_value = [ClaudeResult(
-            text="# Design Analysis\nNew design",
-            session_id="s1", cost_usd=0.1, exit_code=0, raw_json={},
-        )]
 
         spec_file = project_with_state / "full_spec.txt"
         spec_file.write_text("Complete new spec", encoding="utf-8")
@@ -970,9 +866,7 @@ class TestUpdateCommandFigma:
 
         project_dir = project_with_state / "test-app"
         doc_store = DocumentStore(project_dir)
-        assert doc_store.exists("design_input")
-        assert doc_store.exists("design_analyses")
-        assert doc_store.exists("design_analyses")
+        assert doc_store.exists("figma_sources")
 
 
 class TestRemediateCommand:

@@ -1,20 +1,20 @@
-name: design_diff
-description: "Compares old and new design analyses to produce a summary of what changed"
+name: design_change_detection
+description: "Detects design changes by comparing live Figma state against existing specs"
 team: design_architecture
 claude:
   model: opus
   permission_mode: bypassPermissions
-  allowed_tools: []
-  max_turns: 5
-  max_budget_usd: 1.00
-prompt_template: design_diff.md.j2
-input_documents: [old_design_analyses, new_design_analyses]
+  allowed_tools: ["Read", "Glob", "Grep"]
+  max_turns: 15
+  max_budget_usd: 2.00
+prompt_template: design_change_detection.md.j2
+input_documents: [frontend_spec, figma_sources]
 output_documents: [design_changes]
 qa_agent: null
 constraints:
-  - "Identify all added, removed, and modified pages"
-  - "Identify all added, removed, and modified components with their visual changes"
-  - "Identify all changed design tokens (colors, typography, spacing)"
-  - "Identify navigation and user flow changes"
-  - "Do not describe unchanged elements"
-  - "Be specific about what changed — include old and new values where applicable"
+  - "Use Figma MCP tools to inspect current design state"
+  - "Compare against the existing Frontend Spec"
+  - "Only report actual structural or visual design changes"
+  - "Do not report phrasing or formatting differences"
+  - "Include old and new values where applicable"
+  - "Output NO_DESIGN_CHANGES if nothing changed"

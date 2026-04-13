@@ -22,10 +22,18 @@ Review the Architecture document (containing the Frontend Spec, Backend Spec, an
 
 {{ structured_input }}
 
-{% if design_analyses %}
-# Input: Design Analyses (from Figma)
+{% if figma_sources is defined and figma_sources %}
+# Figma Design Reference
 
-{{ design_analyses }}
+{% if figma_mcp_available == "true" %}
+Use Figma MCP tools to inspect the designs and verify the architecture reflects them accurately.
+
+{{ figma_sources }}
+{% else %}
+Figma MCP tools are not available. Skip design verification.
+
+{{ figma_sources }}
+{% endif %}
 {% endif %}
 
 # Input: Architecture
@@ -60,8 +68,9 @@ Review the Architecture document (containing the Frontend Spec, Backend Spec, an
 4. **Is it safe?** — Authentication and authorization are properly specified. No endpoints are missing auth requirements. Input validation is addressed.
 5. **No obvious scaling issues?** — Data models support expected load. No N+1 query patterns. Pagination is specified where needed.
 {% endif %}
-{% if design_analyses %}
-6. **Does it reflect the designs?** — Design tokens (colors, typography, spacing) are incorporated. Component names from Figma are referenced. Page layouts match the design analyses.
+{% if figma_sources is defined and figma_sources %}
+6. **Does it reflect the designs?** — Design tokens (colors, typography, spacing) are incorporated. Component names from Figma are referenced. Page layouts match the designs.{% if figma_mcp_available == "true" %} Use Figma MCP tools to verify.{% endif %}
+
 {% endif %}
 
 # Output Format
