@@ -23,6 +23,9 @@ Review the Sprint Plan against the Features Request. Verify that all features ar
 3. **Is it reasonably well designed?** — Sprints are well-scoped. No sprint is too large or too small. Related features are grouped logically.
 4. **Is it safe?** — Security-critical features (authentication, authorization) are scheduled in early sprints before features that depend on them.
 5. **No obvious scaling issues?** — The number of sprints is reasonable for the project scope. No sprint has an unrealistic amount of work.
+{% if change_request is defined and change_request %}
+6. **Update correctness** — Features with `[EXISTING-F...]` IDs must NOT appear in any sprint's feature list. Only new features (`[F...]` without `EXISTING-` prefix) or modified features should be scheduled. Sprint types should be `patch` for modifications to existing features and `new` for additions. Features with `[DELETED-F...]` IDs must have corresponding cleanup sprints scheduled. Cleanup sprints should be ordered after any sprints modifying features that depended on the deleted feature.
+{% endif %}
 
 # Output Format
 

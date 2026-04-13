@@ -74,11 +74,30 @@ class PromptRenderer:
             context["qa_feedback"] = qa_feedback or ""
 
         result = self.render(template_name, context)
-        emit(_event_log, PromptRenderedEvent(
-            template_name=template_name,
-            context_keys=list(input_documents.keys()),
-            output_length=len(result),
-            correction_mode=correction_mode,
-            message=f"Rendered {template_name} ({len(result)} chars, correction={correction_mode})",
-        ))
+
+        # Warn if rendered prompt approaches model context window limits
+        estimated_tokens = len(result) // 4
+        context_window_limit = 200_000
+        warn_threshold = 0.7
+        if estimated_tokens > context_window_limit * warn_threshold:
+            emit(_event_log, PromptRenderedEvent(
+                template_name=template_name,
+                context_keys=list(input_documents.keys()),
+                output_length=len(result),
+                correction_mode=correction_mode,
+                level="WARNING",
+                message=(
+                    f"Rendered {template_name} is ~{estimated_tokens:,} tokens "
+                    f"({len(result):,} chars) — approaching context window limit. "
+                    f"Consider scoping spec documents to sprint-relevant features."
+                ),
+            ))
+        else:
+            emit(_event_log, PromptRenderedEvent(
+                template_name=template_name,
+                context_keys=list(input_documents.keys()),
+                output_length=len(result),
+                correction_mode=correction_mode,
+                message=f"Rendered {template_name} ({len(result)} chars, correction={correction_mode})",
+            ))
         return result

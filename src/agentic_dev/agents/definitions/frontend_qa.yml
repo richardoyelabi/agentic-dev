@@ -6,6 +6,7 @@ claude:
   permission_mode: bypassPermissions
   allowed_tools: [Read, Glob, Grep, Bash]
   max_budget_usd: 2.00
+  max_turns: 25
 prompt_template: frontend_qa.md.j2
 input_documents: [frontend_spec, api_contract, sprint_plan]
 output_documents: [frontend_qa_report]

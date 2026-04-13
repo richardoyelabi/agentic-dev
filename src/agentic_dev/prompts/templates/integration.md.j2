@@ -12,9 +12,11 @@ Connect the third-party services required for the current sprint.
 
 {{ api_contract }}
 
-# Input: Sprint Plan
+{% include "_partials/sprint_context.md.j2" %}
 
-{{ sprint_scope }}
+{% if change_request is defined and change_request %}
+{% include "_partials/update_context.md.j2" %}
+{% endif %}
 
 # Constraints
 
@@ -23,7 +25,7 @@ Connect the third-party services required for the current sprint.
 {% endfor %}
 
 {% if correction_mode %}
-{% include "_partials/correction_instructions.md.j2" %}
+{% include "_partials/correction_instructions_code.md.j2" %}
 {% endif %}
 
 # Development Guidelines

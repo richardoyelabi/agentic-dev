@@ -20,6 +20,8 @@ Review the backend code produced for the current sprint against the Backend Spec
 
 {{ sprint_scope }}
 
+{% include "_partials/update_qa_context.md.j2" %}
+
 # Evaluation Criteria
 
 1. **Does it do what it is supposed to do?** — All data models, services, and endpoints from the Backend Spec for this sprint are implemented.{% if api_contract %} Endpoints match the API Contract exactly.{% endif %}

@@ -6,6 +6,7 @@ claude:
   permission_mode: bypassPermissions
   allowed_tools: [Read, Glob, Grep, Bash]
   max_budget_usd: 1.50
+  max_turns: 20
 prompt_template: integration_qa.md.j2
 input_documents: [api_contract, sprint_plan, integration_guide]
 output_documents: [integration_qa_report]

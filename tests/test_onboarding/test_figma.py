@@ -102,7 +102,7 @@ class TestDetectDesignChanges:
         config = mock_runner.run.call_args.kwargs["agent"]
         assert config.name == "design_change_detection"
         assert config.model == "opus"
-        assert config.allowed_tools == ["Read", "Glob", "Grep"]
+        assert config.allowed_tools == []
         assert config.max_turns == 15
         assert config.use_bare_mode is True
 

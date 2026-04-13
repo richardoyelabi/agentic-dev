@@ -226,6 +226,24 @@ class SprintRunner:
         api_contract = self._doc_store.read("api_contract") if self._has_backend else ""
 
         extra_context: dict[str, str] = {}
+
+        # Collect summaries from prior sprints for cross-sprint context
+        prior_summaries: list[str] = []
+        for prev_num in range(1, sprint_number):
+            for suffix in ("backend", "frontend", "integration"):
+                doc_name = f"sprint_{prev_num}_{suffix}"
+                if self._doc_store.exists(doc_name):
+                    content = self._doc_store.read(doc_name)
+                    lines = content.strip().splitlines()
+                    summary_lines = lines[-20:] if len(lines) > 20 else lines
+                    prior_summaries.append(
+                        f"### Sprint {prev_num} ({suffix})\n" + "\n".join(summary_lines)
+                    )
+        if prior_summaries:
+            extra_context["prior_sprint_summaries"] = (
+                "## Prior Sprint Summaries\n\n" + "\n\n".join(prior_summaries)
+            )
+
         if self._doc_store.exists("checkpoint_feedback"):
             extra_context["user_feedback"] = self._doc_store.read("checkpoint_feedback")
         if (

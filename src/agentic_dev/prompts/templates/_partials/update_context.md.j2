@@ -9,5 +9,7 @@ This is an update to an existing project, not a new build. A user has requested 
 - Preserve all existing work that is not affected by the change request
 - Features marked `[EXISTING-F...]` already have working implementations in the codebase
 - Do not regenerate or rewrite sections that are not affected by the changes
-- When removing features, cleanly remove all related sections and update cross-references
+- Features marked `[DELETED-F...]` must be fully removed: delete all related code files, API endpoints, routes, components, database migrations (create a migration to drop tables/columns), test files, and documentation references. Update any cross-references in remaining features.
 - Read existing files before making changes — use Edit for targeted modifications, not full rewrites
+- **Before making changes**, run the existing test suite to establish a passing baseline. Note any pre-existing failures.
+- **After making changes**, verify all existing tests still pass — fix any regressions you introduced before completing

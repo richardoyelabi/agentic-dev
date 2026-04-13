@@ -289,6 +289,11 @@ class PipelineEngine:
         for doc_name, content in docs.items():
             self._doc_store.write(doc_name, content)
 
+        # During updates, restore archived specs that didn't materially change
+        # to prevent phantom drift from regeneration
+        if state.mode == "update":
+            self._restore_unchanged_specs(docs)
+
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
         state.active_session_id = None
@@ -338,6 +343,24 @@ class PipelineEngine:
         sprint_plan_text = sprint_docs.get("sprint_plan", result.output)
         state.sprints = self._parse_sprint_plan(sprint_plan_text)
         state.current_sprint = 1 if state.sprints else None
+
+        # Validate feature conventions in sprint scopes
+        convention_warnings = self._validate_sprint_feature_conventions(
+            state.sprints, sprint_plan_text,
+        )
+        if convention_warnings:
+            from agentic_dev.logging import get_event_logger
+            _log = get_event_logger("engine")
+            for w in convention_warnings:
+                _log.warning(w)
+
+        # Write sprint scope documents so developers receive full sprint context
+        for sprint in state.sprints:
+            if sprint.scope_text:
+                self._doc_store.write(
+                    f"sprint_{sprint.sprint_number}_scope",
+                    sprint.scope_text,
+                )
 
         for sprint in state.sprints:
             if sprint.integration_services:
@@ -422,6 +445,36 @@ class PipelineEngine:
             await init_repo(docs_dir)
         if await has_changes(docs_dir):
             await commit(docs_dir, message)
+
+    def _restore_unchanged_specs(self, new_docs: dict[str, str]) -> None:
+        """Restore archived specs that didn't materially change.
+
+        After architecture regeneration during updates, compare each new spec
+        against the most recent archived version. If the content is
+        substantively the same (ignoring whitespace), restore the archive
+        to prevent phantom drift.
+        """
+        archive_dir = self._doc_store.docs_dir / "archive"
+        if not archive_dir.is_dir():
+            return
+
+        # Find the most recent archive directory
+        archive_subdirs = sorted(
+            (d for d in archive_dir.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if not archive_subdirs:
+            return
+
+        latest_archive = archive_subdirs[0]
+        for doc_name, new_content in new_docs.items():
+            archived_file = latest_archive / f"{doc_name}.md"
+            if not archived_file.exists():
+                continue
+            archived_content = archived_file.read_text(encoding="utf-8")
+            if archived_content.strip() == new_content.strip():
+                self._doc_store.write(doc_name, archived_content)
 
     def _read_tech_stack(self, doc_name: str) -> dict[str, str]:
         """Read a spec document and parse its tech stack, returning defaults on failure."""
@@ -608,6 +661,42 @@ class PipelineEngine:
         )
 
     @staticmethod
+    def _validate_sprint_feature_conventions(
+        sprints: list[SprintState],
+        features_text: str,
+    ) -> list[str]:
+        """Validate EXISTING-F and DELETED-F conventions in sprint scopes.
+
+        Returns a list of warning strings for any violations found:
+        - Sprints containing [EXISTING-F...] features (should not be re-implemented)
+        - [DELETED-F...] features in the features doc with no cleanup sprint
+        """
+        existing_re = re.compile(r"\[EXISTING-F\d+\]")
+        deleted_re = re.compile(r"\[DELETED-F(\d+)\]")
+
+        warnings: list[str] = []
+
+        for sprint in sprints:
+            matches = existing_re.findall(sprint.scope_text)
+            if matches:
+                warnings.append(
+                    f"Sprint {sprint.sprint_number} ({sprint.name}) "
+                    f"contains existing features that should not be "
+                    f"re-implemented: {', '.join(matches)}"
+                )
+
+        deleted_ids = set(deleted_re.findall(features_text))
+        if deleted_ids:
+            all_scope_text = " ".join(s.scope_text for s in sprints)
+            for fid in sorted(deleted_ids):
+                if f"[DELETED-F{fid}]" not in all_scope_text and f"F{fid}" not in all_scope_text:
+                    warnings.append(
+                        f"Feature [DELETED-F{fid}] has no cleanup sprint scheduled"
+                    )
+
+        return warnings
+
+    @staticmethod
     def _parse_sprint_plan(plan_text: str) -> list[SprintState]:
         """Extract sprint entries from the plan text.
 
@@ -637,15 +726,17 @@ class PipelineEngine:
             number = int(match.group(1))
             name = match.group(2).strip()
 
-            # Extract block text between this header and the next
-            start = match.end()
+            # Extract full block text including the header line
+            start = match.start()
             end = headers[i + 1].start() if i + 1 < len(headers) else len(plan_text)
             block = plan_text[start:end]
 
+            # Parse integration fields from the block body
+            block_body = plan_text[match.end():end]
             integration_services: list[str] = []
-            needs_match = needs_integration_re.search(block)
+            needs_match = needs_integration_re.search(block_body)
             if needs_match and needs_match.group(1).lower() == "yes":
-                services_match = integration_services_re.search(block)
+                services_match = integration_services_re.search(block_body)
                 if services_match:
                     raw_services = services_match.group(1).strip()
                     integration_services = [
@@ -657,6 +748,7 @@ class PipelineEngine:
             sprints.append(SprintState(
                 sprint_number=number,
                 name=name,
+                scope_text=block.strip(),
                 integration_services=integration_services,
             ))
 

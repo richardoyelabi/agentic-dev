@@ -1,5 +1,7 @@
 """Tests for the PromptRenderer class."""
 
+from unittest.mock import patch
+
 import pytest
 
 from agentic_dev.prompts.renderer import PromptRenderer, TemplateRenderError
@@ -626,3 +628,255 @@ class TestFigmaPromptSections:
             AGENT_TEMPLATES["frontend_qa.md.j2"],
         )
         assert "Figma Design Reference" not in result
+
+
+class TestUpdateContextInTemplates:
+    """Verify update context flows correctly through templates."""
+
+    def test_backend_qa_includes_update_context_when_change_request_present(self, real_renderer):
+        result = real_renderer.render("backend_qa.md.j2", {
+            **AGENT_TEMPLATES["backend_qa.md.j2"],
+            "change_request": "Change payment endpoint to /api/v2/payments",
+        })
+        assert "Update Context" in result
+        assert "Change payment endpoint" in result
+        assert "Additional review criteria for updates" in result
+
+    def test_backend_qa_omits_update_context_without_change_request(self, real_renderer):
+        result = real_renderer.render(
+            "backend_qa.md.j2",
+            AGENT_TEMPLATES["backend_qa.md.j2"],
+        )
+        assert "Additional review criteria for updates" not in result
+
+    def test_frontend_qa_includes_update_context_when_change_request_present(self, real_renderer):
+        result = real_renderer.render("frontend_qa.md.j2", {
+            **AGENT_TEMPLATES["frontend_qa.md.j2"],
+            "change_request": "Add dark mode toggle",
+            "design_changes": "## Components\n- Button: color changed",
+        })
+        assert "Update Context" in result
+        assert "Add dark mode toggle" in result
+        assert "Design Changes" in result
+        assert "Button: color changed" in result
+
+    def test_integration_qa_includes_update_context_when_change_request_present(self, real_renderer):
+        result = real_renderer.render("integration_qa.md.j2", {
+            **AGENT_TEMPLATES["integration_qa.md.j2"],
+            "change_request": "Switch from Stripe to PayPal",
+        })
+        assert "Update Context" in result
+        assert "Switch from Stripe to PayPal" in result
+
+    def test_sprint_planner_qa_includes_update_correctness_criterion(self, real_renderer):
+        result = real_renderer.render("sprint_planner_qa.md.j2", {
+            **AGENT_TEMPLATES["sprint_planner_qa.md.j2"],
+            "change_request": "Add notifications feature",
+        })
+        assert "Update correctness" in result
+        assert "EXISTING-F" in result
+        assert "DELETED-F" in result
+
+    def test_sprint_planner_qa_omits_update_criterion_without_change_request(self, real_renderer):
+        result = real_renderer.render(
+            "sprint_planner_qa.md.j2",
+            AGENT_TEMPLATES["sprint_planner_qa.md.j2"],
+        )
+        assert "Update correctness" not in result
+
+
+class TestDeveloperTemplateReordering:
+    """Verify update context appears before specs in developer templates."""
+
+    def test_backend_developer_update_context_before_spec(self, real_renderer):
+        result = real_renderer.render("backend_developer.md.j2", {
+            **AGENT_TEMPLATES["backend_developer.md.j2"],
+            "change_request": "CHANGE_MARKER_HERE",
+        })
+        update_pos = result.index("CHANGE_MARKER_HERE")
+        spec_pos = result.index("# Input: Backend Spec")
+        assert update_pos < spec_pos, (
+            "Update context should appear before the backend spec input section"
+        )
+
+    def test_frontend_developer_update_context_before_spec(self, real_renderer):
+        result = real_renderer.render("frontend_developer.md.j2", {
+            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+            "change_request": "CHANGE_MARKER_HERE",
+        })
+        update_pos = result.index("CHANGE_MARKER_HERE")
+        spec_pos = result.index("# Input: Frontend Spec")
+        assert update_pos < spec_pos, (
+            "Update context should appear before the frontend spec input section"
+        )
+
+
+class TestCodeCorrectionInstructions:
+    """Verify developer templates use code-specific correction instructions."""
+
+    def test_backend_developer_uses_code_correction_partial(self, real_renderer):
+        result = real_renderer.render("backend_developer.md.j2", {
+            **AGENT_TEMPLATES["backend_developer.md.j2"],
+            "correction_mode": True,
+            "previous_output": "Previous summary",
+            "qa_feedback": "Fix the auth middleware",
+        })
+        assert "already on the filesystem" in result
+        assert "targeted fixes" in result
+        assert "produce a corrected version" not in result
+
+    def test_frontend_developer_uses_code_correction_partial(self, real_renderer):
+        result = real_renderer.render("frontend_developer.md.j2", {
+            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+            "correction_mode": True,
+            "previous_output": "Previous summary",
+            "qa_feedback": "Fix the component styling",
+        })
+        assert "already on the filesystem" in result
+        assert "targeted fixes" in result
+
+    def test_integration_uses_code_correction_partial(self, real_renderer):
+        result = real_renderer.render("integration.md.j2", {
+            **AGENT_TEMPLATES["integration.md.j2"],
+            "correction_mode": True,
+            "previous_output": "Previous summary",
+            "qa_feedback": "Fix the Stripe webhook handler",
+        })
+        assert "already on the filesystem" in result
+        assert "targeted fixes" in result
+
+
+class TestDeletedFeatureHandling:
+    """Verify DELETED-F markers are handled across templates."""
+
+    def test_input_updater_mentions_deleted_prefix(self, real_renderer):
+        result = real_renderer.render(
+            "input_updater.md.j2",
+            AGENT_TEMPLATES["input_updater.md.j2"],
+        )
+        assert "[DELETED-F...]" in result
+        assert "Delete the feature entry entirely" not in result
+
+    def test_sprint_planner_mentions_deleted_features(self, real_renderer):
+        result = real_renderer.render(
+            "sprint_planner.md.j2",
+            AGENT_TEMPLATES["sprint_planner.md.j2"],
+        )
+        assert "DELETED-F" in result
+        assert "cleanup" in result.lower()
+
+    def test_update_context_mentions_deleted_features(self, real_renderer):
+        result = real_renderer.render("backend_developer.md.j2", {
+            **AGENT_TEMPLATES["backend_developer.md.j2"],
+            "change_request": "Remove the payment feature",
+        })
+        assert "DELETED-F" in result
+
+    def test_update_qa_context_mentions_deleted_features(self, real_renderer):
+        result = real_renderer.render("backend_qa.md.j2", {
+            **AGENT_TEMPLATES["backend_qa.md.j2"],
+            "change_request": "Remove the payment feature",
+        })
+        assert "DELETED-F" in result
+        assert "dangling references" in result
+
+
+class TestUATRuntimeVerification:
+    """Verify UAT template includes runtime verification section."""
+
+    def test_uat_includes_runtime_verification(self, real_renderer):
+        result = real_renderer.render(
+            "uat.md.j2",
+            AGENT_TEMPLATES["uat.md.j2"],
+        )
+        assert "Runtime Verification" in result
+        assert "Run the test suites" in result
+        assert "Bash" in result
+
+    def test_uat_includes_regression_check_with_change_request(self, real_renderer):
+        result = real_renderer.render("uat.md.j2", {
+            **AGENT_TEMPLATES["uat.md.j2"],
+            "change_request": "Update payment endpoint",
+        })
+        assert "Regression check" in result
+
+
+class TestIntegrationTemplatePartials:
+    """Verify integration template includes sprint context and update context."""
+
+    def test_integration_includes_sprint_context(self, real_renderer):
+        result = real_renderer.render("integration.md.j2", {
+            **AGENT_TEMPLATES["integration.md.j2"],
+        })
+        assert "Current Sprint Scope" in result
+
+    def test_integration_includes_update_context_when_present(self, real_renderer):
+        result = real_renderer.render("integration.md.j2", {
+            **AGENT_TEMPLATES["integration.md.j2"],
+            "change_request": "Switch to PayPal SDK",
+        })
+        assert "Update Context" in result
+        assert "Switch to PayPal SDK" in result
+
+
+class TestPriorSprintSummaries:
+    """Verify developer templates render prior sprint summaries."""
+
+    def test_backend_developer_renders_prior_summaries(self, real_renderer):
+        result = real_renderer.render("backend_developer.md.j2", {
+            **AGENT_TEMPLATES["backend_developer.md.j2"],
+            "prior_sprint_summaries": "### Sprint 1 (backend)\n- Created User model\n- 5 tests passing",
+        })
+        assert "Prior Sprint Context" in result
+        assert "Created User model" in result
+
+    def test_backend_developer_omits_prior_summaries_when_absent(self, real_renderer):
+        result = real_renderer.render(
+            "backend_developer.md.j2",
+            AGENT_TEMPLATES["backend_developer.md.j2"],
+        )
+        assert "Prior Sprint Context" not in result
+
+
+class TestPromptSizeWarning:
+    """Verify prompt size guardrails emit warnings for large prompts."""
+
+    def test_large_prompt_emits_warning(self, real_renderer):
+        """A prompt exceeding 70% of context window should log a warning."""
+        # 200k tokens * 4 chars/token * 0.7 threshold = 560k chars
+        large_spec = "x" * 600_000
+        with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
+            real_renderer.render_agent_prompt(
+                template_name="backend_developer.md.j2",
+                input_documents={
+                    "backend_spec": large_spec,
+                    "api_contract": "# API Contract",
+                    "sprint_scope": "Sprint 1",
+                },
+                constraints=["TDD"],
+            )
+            # Find the warning-level emit call
+            warning_calls = [
+                c for c in mock_emit.call_args_list
+                if hasattr(c[0][1], "level") and c[0][1].level == "WARNING"
+            ]
+            assert len(warning_calls) >= 1
+            assert "approaching context window" in warning_calls[0][0][1].message
+
+    def test_normal_prompt_does_not_emit_warning(self, real_renderer):
+        """A normal-sized prompt should not emit a warning."""
+        with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
+            real_renderer.render_agent_prompt(
+                template_name="backend_developer.md.j2",
+                input_documents={
+                    "backend_spec": "# Backend Spec\n## Models\n- User",
+                    "api_contract": "# API Contract",
+                    "sprint_scope": "Sprint 1",
+                },
+                constraints=["TDD"],
+            )
+            warning_calls = [
+                c for c in mock_emit.call_args_list
+                if hasattr(c[0][1], "level") and c[0][1].level == "WARNING"
+            ]
+            assert len(warning_calls) == 0

@@ -614,3 +614,69 @@ class TestFigmaExtraContext:
         call_kwargs = mock_qa_cycle.call_args.kwargs
         assert "figma_sources" not in call_kwargs["input_docs"]
         assert "figma_mcp_available" not in call_kwargs["input_docs"]
+
+
+class TestCrossSprintSummaries:
+    """Tests for prior sprint summary collection and forwarding."""
+
+    @pytest.fixture
+    def runner_with_docs(self, claude, registry, prompt_renderer, project_dir):
+        """Create a runner with a doc_store that has prior sprint docs."""
+        store = MagicMock(spec=DocumentStore)
+
+        docs = {
+            "backend_spec": "# Backend Spec",
+            "api_contract": "# API Contract",
+            "sprint_1_backend": "# Sprint 1\nCreated User model\n5 tests passing",
+        }
+
+        def mock_exists(name):
+            return name in docs
+
+        def mock_read(name):
+            return docs.get(name, "")
+
+        store.exists = MagicMock(side_effect=mock_exists)
+        store.read = MagicMock(side_effect=mock_read)
+        store.write = MagicMock()
+
+        return SprintRunner(
+            claude=claude,
+            registry=registry,
+            doc_store=store,
+            prompt_renderer=prompt_renderer,
+            project_dir=project_dir,
+            project_type="backend_only",
+        )
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle")
+    async def test_sprint_2_receives_sprint_1_summary(
+        self, mock_qa_cycle, runner_with_docs, claude,
+    ):
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="backend output", session_id="s1",
+        )
+
+        await runner_with_docs.run_sprint(2, "Build Payments")
+
+        call_kwargs = mock_qa_cycle.call_args.kwargs
+        input_docs = call_kwargs["input_docs"]
+        assert "prior_sprint_summaries" in input_docs
+        assert "Sprint 1 (backend)" in input_docs["prior_sprint_summaries"]
+        assert "User model" in input_docs["prior_sprint_summaries"]
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle")
+    async def test_sprint_1_has_no_prior_summaries(
+        self, mock_qa_cycle, runner_with_docs, claude,
+    ):
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="backend output", session_id="s1",
+        )
+
+        await runner_with_docs.run_sprint(1, "Build Auth")
+
+        call_kwargs = mock_qa_cycle.call_args.kwargs
+        input_docs = call_kwargs["input_docs"]
+        assert "prior_sprint_summaries" not in input_docs

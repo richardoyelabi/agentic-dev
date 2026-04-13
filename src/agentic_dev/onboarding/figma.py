@@ -108,7 +108,7 @@ async def detect_design_changes(
         name="design_change_detection",
         model="opus",
         permission_mode="bypassPermissions",
-        allowed_tools=["Read", "Glob", "Grep"],
+        allowed_tools=[],
         max_turns=15,
         use_bare_mode=True,
         mcp_config=None,

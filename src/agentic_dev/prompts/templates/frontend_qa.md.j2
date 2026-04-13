@@ -20,6 +20,8 @@ Review the frontend code produced for the current sprint against the Frontend Sp
 
 {{ sprint_scope }}
 
+{% include "_partials/update_qa_context.md.j2" %}
+
 # Evaluation Criteria
 
 1. **Does it do what it is supposed to do?** — All pages, components, and behaviors from the Frontend Spec for this sprint are implemented.{% if api_contract %} API calls match the API Contract exactly.{% endif %}
@@ -31,14 +33,6 @@ Review the frontend code produced for the current sprint against the Frontend Sp
 {% if figma_sources is defined and figma_sources %}
 7. **Does it match the design?** — Components match the Figma design for layout, spacing, colors, typography, and visual hierarchy.{% if figma_mcp_available == "true" %} Use Figma MCP tools to compare.{% else %} Compare against the design analyses text.{% endif %}
 
-{% endif %}
-
-{% if design_changes is defined and design_changes %}
-# Design Changes
-
-The following design elements changed in this update. Focus visual fidelity checks on these components. Verify unchanged areas were not affected.
-
-{{ design_changes }}
 {% endif %}
 
 {% if figma_sources is defined and figma_sources %}

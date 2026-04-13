@@ -8,17 +8,25 @@ Implement the backend code for the current sprint. Write all data models, servic
 
 **Do not ask clarifying questions. Implement directly based on the spec. All the information you need is provided below.**
 
+{% if change_request is defined and change_request %}
+{% include "_partials/update_context.md.j2" %}
+{% endif %}
+
 {% include "_partials/sprint_context.md.j2" %}
+
+{% if prior_sprint_summaries is defined and prior_sprint_summaries %}
+# Prior Sprint Context
+
+The following summarizes what was built in previous sprints. Use this to understand existing implementation decisions, patterns, and utilities you can reuse.
+
+{{ prior_sprint_summaries }}
+{% endif %}
 
 # Input: Backend Spec (Sprint-Scoped)
 
 {{ backend_spec }}
 
 {% include "_partials/api_contract_context.md.j2" %}
-
-{% if change_request is defined and change_request %}
-{% include "_partials/update_context.md.j2" %}
-{% endif %}
 
 # Constraints
 
@@ -27,7 +35,7 @@ Implement the backend code for the current sprint. Write all data models, servic
 {% endfor %}
 
 {% if correction_mode %}
-{% include "_partials/correction_instructions.md.j2" %}
+{% include "_partials/correction_instructions_code.md.j2" %}
 {% endif %}
 
 # Development Guidelines

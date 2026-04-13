@@ -1548,3 +1548,181 @@ class TestUATExtraContext:
         assert all_kwargs.get("extra_context") is not None
         assert "change_request" in all_kwargs["extra_context"]
         assert "design_changes" in all_kwargs["extra_context"]
+
+
+class TestParseSprintPlanScopeText:
+    """Tests for scope_text capture in _parse_sprint_plan."""
+
+    def test_scope_text_contains_full_block(self) -> None:
+        plan = (
+            "## Sprint 1: Auth & Payments\n"
+            "- **Type:** new\n"
+            "- **Features:** [F001], [F002]\n"
+            "- **Needs Integration:** yes\n"
+            "- **Integration Services:** Stripe\n"
+        )
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert len(sprints) == 1
+        assert "Sprint 1: Auth & Payments" in sprints[0].scope_text
+        assert "[F001], [F002]" in sprints[0].scope_text
+        assert "**Type:** new" in sprints[0].scope_text
+
+    def test_scope_text_includes_header_line(self) -> None:
+        plan = "## Sprint 1: Core Models\n- **Features:** [F001]\n"
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert sprints[0].scope_text.startswith("Sprint 1:")
+
+    def test_multiple_sprints_have_separate_scope_texts(self) -> None:
+        plan = (
+            "## Sprint 1: Core Models\n"
+            "- **Features:** [F001]\n"
+            "\n"
+            "## Sprint 2: Payments\n"
+            "- **Features:** [F002]\n"
+        )
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert len(sprints) == 2
+        assert "[F001]" in sprints[0].scope_text
+        assert "[F001]" not in sprints[1].scope_text
+        assert "[F002]" in sprints[1].scope_text
+
+    def test_fallback_sprint_has_empty_scope_text(self) -> None:
+        plan = "Just do everything."
+        sprints = PipelineEngine._parse_sprint_plan(plan)
+        assert len(sprints) == 1
+        assert sprints[0].scope_text == ""
+
+
+class TestValidateSprintFeatureConventions:
+    """Tests for _validate_sprint_feature_conventions."""
+
+    def test_no_warnings_for_clean_plan(self) -> None:
+        sprints = [
+            SprintState(
+                sprint_number=1,
+                name="Auth",
+                scope_text="## Sprint 1: Auth\n- **Features:** [F001]\n",
+            ),
+        ]
+        warnings = PipelineEngine._validate_sprint_feature_conventions(
+            sprints, "## Feature: [F001] Auth\n",
+        )
+        assert warnings == []
+
+    def test_warns_when_existing_feature_in_sprint(self) -> None:
+        sprints = [
+            SprintState(
+                sprint_number=1,
+                name="Auth Rebuild",
+                scope_text="## Sprint 1: Auth Rebuild\n- **Features:** [EXISTING-F001]\n",
+            ),
+        ]
+        warnings = PipelineEngine._validate_sprint_feature_conventions(
+            sprints, "## Feature: [EXISTING-F001] Auth\n",
+        )
+        assert len(warnings) == 1
+        assert "EXISTING-F001" in warnings[0]
+        assert "Sprint 1" in warnings[0]
+
+    def test_warns_when_deleted_feature_has_no_cleanup_sprint(self) -> None:
+        sprints = [
+            SprintState(
+                sprint_number=1,
+                name="New Feature",
+                scope_text="## Sprint 1: New Feature\n- **Features:** [F002]\n",
+            ),
+        ]
+        features = "## Feature: [DELETED-F003] Old Payment\n**Status: DELETED**\n"
+        warnings = PipelineEngine._validate_sprint_feature_conventions(
+            sprints, features,
+        )
+        assert len(warnings) == 1
+        assert "DELETED-F003" in warnings[0]
+        assert "no cleanup sprint" in warnings[0]
+
+    def test_no_warning_when_deleted_feature_has_cleanup_sprint(self) -> None:
+        sprints = [
+            SprintState(
+                sprint_number=1,
+                name="Cleanup",
+                scope_text="## Sprint 1: Cleanup\n- **Features:** [DELETED-F003]\n",
+            ),
+        ]
+        features = "## Feature: [DELETED-F003] Old Payment\n**Status: DELETED**\n"
+        warnings = PipelineEngine._validate_sprint_feature_conventions(
+            sprints, features,
+        )
+        assert warnings == []
+
+    def test_multiple_violations_reported(self) -> None:
+        sprints = [
+            SprintState(
+                sprint_number=1,
+                name="Bad Sprint",
+                scope_text="## Sprint 1: Bad Sprint\n- **Features:** [EXISTING-F001], [EXISTING-F002]\n",
+            ),
+        ]
+        features = (
+            "## Feature: [EXISTING-F001] Auth\n"
+            "## Feature: [DELETED-F005] Legacy\n"
+        )
+        warnings = PipelineEngine._validate_sprint_feature_conventions(
+            sprints, features,
+        )
+        assert len(warnings) == 2
+        assert any("EXISTING-F001" in w for w in warnings)
+        assert any("DELETED-F005" in w for w in warnings)
+
+
+class TestRestoreUnchangedSpecs:
+    """Tests for _restore_unchanged_specs during update mode."""
+
+    def test_restores_unchanged_spec_from_archive(self, engine, tmp_path):
+        """When a regenerated spec matches the archived version, restore the archive."""
+        docs_dir = tmp_path / "project" / "docs"
+        docs_dir.mkdir(parents=True)
+        archive_dir = docs_dir / "archive" / "update_20260413T000000Z"
+        archive_dir.mkdir(parents=True)
+
+        archived_content = "# Backend Spec\n## Models\n- User\n"
+        (archive_dir / "backend_spec.md").write_text(archived_content)
+
+        engine._doc_store.docs_dir = docs_dir
+
+        written_docs: dict[str, str] = {}
+        engine._doc_store.write = MagicMock(side_effect=lambda name, content: written_docs.update({name: content}))
+
+        new_docs = {"backend_spec": "# Backend Spec\n## Models\n- User\n"}
+        engine._restore_unchanged_specs(new_docs)
+
+        assert "backend_spec" in written_docs
+        assert written_docs["backend_spec"] == archived_content
+
+    def test_keeps_changed_spec(self, engine, tmp_path):
+        """When a regenerated spec differs, don't restore the archive."""
+        docs_dir = tmp_path / "project" / "docs"
+        docs_dir.mkdir(parents=True)
+        archive_dir = docs_dir / "archive" / "update_20260413T000000Z"
+        archive_dir.mkdir(parents=True)
+
+        (archive_dir / "backend_spec.md").write_text("# Backend Spec\n## Old content\n")
+
+        engine._doc_store.docs_dir = docs_dir
+        engine._doc_store.write = MagicMock()
+
+        new_docs = {"backend_spec": "# Backend Spec\n## New content with changes\n"}
+        engine._restore_unchanged_specs(new_docs)
+
+        engine._doc_store.write.assert_not_called()
+
+    def test_no_op_when_no_archive_dir(self, engine, tmp_path):
+        """When there's no archive directory, do nothing."""
+        docs_dir = tmp_path / "project" / "docs"
+        docs_dir.mkdir(parents=True)
+
+        engine._doc_store.docs_dir = docs_dir
+        engine._doc_store.write = MagicMock()
+
+        engine._restore_unchanged_specs({"backend_spec": "content"})
+
+        engine._doc_store.write.assert_not_called()

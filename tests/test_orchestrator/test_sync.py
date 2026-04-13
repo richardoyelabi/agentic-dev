@@ -339,8 +339,10 @@ class TestCollectDesignContext:
         assert figma_sources == ""
         assert figma_mcp_available == "false"
 
-    @patch("agentic_dev.onboarding.figma.check_figma_mcp_available", side_effect=Exception("not configured"))
-    def test_mcp_unavailable_returns_false(self, mock_check):
+    @patch("agentic_dev.onboarding.figma.check_figma_mcp_available")
+    def test_mcp_not_configured_returns_false_silently(self, mock_check):
+        from agentic_dev.onboarding.figma import FigmaMCPNotConfigured
+        mock_check.side_effect = FigmaMCPNotConfigured()
         doc_store = MagicMock(spec=DocumentStore)
         doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "figma_sources"
         doc_store.read.return_value = "# Figma Sources\n- URL: https://figma.com/file/abc"
@@ -349,3 +351,21 @@ class TestCollectDesignContext:
 
         assert "figma.com/file/abc" in figma_sources
         assert figma_mcp_available == "false"
+
+    @patch("agentic_dev.onboarding.figma.check_figma_mcp_available", side_effect=RuntimeError("auth token expired"))
+    def test_unexpected_exception_logs_warning(self, mock_check):
+        doc_store = MagicMock(spec=DocumentStore)
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") == "figma_sources"
+        doc_store.read.return_value = "# Figma Sources\n- URL: https://figma.com/file/abc"
+
+        with patch("agentic_dev.orchestrator.sync.get_event_logger") as mock_logger:
+            mock_log = MagicMock()
+            mock_logger.return_value = mock_log
+
+            figma_sources, figma_mcp_available = _collect_design_context(doc_store)
+
+        assert "figma.com/file/abc" in figma_sources
+        assert figma_mcp_available == "false"
+        mock_log.warning.assert_called_once()
+        warning_msg = mock_log.warning.call_args[0][0]
+        assert "unexpectedly" in warning_msg

@@ -689,6 +689,14 @@ def status(
 
         _display_status(state)
 
+        doc_store = DocumentStore(project_dir)
+        if doc_store.exists("sync_change_request"):
+            console.print(
+                "[yellow]Warning:[/yellow] Pending code changes from sync. "
+                "Run 'agentic-dev update' to apply them, or delete "
+                "docs/sync_change_request.md to dismiss."
+            )
+
     except AgenticDevError as exc:
         _display_error(exc)
         raise typer.Exit(code=1)

@@ -71,3 +71,4 @@ Guidelines:
 - Sprint type is `new` for initial builds and `patch` for updates to existing code.
 - Keep sprints focused — prefer more smaller sprints over fewer large ones.
 - **Existing features:** Features with `[EXISTING-F...]` IDs represent code that already exists. Do NOT create sprints for these features. Only create sprints for new features (those with `[F...]` IDs without the `EXISTING-` prefix). List existing features as available context and dependencies, but do not schedule them for implementation.
+- **Deleted features:** Features with `[DELETED-F...]` IDs represent code that must be removed from the codebase. Create a `cleanup` type sprint for deleted features (group related deletions together). Cleanup sprints should list the deleted feature IDs and schedule AFTER any sprints that modify features depending on the deleted feature.

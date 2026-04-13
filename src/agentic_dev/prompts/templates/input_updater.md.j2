@@ -20,7 +20,7 @@ Apply the change request below to the current Structured Input document. Make on
 
 1. **Adding features:** Assign new `[F00N]` IDs continuing from the highest existing ID.
 2. **Modifying features:** Keep the original feature ID but update its description to reflect the requested change. Prefix it with `[EXISTING-F...]` like unchanged features (e.g., `[EXISTING-F002]`).
-3. **Removing features:** Delete the feature entry entirely.
+3. **Removing features:** Keep the feature entry but prefix it with `[DELETED-F...]` (e.g., `[F003]` becomes `[DELETED-F003]`). Keep the original description so downstream agents know what to clean up. Add a note: `**Status: DELETED — remove all related code, tests, routes, and database artifacts.**`
 4. **Unchanged features:** Prefix with `[EXISTING-F...]` (e.g., `[F001]` becomes `[EXISTING-F001]`). Do not alter the description.
 5. **Preferences:** Update only the preferences the change request addresses. Preserve all others.
 

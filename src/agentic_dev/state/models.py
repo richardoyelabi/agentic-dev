@@ -58,6 +58,7 @@ class SprintState(BaseModel):
 
     sprint_number: int
     name: str
+    scope_text: str = ""
     status: SprintStatus = SprintStatus.PENDING
     backend_session_id: str | None = None
     frontend_session_id: str | None = None

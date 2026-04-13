@@ -56,6 +56,19 @@ For each feature and acceptance criterion:
 3. Check edge cases: invalid inputs, unauthorized access, empty states, error conditions.
 4. Verify cross-feature interactions where features depend on each other.
 
+# Runtime Verification
+
+In addition to spec-tracing, use your tools to verify the implementation at runtime:
+
+1. **Run the test suites**: Use `Bash` to run the backend and frontend test suites. Report actual pass/fail counts.
+2. **Inspect implementation files**: Use `Read` and `Grep` to spot-check that key endpoints, components, and data models match the specs.
+3. **Verify the application starts**: Use `Bash` to start the backend server and confirm it responds to health checks.
+{% if change_request is defined and change_request %}
+4. **Regression check**: Run the full test suite and verify that features NOT mentioned in the change request still pass all their tests.
+{% endif %}
+
+Report both spec-tracing results AND runtime verification results in your UAT Report.
+
 # Output Format
 
 Produce a **UAT Report**:

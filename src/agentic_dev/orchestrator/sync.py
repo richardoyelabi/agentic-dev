@@ -245,12 +245,19 @@ def _collect_design_context(doc_store: DocumentStore) -> tuple[str, str]:
     if doc_store.exists("figma_sources"):
         figma_sources = doc_store.read("figma_sources")
         try:
-            from agentic_dev.onboarding.figma import check_figma_mcp_available  # noqa: WPS433
+            from agentic_dev.onboarding.figma import check_figma_mcp_available, FigmaMCPNotConfigured  # noqa: WPS433
 
             check_figma_mcp_available()
             figma_mcp_available = "true"
-        except Exception:  # noqa: BLE001
+        except FigmaMCPNotConfigured:
             pass
+        except Exception as exc:  # noqa: BLE001
+            _log = get_event_logger("sync")
+            _log.warning(
+                "Figma MCP check failed unexpectedly: %s. "
+                "Design drift detection may be incomplete.",
+                exc,
+            )
     return figma_sources, figma_mcp_available
 
 

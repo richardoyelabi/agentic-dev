@@ -1,0 +1,23 @@
+{% if change_request is defined and change_request %}
+## Update Context
+
+This sprint is part of an update to an existing project. The user requested:
+
+{{ change_request }}
+
+**Additional review criteria for updates:**
+- Verify the change request above was correctly and completely implemented
+- Verify features and code not related to this change were not accidentally modified
+- Check for regressions — existing functionality should still work correctly
+- Verify the update is properly scoped — only areas affected by the change should be modified
+- If features were deleted (`[DELETED-F...]`), verify all related code, endpoints, routes, components, tests, and documentation were removed
+- Verify no dangling references to deleted features remain in the codebase
+{% endif %}
+
+{% if design_changes is defined and design_changes %}
+## Design Changes
+
+The following design elements changed in this update. Verify design changes were applied correctly and unchanged areas were not affected.
+
+{{ design_changes }}
+{% endif %}
