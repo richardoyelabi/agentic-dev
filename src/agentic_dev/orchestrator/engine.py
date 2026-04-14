@@ -129,9 +129,11 @@ class PipelineEngine:
 
         # QA sub-phases advance to the next main phase
         qa_advance_map = {
+            PipelinePhase.INPUT_PROCESSING_QA: PipelinePhase.FEATURE_ANALYSIS,
             PipelinePhase.FEATURE_ANALYSIS_QA: PipelinePhase.ARCHITECTURE,
             PipelinePhase.ARCHITECTURE_QA: PipelinePhase.SPRINT_PLANNING,
             PipelinePhase.SPRINT_PLANNING_QA: PipelinePhase.DESIGN_CHECKPOINT,
+            PipelinePhase.UAT_QA: PipelinePhase.COMPLETE,
         }
 
         if state.phase in qa_advance_map:
@@ -144,19 +146,28 @@ class PipelineEngine:
         return await handler(state)
 
     async def _run_input_processing(self, state: PipelineState) -> PipelineState:
-        """Run the input processor agent (no QA cycle)."""
+        """Run the input processor agent with QA cycle."""
         if state.phase == PipelinePhase.IDLE:
             state = advance_phase(state, PipelinePhase.INPUT_PROCESSING)
 
-        output = await self._run_single_agent(
-            agent_name="input_processor",
+        result = await run_qa_cycle(
+            claude=self._claude,
+            action_agent=self._registry.get("input_processor"),
+            qa_agent=self._registry.get("input_processor_qa"),
             input_docs={"user_input": self._doc_store.read("user_input")},
             output_doc_name="structured_input",
+            workspace=self._project_dir,
+            doc_store=self._doc_store,
+            prompt_renderer=self._prompt_renderer,
+            session_id=state.active_session_id,
         )
-        self._doc_store.write("structured_input", output)
+
+        state.total_cost_usd += result.total_cost
+        state.active_session_id = None
+        self._record_agent_run(state, "input_processor", result.total_cost)
         await self._commit_docs_changes("docs: structured input from requirements")
 
-        state.project_type = self._parse_project_type(output)
+        state.project_type = self._parse_project_type(result.output)
 
         # Create code directories based on detected project type
         frontend_name = self._directory_map.frontend or "frontend"
@@ -166,7 +177,7 @@ class PipelineEngine:
         if state.has_backend:
             (self._project_dir / backend_name).mkdir(parents=True, exist_ok=True)
 
-        return advance_phase(state, PipelinePhase.FEATURE_ANALYSIS)
+        return advance_phase(state, PipelinePhase.INPUT_PROCESSING_QA)
 
     @staticmethod
     def _parse_project_type(structured_input: str) -> ProjectType:
@@ -182,22 +193,34 @@ class PipelineEngine:
     async def _merge_change_request(self, state: PipelineState) -> None:
         """Merge a pending change_request into structured_input.
 
-        Runs the ``input_updater`` agent which surgically applies the change
-        request to the existing structured input.  The change_request document
-        is deleted afterwards so the merge is not repeated on pipeline resume.
+        Runs the ``input_updater`` agent with QA cycle which surgically applies
+        the change request to the existing structured input.  The change_request
+        document is deleted afterwards so the merge is not repeated on pipeline
+        resume.
         """
-        output = await self._run_single_agent(
-            agent_name="input_updater",
+        structured_input = self._doc_store.read("structured_input")
+        change_request = self._doc_store.read("change_request")
+
+        result = await run_qa_cycle(
+            claude=self._claude,
+            action_agent=self._registry.get("input_updater"),
+            qa_agent=self._registry.get("input_updater_qa"),
             input_docs={
-                "structured_input": self._doc_store.read("structured_input"),
-                "change_request": self._doc_store.read("change_request"),
+                "structured_input": structured_input,
+                "change_request": change_request,
             },
             output_doc_name="structured_input",
+            workspace=self._project_dir,
+            doc_store=self._doc_store,
+            prompt_renderer=self._prompt_renderer,
+            qa_output_key="merged_output",
         )
-        self._doc_store.write("structured_input", output)
+
+        state.total_cost_usd += result.total_cost
+        self._record_agent_run(state, "input_updater", result.total_cost)
         self._doc_store.delete("change_request")
         await self._commit_docs_changes("docs: updated structured input from change request")
-        state.project_type = self._parse_project_type(output)
+        state.project_type = self._parse_project_type(result.output)
 
     def _update_extra_context(self, state: PipelineState) -> dict[str, str]:
         """Build extra_context dict with change context when in update mode."""
@@ -585,7 +608,7 @@ class PipelineEngine:
         return advance_phase(state, PipelinePhase.UAT)
 
     async def _run_uat(self, state: PipelineState) -> PipelineState:
-        """Run the UAT agent (no QA cycle)."""
+        """Run the UAT agent with QA cycle."""
         input_docs = {}
         for doc_name in ["features", "frontend_spec", "backend_spec", "api_contract", "sprint_plan"]:
             if self._doc_store.exists(doc_name):
@@ -593,16 +616,25 @@ class PipelineEngine:
 
         extra_context = self._update_extra_context(state)
 
-        output = await self._run_single_agent(
-            agent_name="uat",
+        result = await run_qa_cycle(
+            claude=self._claude,
+            action_agent=self._registry.get("uat"),
+            qa_agent=self._registry.get("uat_qa"),
             input_docs=input_docs,
             output_doc_name="uat_report",
+            workspace=self._project_dir,
+            doc_store=self._doc_store,
+            prompt_renderer=self._prompt_renderer,
+            session_id=state.active_session_id,
             extra_context=extra_context,
         )
-        self._doc_store.write("uat_report", output)
+
+        state.total_cost_usd += result.total_cost
+        state.active_session_id = None
+        self._record_agent_run(state, "uat", result.total_cost)
         await self._commit_docs_changes("docs: UAT report")
 
-        return advance_phase(state, PipelinePhase.COMPLETE)
+        return advance_phase(state, PipelinePhase.UAT_QA)
 
     async def _run_single_agent(
         self,

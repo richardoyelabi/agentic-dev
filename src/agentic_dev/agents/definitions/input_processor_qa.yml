@@ -1,0 +1,19 @@
+name: input_processor_qa
+description: "Reviews structured input for completeness, accuracy, and correct project type detection"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 5
+  max_budget_usd: 1.00
+prompt_template: input_processor_qa.md.j2
+input_documents: [user_input, structured_input]
+output_documents: [input_processor_qa_report]
+qa_agent: null
+constraints:
+  - "Evaluate: does the structured input capture all requirements from user input?"
+  - "Evaluate: is the project type correctly detected?"
+  - "Evaluate: are feature IDs sequential and non-duplicated?"
+  - "Check for misinterpreted or omitted requirements"
+  - "Check that preferences are preserved without modification"

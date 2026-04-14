@@ -10,7 +10,7 @@ claude:
 prompt_template: drift_detector.md.j2
 input_documents: []
 output_documents: []
-qa_agent: null
+qa_agent: drift_detector_qa
 constraints:
   - "Assign sequential [DRIFT-nnn] IDs to each item"
   - "Categorize each item: in_code_not_spec, in_spec_not_code, difference, design_drift"

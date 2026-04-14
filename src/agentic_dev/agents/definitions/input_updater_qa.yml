@@ -1,0 +1,19 @@
+name: input_updater_qa
+description: "Reviews merged structured input for correct change request integration"
+team: design_architecture
+claude:
+  model: opus
+  permission_mode: bypassPermissions
+  allowed_tools: []
+  max_turns: 5
+  max_budget_usd: 1.00
+prompt_template: input_updater_qa.md.j2
+input_documents: [structured_input, change_request, merged_output]
+output_documents: [input_updater_qa_report]
+qa_agent: null
+constraints:
+  - "Evaluate: are all existing features preserved with [EXISTING-F...] prefix?"
+  - "Evaluate: are new features correctly assigned fresh [F00N] IDs?"
+  - "Evaluate: are deleted features marked with [DELETED-F...] prefix?"
+  - "Check that the change request was fully applied"
+  - "Check that unaffected preferences are preserved"

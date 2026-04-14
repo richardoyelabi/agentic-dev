@@ -10,7 +10,7 @@ claude:
 prompt_template: input_processor.md.j2
 input_documents: [user_input]
 output_documents: [structured_input]
-qa_agent: null
+qa_agent: input_processor_qa
 constraints:
   - "Separate feature requirements from preferences (tech stack, deployment, UI/UX)"
   - "Assign feature IDs in format [F001]"

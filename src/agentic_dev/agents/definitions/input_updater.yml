@@ -10,7 +10,7 @@ claude:
 prompt_template: input_updater.md.j2
 input_documents: [structured_input, change_request]
 output_documents: [structured_input]
-qa_agent: null
+qa_agent: input_updater_qa
 constraints:
   - "Preserve everything not addressed by the change request"
   - "Mark features that already exist in the codebase with the [EXISTING-F...] prefix"

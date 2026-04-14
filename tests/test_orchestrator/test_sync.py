@@ -140,10 +140,10 @@ class TestApplySyncResolutions:
         store.read.return_value = "# Spec content"
         return store
 
-    def _make_claude_result(self, text: str = "# Updated spec", cost: float = 0.05):
+    def _make_qa_cycle_result(self, text: str = "# Updated spec", cost: float = 0.05):
         result = MagicMock()
-        result.text = text
-        result.cost_usd = cost
+        result.output = text
+        result.total_cost = cost
         return result
 
     @pytest.fixture
@@ -152,18 +152,21 @@ class TestApplySyncResolutions:
         claude.run = AsyncMock()
         registry = MagicMock()
         agent_def = MagicMock()
+        agent_def.name = "spec_updater"
         agent_def.prompt_template = "spec_updater.md.j2"
         agent_def.constraints = []
         registry.get.return_value = agent_def
         prompt_renderer = MagicMock()
         prompt_renderer.render.return_value = "rendered prompt"
+        prompt_renderer.render_agent_prompt = MagicMock(return_value="rendered prompt")
         return claude, registry, prompt_renderer, tmp_path
 
-    async def test_broadcasts_to_all_existing_specs(self, mock_deps):
+    @patch("agentic_dev.orchestrator.sync.run_qa_cycle", new_callable=AsyncMock)
+    async def test_broadcasts_to_all_existing_specs(self, mock_qa_cycle, mock_deps):
         """to_spec items should be sent to every existing spec, not routed by scope."""
         claude, registry, prompt_renderer, project_dir = mock_deps
         doc_store = self._make_doc_store(["frontend_spec", "backend_spec", "api_contract"])
-        claude.run.return_value = self._make_claude_result()
+        mock_qa_cycle.return_value = self._make_qa_cycle_result()
 
         items = [
             DriftItem(
@@ -186,13 +189,14 @@ class TestApplySyncResolutions:
         )
 
         assert result.specs_updated == 3
-        assert claude.run.call_count == 3
+        assert mock_qa_cycle.call_count == 3
 
-    async def test_skips_nonexistent_specs(self, mock_deps):
+    @patch("agentic_dev.orchestrator.sync.run_qa_cycle", new_callable=AsyncMock)
+    async def test_skips_nonexistent_specs(self, mock_qa_cycle, mock_deps):
         """Only updates specs that exist in the doc store."""
         claude, registry, prompt_renderer, project_dir = mock_deps
         doc_store = self._make_doc_store(["backend_spec"])
-        claude.run.return_value = self._make_claude_result()
+        mock_qa_cycle.return_value = self._make_qa_cycle_result()
 
         items = [
             DriftItem(
@@ -215,9 +219,10 @@ class TestApplySyncResolutions:
         )
 
         assert result.specs_updated == 1
-        assert claude.run.call_count == 1
+        assert mock_qa_cycle.call_count == 1
 
-    async def test_no_updater_calls_when_no_to_spec_items(self, mock_deps):
+    @patch("agentic_dev.orchestrator.sync.run_qa_cycle", new_callable=AsyncMock)
+    async def test_no_updater_calls_when_no_to_spec_items(self, mock_qa_cycle, mock_deps):
         """Items without to_spec resolution should not trigger spec updates."""
         claude, registry, prompt_renderer, project_dir = mock_deps
         doc_store = self._make_doc_store(["frontend_spec", "backend_spec", "api_contract"])
@@ -250,15 +255,16 @@ class TestApplySyncResolutions:
         )
 
         assert result.specs_updated == 0
-        claude.run.assert_not_called()
+        mock_qa_cycle.assert_not_called()
 
-    async def test_accumulates_cost_from_all_updaters(self, mock_deps):
+    @patch("agentic_dev.orchestrator.sync.run_qa_cycle", new_callable=AsyncMock)
+    async def test_accumulates_cost_from_all_updaters(self, mock_qa_cycle, mock_deps):
         """Total cost should sum across all spec updater calls."""
         claude, registry, prompt_renderer, project_dir = mock_deps
         doc_store = self._make_doc_store(["frontend_spec", "backend_spec"])
-        claude.run.side_effect = [
-            self._make_claude_result(cost=0.10),
-            self._make_claude_result(cost=0.15),
+        mock_qa_cycle.side_effect = [
+            self._make_qa_cycle_result(cost=0.10),
+            self._make_qa_cycle_result(cost=0.15),
         ]
 
         items = [

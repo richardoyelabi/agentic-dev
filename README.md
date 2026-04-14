@@ -4,7 +4,7 @@ Autonomous software development agency powered by Claude Code CLI. Takes a produ
 
 ## Features
 
-- **25 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
+- **31 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
 - **Independent QA review** at every stage with one-cycle correction
 - **Feature-based sprints** break large projects into manageable chunks
 - **Configurable checkpoints** for human review (default: pause after design)
@@ -149,17 +149,17 @@ Show cost breakdown by agent and sprint.
 
 ## Architecture
 
-The agency consists of 7 teams with 25 agents:
+The agency consists of 7 teams with 31 agents:
 
 | Team | Agents | Purpose |
 |---|---|---|
-| Design & Architecture | Input Processor, Input Updater, Feature Analyst + QA, Architect + QA, Sprint Planner + QA, Design Diff, Spec Diff | Requirements analysis, specifications, sprint planning, change diffing |
+| Design & Architecture | Input Processor + QA, Input Updater + QA, Feature Analyst + QA, Architect + QA, Sprint Planner + QA, Design Diff, Spec Diff | Requirements analysis, specifications, sprint planning, change diffing |
 | Adoption | Structure Detector, Spec Reverse Engineer + QA, Feature Extractor + QA | Reverse-engineer specs from existing codebases |
-| Sync | Code Analyzer, Drift Detector, Spec Updater | Detect and resolve drift between code and specs |
+| Sync | Code Analyzer + QA, Drift Detector + QA, Spec Updater + QA | Detect and resolve drift between code and specs |
 | Frontend | Frontend Developer + QA | UI implementation per sprint (with direct Figma MCP access) |
 | Backend | Backend Developer + QA | API and business logic per sprint |
 | Integration | Integration Agent + QA | Third-party service connections |
-| QA | UAT Agent | User acceptance testing |
+| QA | UAT Agent + QA | User acceptance testing |
 
 ### Pipeline Flow
 

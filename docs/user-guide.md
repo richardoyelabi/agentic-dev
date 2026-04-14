@@ -108,7 +108,7 @@ Text and design are **parallel input channels** — they are stored and processe
 
 After submitting your requirements, the agency runs the design phase:
 
-1. **Input Processor** normalizes your input
+1. **Input Processor** normalizes your input (reviewed by QA)
 2. **Feature Analyst** expands it into detailed features (reviewed by QA)
 3. **Architect** produces Frontend Spec, Backend Spec, and API Contract (reviewed by QA)
 4. **Sprint Planner** breaks features into sprints (reviewed by QA)

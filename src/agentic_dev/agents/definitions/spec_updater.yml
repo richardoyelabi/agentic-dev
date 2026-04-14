@@ -10,7 +10,7 @@ claude:
 prompt_template: spec_updater.md.j2
 input_documents: []
 output_documents: []
-qa_agent: null
+qa_agent: spec_updater_qa
 constraints:
   - "Make targeted edits, do not regenerate the entire spec"
   - "Preserve existing formatting and conventions"

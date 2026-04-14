@@ -10,7 +10,7 @@ claude:
 prompt_template: code_analyzer.md.j2
 input_documents: []
 output_documents: []
-qa_agent: null
+qa_agent: code_analyzer_qa
 constraints:
   - "Produce a structured inventory, not a full spec"
   - "List endpoints, data models, components, and routes"

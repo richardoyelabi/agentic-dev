@@ -8,15 +8,15 @@ All agents are defined as YAML files in `src/agentic_dev/agents/definitions/`.
 
 | Model | Agents | Rationale |
 |---|---|---|
-| **opus** | Feature Analyst, Architect, all QA agents, UAT, Spec Reverse Engineer, Feature Extractor, Drift Detector, Design Diff, Spec Diff | Deep reasoning, critical review, multi-document synthesis |
-| **sonnet** | Input Processor, Input Updater, Sprint Planner, Frontend/Backend Dev, Integration, Structure Detector, Code Analyzer, Spec Updater, Spec Reverse Engineer QA, Feature Extractor QA | Structured transformation, code generation, validation, cost-effective |
+| **opus** | Feature Analyst, Architect, all QA agents (incl. Input Processor QA, Input Updater QA, UAT QA, Drift Detector QA), UAT, Spec Reverse Engineer, Feature Extractor, Drift Detector, Design Diff, Spec Diff | Deep reasoning, critical review, multi-document synthesis |
+| **sonnet** | Input Processor, Input Updater, Sprint Planner, Frontend/Backend Dev, Integration, Structure Detector, Code Analyzer, Spec Updater, Code Analyzer QA, Spec Updater QA, Spec Reverse Engineer QA, Feature Extractor QA | Structured transformation, code generation, validation, cost-effective |
 
 ### Design & Architecture Team
 
 | Agent | QA Counterpart | Input | Output |
 |---|---|---|---|
-| Input Processor | *(none)* | User input | Structured Input |
-| Input Updater | *(none)* | Previous Structured Input + change request | Updated Structured Input |
+| Input Processor | Input Processor QA | User input | Structured Input |
+| Input Updater | Input Updater QA | Previous Structured Input + change request | Updated Structured Input |
 | Design Diff | *(none)* | Old Design Analyses, New Design Analyses | Design Changes (change summary) |
 | Spec Diff | *(none)* | Old Structured Input, New Structured Input | Spec Changes (change summary) |
 | Feature Analyst | Feature Analyst QA | Structured Input | Features Request |
@@ -55,15 +55,15 @@ When Figma sources are present, the Frontend Developer and Frontend QA agents re
 
 | Agent | QA Counterpart | Input | Output |
 |---|---|---|---|
-| Code Analyzer | *(none)* | Code directory + scope | Code reality snapshot |
-| Drift Detector | *(none)* | Code snapshots + spec documents | Sync Report with `[DRIFT-nnn]` IDs |
-| Spec Updater | *(none)* | Current spec + resolved drift items | Updated spec document |
+| Code Analyzer | Code Analyzer QA | Code directory + scope | Code reality snapshot |
+| Drift Detector | Drift Detector QA | Code snapshots + spec documents | Sync Report with `[DRIFT-nnn]` IDs |
+| Spec Updater | Spec Updater QA | Current spec + resolved drift items | Updated spec document |
 
 ### QA Team
 
 | Agent | QA Counterpart | Input | Output |
 |---|---|---|---|
-| UAT Agent | *(none — reports to user)* | All specs + Sprint Plan | UAT Report |
+| UAT Agent | UAT QA | All specs + Sprint Plan | UAT Report |
 
 ## Agent YAML Schema
 

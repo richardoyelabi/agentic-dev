@@ -195,13 +195,14 @@ class TestCheckpointPause:
         doc_store.exists = MagicMock(return_value=False)
         doc_store.read = MagicMock(return_value="content")
 
-        # backend + QA, frontend + QA for sprint 1, then UAT
+        # backend + QA, frontend + QA for sprint 1, then UAT + QA
         claude.run.side_effect = [
             _make_claude_result("backend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
         ]
 
         with patch(
@@ -261,15 +262,18 @@ class TestInputProcessingPhase:
     """Test the input processing phase in detail."""
 
     @pytest.mark.asyncio
-    async def test_input_processing_calls_single_agent(
+    async def test_input_processing_runs_qa_cycle(
         self, engine, state_manager, claude, doc_store
     ):
-        """Input processing uses _run_single_agent with docs/user_input content."""
+        """Input processing uses run_qa_cycle with docs/user_input content."""
         state = _make_state(PipelinePhase.INPUT_PROCESSING)
         state_manager.load = MagicMock(return_value=state)
-        claude.run.return_value = _make_claude_result("structured output", cost=0.05)
+        claude.run.side_effect = [
+            _make_claude_result("structured output", cost=0.05),
+            _make_claude_result("APPROVED", cost=0.03),
+        ]
 
-        # Stop after input processing by failing feature analysis
+        # Stop after input processing QA by failing feature analysis
         with patch.object(
             engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
         ):
@@ -286,7 +290,10 @@ class TestInputProcessingPhase:
         """input_processor template expects user_input; context key must match."""
         state = _make_state(PipelinePhase.INPUT_PROCESSING)
         state_manager.load = MagicMock(return_value=state)
-        claude.run.return_value = _make_claude_result("structured output", cost=0.05)
+        claude.run.side_effect = [
+            _make_claude_result("structured output", cost=0.05),
+            _make_claude_result("APPROVED", cost=0.03),
+        ]
         doc_store.read.return_value = "saved requirements body"
 
         with patch.object(
@@ -366,8 +373,9 @@ class TestSprintPhase:
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("s2 frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
-            # UAT
+            # UAT + QA
             _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
         ]
 
         with patch(
@@ -389,13 +397,16 @@ class TestUATPhase:
     """Test the UAT phase."""
 
     @pytest.mark.asyncio
-    async def test_uat_runs_single_agent(self, engine, state_manager, claude, doc_store):
-        """UAT runs without QA cycle and saves report."""
+    async def test_uat_runs_qa_cycle(self, engine, state_manager, claude, doc_store):
+        """UAT runs with QA cycle and saves report."""
         state = _make_state(PipelinePhase.UAT)
         state_manager.load = MagicMock(return_value=state)
         doc_store.exists = MagicMock(return_value=True)
         doc_store.read = MagicMock(return_value="spec content")
-        claude.run.return_value = _make_claude_result("uat passed", cost=0.20)
+        claude.run.side_effect = [
+            _make_claude_result("uat passed", cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
 
         await engine.run()
 
@@ -403,14 +414,14 @@ class TestUATPhase:
         doc_store.write.assert_any_call("uat_report", "uat passed")
 
 
-class TestSingleAgentRetry:
-    """Test the empty-output retry in _run_single_agent (used by UAT and input processing)."""
+class TestQACycleRetry:
+    """Test the empty-output retry in QA cycle (used by UAT and input processing)."""
 
     @pytest.mark.asyncio
-    async def test_single_agent_retries_empty_output_then_succeeds(
+    async def test_qa_cycle_retries_empty_output_then_succeeds(
         self, engine, state_manager, claude, doc_store
     ):
-        """When _run_single_agent gets empty output once, it retries and succeeds."""
+        """When the action agent returns empty once, the QA cycle retries and succeeds."""
         state = _make_state(PipelinePhase.UAT)
         state_manager.load = MagicMock(return_value=state)
         doc_store.exists = MagicMock(return_value=True)
@@ -418,16 +429,17 @@ class TestSingleAgentRetry:
         claude.run.side_effect = [
             _make_claude_result("", cost=0.01),       # empty — triggers retry
             _make_claude_result("uat passed", cost=0.20),  # retry succeeds
+            _make_claude_result("APPROVED", cost=0.10),  # QA review
         ]
 
-        with patch("agentic_dev.orchestrator.engine.asyncio.sleep"):
+        with patch("agentic_dev.orchestrator.qa_cycle.asyncio.sleep"):
             await engine.run()
 
         assert state.phase == PipelinePhase.COMPLETE
-        assert claude.run.call_count == 2
+        assert claude.run.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_single_agent_raises_after_retry_exhausted(
+    async def test_qa_cycle_raises_after_retry_exhausted(
         self, engine, state_manager, claude, doc_store
     ):
         """When both the initial and retry calls return empty, AgentRunError is raised."""
@@ -440,7 +452,7 @@ class TestSingleAgentRetry:
             _make_claude_result("", cost=0.01),  # retry also empty
         ]
 
-        with patch("agentic_dev.orchestrator.engine.asyncio.sleep"):
+        with patch("agentic_dev.orchestrator.qa_cycle.asyncio.sleep"):
             with pytest.raises(AgentRunError, match="empty output"):
                 await engine.run()
 
@@ -463,7 +475,10 @@ class TestProjectTypeDetection:
             "## Project Type\nfrontend_only\n"
             "## Feature Requirements\n- Build a React app"
         )
-        claude.run.return_value = _make_claude_result(structured_output, cost=0.05)
+        claude.run.side_effect = [
+            _make_claude_result(structured_output, cost=0.05),
+            _make_claude_result("APPROVED", cost=0.03),
+        ]
 
         with patch.object(
             engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
@@ -482,7 +497,10 @@ class TestProjectTypeDetection:
         state_manager.load = MagicMock(return_value=state)
 
         structured_output = "# Structured Input\n## Feature Requirements\n- Build an app"
-        claude.run.return_value = _make_claude_result(structured_output, cost=0.05)
+        claude.run.side_effect = [
+            _make_claude_result(structured_output, cost=0.05),
+            _make_claude_result("APPROVED", cost=0.03),
+        ]
 
         with patch.object(
             engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
@@ -879,6 +897,7 @@ class TestPostSprintCommits:
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
         ]
 
         with patch(
@@ -917,6 +936,7 @@ class TestPostSprintCommits:
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
         ]
 
         with patch(
@@ -984,6 +1004,7 @@ class TestPostSprintCommits:
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
         ]
 
         with patch(
@@ -1018,6 +1039,7 @@ class TestPostSprintCommits:
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
         ]
 
         with patch(
@@ -1058,11 +1080,12 @@ class TestCrashResilience:
         doc_store.exists = MagicMock(return_value=False)
         doc_store.read = MagicMock(return_value="content")
 
-        # Only frontend + QA + UAT needed (backend skipped)
+        # Only frontend + QA + UAT + QA needed (backend skipped)
         claude.run.side_effect = [
             _make_claude_result("frontend code", cost=0.25),
             _make_claude_result("APPROVED", cost=0.10),
             _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
         ]
 
         with patch(
@@ -1379,10 +1402,10 @@ class TestMergeChangeRequest:
     """Tests for _merge_change_request and update-mode context passing."""
 
     @pytest.mark.asyncio
-    async def test_merge_runs_input_updater_when_change_request_exists(
+    async def test_merge_runs_input_updater_qa_cycle_when_change_request_exists(
         self, engine, claude, doc_store
     ):
-        """When change_request exists, _merge_change_request runs input_updater."""
+        """When change_request exists, _merge_change_request runs input_updater with QA cycle."""
         state = _make_state(PipelinePhase.FEATURE_ANALYSIS, mode="update")
 
         doc_store.read.side_effect = lambda name: {
@@ -1390,15 +1413,18 @@ class TestMergeChangeRequest:
             "change_request": "Add notifications feature",
         }.get(name.replace(".md", ""), "")
 
-        claude.run.return_value = _make_claude_result(
-            "# Structured Input\n- [EXISTING-F001] Auth\n- [F002] Notifications"
-        )
+        claude.run.side_effect = [
+            _make_claude_result(
+                "# Structured Input\n- [EXISTING-F001] Auth\n- [F002] Notifications"
+            ),
+            _make_claude_result("APPROVED", cost=0.05),
+        ]
 
         with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
             await engine._merge_change_request(state)
 
-        # Verify input_updater agent was invoked
-        claude.run.assert_called_once()
+        # Verify both input_updater and input_updater_qa agents were invoked
+        assert claude.run.call_count == 2
 
         # Verify updated structured_input was written
         doc_store.write.assert_any_call(

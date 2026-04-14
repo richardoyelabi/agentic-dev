@@ -11,7 +11,8 @@ _event_log = get_event_logger("transitions")
 
 VALID_TRANSITIONS: dict[PipelinePhase, list[PipelinePhase]] = {
     PipelinePhase.IDLE: [PipelinePhase.INPUT_PROCESSING, PipelinePhase.ADOPTING],
-    PipelinePhase.INPUT_PROCESSING: [PipelinePhase.FEATURE_ANALYSIS, PipelinePhase.FAILED],
+    PipelinePhase.INPUT_PROCESSING: [PipelinePhase.INPUT_PROCESSING_QA, PipelinePhase.FAILED],
+    PipelinePhase.INPUT_PROCESSING_QA: [PipelinePhase.FEATURE_ANALYSIS, PipelinePhase.FAILED],
     PipelinePhase.FEATURE_ANALYSIS: [PipelinePhase.FEATURE_ANALYSIS_QA, PipelinePhase.FAILED],
     PipelinePhase.FEATURE_ANALYSIS_QA: [PipelinePhase.ARCHITECTURE, PipelinePhase.FAILED],
     PipelinePhase.ARCHITECTURE: [PipelinePhase.ARCHITECTURE_QA, PipelinePhase.FAILED],
@@ -20,7 +21,8 @@ VALID_TRANSITIONS: dict[PipelinePhase, list[PipelinePhase]] = {
     PipelinePhase.SPRINT_PLANNING_QA: [PipelinePhase.DESIGN_CHECKPOINT, PipelinePhase.FAILED],
     PipelinePhase.DESIGN_CHECKPOINT: [PipelinePhase.SPRINTING, PipelinePhase.FAILED],
     PipelinePhase.SPRINTING: [PipelinePhase.UAT, PipelinePhase.FAILED],
-    PipelinePhase.UAT: [PipelinePhase.COMPLETE, PipelinePhase.FAILED],
+    PipelinePhase.UAT: [PipelinePhase.UAT_QA, PipelinePhase.FAILED],
+    PipelinePhase.UAT_QA: [PipelinePhase.COMPLETE, PipelinePhase.FAILED],
     PipelinePhase.COMPLETE: [
         PipelinePhase.INPUT_PROCESSING,
         PipelinePhase.FEATURE_ANALYSIS,

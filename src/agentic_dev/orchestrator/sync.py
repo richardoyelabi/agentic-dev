@@ -24,6 +24,7 @@ from agentic_dev.logging.events import (
     SyncStartEvent,
 )
 from agentic_dev.orchestrator.agent_bridge import to_run_config
+from agentic_dev.orchestrator.qa_cycle import run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.models import DriftItem, SyncReport
 
@@ -71,11 +72,12 @@ async def run_sync(
         message=f"Sync started: scope={scope}",
     ))
 
-    # Step 1: Run code_analyzer agents in parallel
+    # Step 1: Run code_analyzer agents with QA in parallel
     snapshots = await _analyze_code(
         claude=claude,
         registry=registry,
         prompt_renderer=prompt_renderer,
+        doc_store=doc_store,
         project_dir=project_dir,
         directory_map=directory_map,
         scope=scope,
@@ -87,11 +89,12 @@ async def run_sync(
     # Step 2b: Collect design context
     figma_sources, figma_mcp_available = _collect_design_context(doc_store)
 
-    # Step 3: Run drift_detector
+    # Step 3: Run drift_detector with QA
     drift_report = await _detect_drift(
         claude=claude,
         registry=registry,
         prompt_renderer=prompt_renderer,
+        doc_store=doc_store,
         project_dir=project_dir,
         code_snapshots=snapshots,
         spec_documents=spec_documents,
@@ -189,13 +192,14 @@ async def _analyze_code(
     claude: ClaudeRunner,
     registry: AgentRegistry,
     prompt_renderer: PromptRenderer,
+    doc_store: DocumentStore,
     project_dir: Path,
     directory_map: DirectoryMap,
     scope: str,
 ) -> str:
-    """Run code_analyzer agents and return combined snapshots."""
-    agent_def = registry.get("code_analyzer")
-    config = to_run_config(agent_def)
+    """Run code_analyzer agents with QA cycles and return combined snapshots."""
+    action_agent = registry.get("code_analyzer")
+    qa_agent = registry.get("code_analyzer_qa")
     tasks = []
 
     scopes_to_analyze = []
@@ -205,15 +209,18 @@ async def _analyze_code(
         scopes_to_analyze.append(("frontend", directory_map.frontend))
 
     for analysis_scope, dir_name in scopes_to_analyze:
-        prompt = prompt_renderer.render(
-            agent_def.prompt_template,
-            {"analysis_scope": analysis_scope},
-        )
         tasks.append(
-            claude.run(
-                agent=config,
-                prompt=prompt,
-                working_dir=project_dir / dir_name,
+            run_qa_cycle(
+                claude=claude,
+                action_agent=action_agent,
+                qa_agent=qa_agent,
+                input_docs={},
+                output_doc_name=f"code_snapshot_{analysis_scope}",
+                workspace=project_dir / dir_name,
+                doc_store=doc_store,
+                prompt_renderer=prompt_renderer,
+                qa_output_key="code_snapshot",
+                extra_context={"analysis_scope": analysis_scope},
             )
         )
 
@@ -221,7 +228,7 @@ async def _analyze_code(
         return ""
 
     results = await asyncio.gather(*tasks)
-    return "\n\n---\n\n".join(r.text for r in results)
+    return "\n\n---\n\n".join(r.output for r in results)
 
 
 def _collect_specs(doc_store: DocumentStore) -> str:
@@ -265,6 +272,7 @@ async def _detect_drift(
     claude: ClaudeRunner,
     registry: AgentRegistry,
     prompt_renderer: PromptRenderer,
+    doc_store: DocumentStore,
     project_dir: Path,
     code_snapshots: str,
     spec_documents: str,
@@ -272,13 +280,21 @@ async def _detect_drift(
     figma_sources: str = "",
     figma_mcp_available: str = "false",
 ) -> SyncReport:
-    """Run drift_detector agent and parse the output into a SyncReport."""
-    agent_def = registry.get("drift_detector")
-    config = to_run_config(agent_def)
+    """Run drift_detector agent with QA cycle and parse the output into a SyncReport."""
+    action_agent = registry.get("drift_detector")
+    qa_agent = registry.get("drift_detector_qa")
 
-    prompt = prompt_renderer.render(
-        agent_def.prompt_template,
-        {
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="drift_report",
+        workspace=project_dir,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        qa_output_key="drift_report",
+        extra_context={
             "code_snapshots": code_snapshots,
             "spec_documents": spec_documents,
             "figma_sources": figma_sources,
@@ -287,13 +303,7 @@ async def _detect_drift(
         },
     )
 
-    result = await claude.run(
-        agent=config,
-        prompt=prompt,
-        working_dir=project_dir,
-    )
-
-    return _parse_drift_report(result.text)
+    return _parse_drift_report(result.output)
 
 
 def _parse_drift_report(text: str) -> SyncReport:
@@ -389,9 +399,9 @@ async def _update_spec(
     spec_name: str,
     resolved_items: list[DriftItem],
 ) -> float:
-    """Run spec_updater to surgically update a spec document."""
-    agent_def = registry.get("spec_updater")
-    config = to_run_config(agent_def)
+    """Run spec_updater with QA cycle to surgically update a spec document."""
+    action_agent = registry.get("spec_updater")
+    qa_agent = registry.get("spec_updater_qa")
 
     current_spec = doc_store.read(spec_name)
     items_data = [
@@ -399,25 +409,26 @@ async def _update_spec(
         for item in resolved_items
     ]
 
-    prompt = prompt_renderer.render(
-        agent_def.prompt_template,
-        {
-            "spec_document": current_spec,
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name=spec_name,
+        workspace=project_dir,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        qa_output_key="updated_spec",
+        extra_context={
+            "original_spec": current_spec,
             "resolved_items": items_data,
-            "constraints": agent_def.constraints,
         },
     )
 
-    result = await claude.run(
-        agent=config,
-        prompt=prompt,
-        working_dir=project_dir,
-    )
+    if result.output.strip():
+        doc_store.write(spec_name, result.output)
 
-    if result.text.strip():
-        doc_store.write(spec_name, result.text)
-
-    return result.cost_usd
+    return result.total_cost
 
 
 def _compose_change_request(items: list[DriftItem]) -> str:

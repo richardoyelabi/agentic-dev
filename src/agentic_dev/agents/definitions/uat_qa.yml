@@ -1,0 +1,19 @@
+name: uat_qa
+description: "Meta-reviews UAT report for thoroughness, accuracy, and coverage of all acceptance criteria"
+team: qa
+claude:
+  model: opus
+  permission_mode: bypassPermissions
+  allowed_tools: [Read, Glob, Grep]
+  max_turns: 10
+  max_budget_usd: 2.00
+prompt_template: uat_qa.md.j2
+input_documents: [features, uat_report]
+output_documents: [uat_qa_report]
+qa_agent: null
+constraints:
+  - "Evaluate: does the UAT report test every acceptance criterion from the features?"
+  - "Evaluate: are pass/fail verdicts supported by concrete evidence?"
+  - "Check for superficial passes with no real verification"
+  - "Check for missing acceptance criteria not covered by the report"
+  - "Check that cross-feature interactions were tested"
