@@ -190,7 +190,10 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
     from agentic_dev.orchestrator.engine import PipelineEngine  # noqa: WPS433
     from agentic_dev.prompts.renderer import PromptRenderer  # noqa: WPS433
 
-    checkpoint_config = _load_config(project_dir)
+    from agentic_dev.config import load_project_config  # noqa: WPS433
+
+    project_config = load_project_config(project_dir)
+    checkpoint_config = project_config.checkpoint
     log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
     claude = ClaudeRunner(log_dir=log_dir)
     registry = AgentRegistry(definitions_dir=AGENT_DEFINITIONS_DIR)
@@ -206,6 +209,7 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
         prompt_renderer=prompt_renderer,
         state_manager=state_manager,
         checkpoint_config=checkpoint_config,
+        directory_map=project_config.directory_map,
     )
 
     run_id = generate_run_id()
