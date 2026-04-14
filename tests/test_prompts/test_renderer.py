@@ -295,6 +295,7 @@ class TestDocumentationRequirements:
         assert "Documentation Requirements" in result
         assert "README.md" in result
         assert "ARCHITECTURE.md" in result
+        assert "CLAUDE.md" in result
 
     def test_backend_developer_includes_documentation_section(self, real_renderer):
         result = real_renderer.render(
@@ -304,6 +305,7 @@ class TestDocumentationRequirements:
         assert "Documentation Requirements" in result
         assert "README.md" in result
         assert "ARCHITECTURE.md" in result
+        assert "CLAUDE.md" in result
 
     def test_frontend_qa_includes_documentation_criterion(self, real_renderer):
         result = real_renderer.render(

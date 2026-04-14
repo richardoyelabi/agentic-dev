@@ -870,6 +870,68 @@ class TestWorkspaceSetup:
         # Should still write CLAUDE.md with defaults
         assert mock_write.call_count == 1
 
+    @pytest.mark.asyncio
+    async def test_skips_workspace_setup_for_update_mode(
+        self, engine, state_manager, project_dir
+    ):
+        """Workspace setup is skipped entirely for update mode."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.FULLSTACK,
+            mode="update",
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ) as mock_init, patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit, patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ) as mock_write, patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        mock_write.assert_not_called()
+        mock_init.assert_not_called()
+        mock_commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_workspace_setup_for_remediate_mode(
+        self, engine, state_manager, project_dir
+    ):
+        """Workspace setup is skipped entirely for remediate mode."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        state = _make_state(
+            PipelinePhase.DESIGN_CHECKPOINT,
+            project_type=ProjectType.FULLSTACK,
+            mode="remediate",
+            sprints=[SprintState(sprint_number=1, name="Sprint 1")],
+        )
+        state_manager.load = MagicMock(return_value=state)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.init_repo", new_callable=AsyncMock
+        ) as mock_init, patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
+        ) as mock_commit, patch(
+            "agentic_dev.orchestrator.engine.write_claude_md"
+        ) as mock_write, patch.object(
+            engine, "_run_sprints", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        mock_write.assert_not_called()
+        mock_init.assert_not_called()
+        mock_commit.assert_not_called()
+
 
 class TestPostSprintCommits:
     """Test that git commits happen after successful sprints."""

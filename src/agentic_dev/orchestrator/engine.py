@@ -424,7 +424,14 @@ class PipelineEngine:
         return advance_phase(state, PipelinePhase.SPRINTING)
 
     async def _setup_workspaces(self, state: PipelineState) -> None:
-        """Initialize git repos and generate CLAUDE.md for code directories."""
+        """Initialize git repos and generate CLAUDE.md for code directories.
+
+        Skipped for update and remediate modes where the workspace already
+        exists with its own CLAUDE.md, git history, and committed code.
+        """
+        if state.mode in ("update", "remediate"):
+            return
+
         project_name = state.project_name
 
         frontend_name = self._directory_map.frontend or "frontend"
