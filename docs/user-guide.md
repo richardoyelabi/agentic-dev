@@ -146,7 +146,7 @@ agentic-dev logs my-app --agent backend_developer --sprint 1
 
 Use `update` when you want to make **intentional changes** — adding features, modifying behavior, or re-specifying requirements. The project must be in `COMPLETE` state (i.e., at least one full pipeline run has finished).
 
-The command archives previous documents, determines which pipeline phase to restart from based on what changed, and re-runs the pipeline.
+The command determines which pipeline phase to restart from based on what changed, and re-runs the pipeline.
 
 > **`update` vs `sync`:** `update` is for changes you want to make. If you've edited code manually and need to bring specs back in line (or vice versa), use [`sync`](#syncing-code-and-specs) instead — it detects drift and lets you choose how to resolve it.
 

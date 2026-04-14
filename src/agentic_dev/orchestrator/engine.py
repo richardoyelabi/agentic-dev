@@ -1,6 +1,7 @@
 """Pipeline engine: main coordinator that ties all phases together."""
 
 import asyncio
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,7 +39,14 @@ from agentic_dev.workspace.claude_md import (
     parse_tech_stack,
     write_claude_md,
 )
-from agentic_dev.workspace.git import commit, has_changes, init_repo
+from agentic_dev.workspace.git import (
+    commit,
+    get_committed_content,
+    has_changes,
+    init_repo,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineEngine:
@@ -315,7 +323,7 @@ class PipelineEngine:
         # During updates, restore archived specs that didn't materially change
         # to prevent phantom drift from regeneration
         if state.mode == "update":
-            self._restore_unchanged_specs(docs)
+            await self._restore_unchanged_specs(docs)
 
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
@@ -467,37 +475,26 @@ class PipelineEngine:
         if not (docs_dir / ".git").is_dir():
             await init_repo(docs_dir)
         if await has_changes(docs_dir):
-            await commit(docs_dir, message)
+            try:
+                await commit(docs_dir, message)
+            except RuntimeError:
+                logger.warning("docs commit failed for '%s'; continuing", message)
 
-    def _restore_unchanged_specs(self, new_docs: dict[str, str]) -> None:
-        """Restore archived specs that didn't materially change.
+    async def _restore_unchanged_specs(self, new_docs: dict[str, str]) -> None:
+        """Restore committed specs that didn't materially change.
 
         After architecture regeneration during updates, compare each new spec
-        against the most recent archived version. If the content is
-        substantively the same (ignoring whitespace), restore the archive
-        to prevent phantom drift.
+        against the version committed in git HEAD. If the content is
+        substantively the same (ignoring whitespace), restore the committed
+        version to prevent phantom drift.
         """
-        archive_dir = self._doc_store.docs_dir / "archive"
-        if not archive_dir.is_dir():
-            return
-
-        # Find the most recent archive directory
-        archive_subdirs = sorted(
-            (d for d in archive_dir.iterdir() if d.is_dir()),
-            key=lambda d: d.stat().st_mtime,
-            reverse=True,
-        )
-        if not archive_subdirs:
-            return
-
-        latest_archive = archive_subdirs[0]
+        docs_dir = self._doc_store.docs_dir
         for doc_name, new_content in new_docs.items():
-            archived_file = latest_archive / f"{doc_name}.md"
-            if not archived_file.exists():
+            old_content = await get_committed_content(docs_dir, f"{doc_name}.md")
+            if old_content is None:
                 continue
-            archived_content = archived_file.read_text(encoding="utf-8")
-            if archived_content.strip() == new_content.strip():
-                self._doc_store.write(doc_name, archived_content)
+            if old_content.strip() == new_content.strip():
+                self._doc_store.write(doc_name, old_content)
 
     def _read_tech_stack(self, doc_name: str) -> dict[str, str]:
         """Read a spec document and parse its tech stack, returning defaults on failure."""

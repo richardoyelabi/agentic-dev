@@ -16,9 +16,11 @@ async def _run_git(path: Path, *args: str) -> str:
     stdout, stderr = await process.communicate()
 
     if process.returncode != 0:
+        err = stderr.decode().strip()
+        out = stdout.decode().strip()
+        detail = err or out or "(no output)"
         raise RuntimeError(
-            f"git {' '.join(args)} failed (exit {process.returncode}): "
-            f"{stderr.decode().strip()}"
+            f"git {' '.join(args)} failed (exit {process.returncode}): {detail}"
         )
 
     return stdout.decode().strip()
@@ -58,8 +60,16 @@ async def commit(path: Path, message: str, add_all: bool = True) -> None:
 
 async def has_changes(path: Path) -> bool:
     """Return True if there are staged, unstaged, or untracked changes."""
-    output = await _run_git(path, "status", "--porcelain")
+    output = await _run_git(path, "status", "--porcelain", "--ignore-submodules=dirty")
     return len(output) > 0
+
+
+async def get_committed_content(path: Path, file_path: str) -> str | None:
+    """Return a file's content from HEAD, or None if it doesn't exist."""
+    try:
+        return await _run_git(path, "show", f"HEAD:{file_path}")
+    except RuntimeError:
+        return None
 
 
 async def get_current_branch(path: Path) -> str:

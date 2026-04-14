@@ -1397,6 +1397,22 @@ class TestCommitDocsChanges:
 
         mock_commit.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_continues_when_commit_raises(self, engine, tmp_path) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / ".git").mkdir()
+        engine._doc_store.docs_dir = docs_dir
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock, return_value=True,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit",
+            new_callable=AsyncMock, side_effect=RuntimeError("nothing to commit"),
+        ):
+            await engine._commit_docs_changes("test commit")
+
 
 class TestMergeChangeRequest:
     """Tests for _merge_change_request and update-mode context passing."""
@@ -1703,52 +1719,62 @@ class TestValidateSprintFeatureConventions:
 class TestRestoreUnchangedSpecs:
     """Tests for _restore_unchanged_specs during update mode."""
 
-    def test_restores_unchanged_spec_from_archive(self, engine, tmp_path):
-        """When a regenerated spec matches the archived version, restore the archive."""
+    @pytest.mark.asyncio
+    async def test_restores_unchanged_spec_from_git(self, engine, tmp_path):
+        """When a regenerated spec matches the git HEAD version, restore it."""
         docs_dir = tmp_path / "project" / "docs"
         docs_dir.mkdir(parents=True)
-        archive_dir = docs_dir / "archive" / "update_20260413T000000Z"
-        archive_dir.mkdir(parents=True)
-
-        archived_content = "# Backend Spec\n## Models\n- User\n"
-        (archive_dir / "backend_spec.md").write_text(archived_content)
-
         engine._doc_store.docs_dir = docs_dir
 
-        written_docs: dict[str, str] = {}
-        engine._doc_store.write = MagicMock(side_effect=lambda name, content: written_docs.update({name: content}))
+        committed_content = "# Backend Spec\n## Models\n- User"
 
-        new_docs = {"backend_spec": "# Backend Spec\n## Models\n- User\n"}
-        engine._restore_unchanged_specs(new_docs)
+        written_docs: dict[str, str] = {}
+        engine._doc_store.write = MagicMock(
+            side_effect=lambda name, content: written_docs.update({name: content})
+        )
+
+        with patch(
+            "agentic_dev.orchestrator.engine.get_committed_content",
+            new_callable=AsyncMock,
+            return_value=committed_content,
+        ):
+            new_docs = {"backend_spec": "# Backend Spec\n## Models\n- User\n"}
+            await engine._restore_unchanged_specs(new_docs)
 
         assert "backend_spec" in written_docs
-        assert written_docs["backend_spec"] == archived_content
+        assert written_docs["backend_spec"] == committed_content
 
-    def test_keeps_changed_spec(self, engine, tmp_path):
-        """When a regenerated spec differs, don't restore the archive."""
+    @pytest.mark.asyncio
+    async def test_keeps_changed_spec(self, engine, tmp_path):
+        """When a regenerated spec differs from git HEAD, don't restore."""
         docs_dir = tmp_path / "project" / "docs"
         docs_dir.mkdir(parents=True)
-        archive_dir = docs_dir / "archive" / "update_20260413T000000Z"
-        archive_dir.mkdir(parents=True)
-
-        (archive_dir / "backend_spec.md").write_text("# Backend Spec\n## Old content\n")
-
         engine._doc_store.docs_dir = docs_dir
         engine._doc_store.write = MagicMock()
 
-        new_docs = {"backend_spec": "# Backend Spec\n## New content with changes\n"}
-        engine._restore_unchanged_specs(new_docs)
+        with patch(
+            "agentic_dev.orchestrator.engine.get_committed_content",
+            new_callable=AsyncMock,
+            return_value="# Backend Spec\n## Old content",
+        ):
+            new_docs = {"backend_spec": "# Backend Spec\n## New content with changes\n"}
+            await engine._restore_unchanged_specs(new_docs)
 
         engine._doc_store.write.assert_not_called()
 
-    def test_no_op_when_no_archive_dir(self, engine, tmp_path):
-        """When there's no archive directory, do nothing."""
+    @pytest.mark.asyncio
+    async def test_no_op_when_file_not_in_git(self, engine, tmp_path):
+        """When the file doesn't exist in git HEAD, do nothing."""
         docs_dir = tmp_path / "project" / "docs"
         docs_dir.mkdir(parents=True)
-
         engine._doc_store.docs_dir = docs_dir
         engine._doc_store.write = MagicMock()
 
-        engine._restore_unchanged_specs({"backend_spec": "content"})
+        with patch(
+            "agentic_dev.orchestrator.engine.get_committed_content",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await engine._restore_unchanged_specs({"backend_spec": "content"})
 
         engine._doc_store.write.assert_not_called()

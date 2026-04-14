@@ -91,39 +91,6 @@ class TestListQaReports:
         assert store.list_qa_reports() == []
 
 
-class TestArchiveCycle:
-    def test_archive_cycle_copies_docs(self, store):
-        store.write("features.md", "features content")
-        store.write("architecture.md", "arch content")
-        store.write("qa_reports/features_qa.md", "qa content")
-
-        archive_dir = store.archive_cycle("cycle_0")
-
-        assert (archive_dir / "features.md").read_text(encoding="utf-8") == "features content"
-        assert (archive_dir / "architecture.md").read_text(encoding="utf-8") == "arch content"
-        assert (archive_dir / "qa_reports" / "features_qa.md").read_text(encoding="utf-8") == "qa content"
-
-    def test_archive_cycle_skips_archive_dir(self, store):
-        store.write("features.md", "content")
-        store.archive_cycle("cycle_0")
-
-        # Archive again — the archive/ directory itself should not be copied
-        archive_dir = store.archive_cycle("cycle_1")
-
-        assert not (archive_dir / "archive").exists()
-
-    def test_archive_cycle_works_with_empty_docs(self, store):
-        archive_dir = store.archive_cycle("cycle_0")
-
-        assert archive_dir.exists()
-
-    def test_archive_cycle_preserves_originals(self, store):
-        store.write("features.md", "original")
-        store.archive_cycle("cycle_0")
-
-        assert store.read("features.md") == "original"
-
-
 class TestDelete:
     def test_delete_removes_existing_document(self, store):
         store.write("features", "content")

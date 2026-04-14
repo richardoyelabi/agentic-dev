@@ -446,14 +446,6 @@ def _start_update_cycle(
 
     doc_store = DocumentStore(project_dir)
 
-    cycle_label = (
-        f"cycle_{state.remediation_cycle}"
-        if mode == "remediate"
-        else f"update_{state.updated_at.strftime('%Y%m%dT%H%M%SZ')}"
-    )
-    doc_store.archive_cycle(cycle_label)
-    console.print(f"[cyan]Archived documents to docs/archive/{cycle_label}/[/cyan]")
-
     if change_input:
         doc_store.write("user_input", change_input)
         if is_targeted:
@@ -518,7 +510,7 @@ def update(
                 raise typer.Exit(code=1)
             change_input = spec_path.read_text(encoding="utf-8")
 
-            # Read old structured_input before it gets archived for diff
+            # Read old structured_input before it gets overwritten for diff
             old_structured_input = (
                 doc_store.read("structured_input")
                 if doc_store.exists("structured_input")

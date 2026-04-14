@@ -1,13 +1,12 @@
 """Document storage for reading and writing pipeline documents."""
 
-import shutil
 from pathlib import Path
 
 from agentic_dev.concurrency import file_lock
 from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, DOCS_LOCK_FILE
 from agentic_dev.exceptions import DocumentError
 from agentic_dev.logging import get_event_logger, emit
-from agentic_dev.logging.events import DocumentWriteEvent, DocumentReadEvent, DocumentArchiveEvent
+from agentic_dev.logging.events import DocumentWriteEvent, DocumentReadEvent
 
 _event_log = get_event_logger("documents")
 
@@ -90,31 +89,3 @@ class DocumentStore:
             return []
         return sorted(f.name for f in qa_dir.glob("*.md"))
 
-    def archive_cycle(self, cycle_label: str) -> Path:
-        """Copy all current docs to docs/archive/{cycle_label}/.
-
-        Copies everything in docs/ except the archive/ directory itself.
-        Returns the archive directory path.
-        """
-        archive_dir = self.docs_dir / "archive" / cycle_label
-        archive_dir.mkdir(parents=True, exist_ok=True)
-
-        if not self.docs_dir.exists():
-            return archive_dir
-
-        with file_lock(self.lock_file):
-            for item in self.docs_dir.iterdir():
-                if item.name == "archive":
-                    continue
-                dest = archive_dir / item.name
-                if item.is_dir():
-                    shutil.copytree(item, dest, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, dest)
-
-        emit(_event_log, DocumentArchiveEvent(
-            cycle_label=cycle_label,
-            archive_path=str(archive_dir),
-            message=f"Archived documents to {archive_dir}",
-        ))
-        return archive_dir

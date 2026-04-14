@@ -595,32 +595,6 @@ class TestUpdateCommand:
 
     @patch("agentic_dev.cli._run_pipeline")
     @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
-    def test_update_archives_docs(
-        self, mock_collect, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        project_dir = project_with_state / "test-app"
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        # Write a doc that should be archived
-        doc_store = DocumentStore(project_dir)
-        doc_store.write("features.md", "original features")
-
-        result = runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0, result.output
-        archive_dir = project_dir / "docs" / "archive"
-        assert archive_dir.exists()
-        # At least one archive subdirectory should exist
-        assert len(list(archive_dir.iterdir())) >= 1
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
     def test_update_resets_state(
         self, mock_collect, mock_run_pipeline, project_with_state: Path
     ) -> None:
@@ -940,29 +914,6 @@ class TestRemediateCommand:
         user_input = doc_store.read("user_input")
         assert "Remediation Request" in user_input
         assert "Missing confirmation dialog" in user_input
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_remediate_archives_docs(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        project_dir = project_with_state / "test-app"
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        doc_store = DocumentStore(project_dir)
-        doc_store.write("uat_report", "FAIL: Something broke.")
-        doc_store.write("features.md", "original features")
-
-        runner.invoke(
-            app,
-            ["remediate", "test-app", "--path", str(project_with_state)],
-        )
-
-        archive_dir = project_dir / "docs" / "archive" / "cycle_0"
-        assert archive_dir.exists()
-        assert (archive_dir / "features.md").exists()
 
     @patch("agentic_dev.cli._run_pipeline")
     def test_remediate_increments_cycle(

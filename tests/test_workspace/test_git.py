@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 
 from agentic_dev.workspace.git import (
+    _run_git,
     commit,
     create_branch,
+    get_committed_content,
     get_current_branch,
     has_changes,
     init_repo,
@@ -127,3 +129,54 @@ def test_init_repo_sync_is_idempotent(git_dir: Path) -> None:
     init_repo_sync(git_dir)
 
     assert (git_dir / ".git").is_dir()
+
+
+async def test_get_committed_content_returns_file_content(git_dir: Path) -> None:
+    await _init_with_config(git_dir)
+    (git_dir / "spec.md").write_text("# My Spec\nContent here\n")
+    await commit(git_dir, "Add spec")
+
+    result = await get_committed_content(git_dir, "spec.md")
+
+    assert result == "# My Spec\nContent here"
+
+
+async def test_get_committed_content_returns_none_for_missing_file(
+    git_dir: Path,
+) -> None:
+    await _init_with_config(git_dir)
+    (git_dir / "README.md").write_text("# Hello")
+    await commit(git_dir, "Initial commit")
+
+    result = await get_committed_content(git_dir, "nonexistent.md")
+
+    assert result is None
+
+
+async def test_has_changes_ignores_dirty_submodules(git_dir: Path) -> None:
+    await _init_with_config(git_dir)
+    (git_dir / "README.md").write_text("# Hello")
+
+    # Create a nested git repo and commit it in the parent
+    nested = git_dir / "sub"
+    nested.mkdir()
+    await init_repo(nested)
+    await _init_with_config(nested)
+    (nested / "file.txt").write_text("content")
+    await commit(nested, "sub init")
+    await commit(git_dir, "Initial commit with nested repo")
+
+    # Dirty the nested repo with untracked content
+    (nested / "untracked.txt").write_text("dirty content")
+
+    assert await has_changes(git_dir) is False
+
+
+async def test_run_git_error_includes_stdout_when_stderr_empty(git_dir: Path) -> None:
+    await _init_with_config(git_dir)
+    (git_dir / "README.md").write_text("# Hello")
+    await commit(git_dir, "Initial commit")
+
+    # git commit with nothing staged produces stdout message, empty stderr
+    with pytest.raises(RuntimeError, match="nothing to commit"):
+        await _run_git(git_dir, "commit", "-m", "empty")
