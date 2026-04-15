@@ -845,8 +845,8 @@ class TestPromptSizeWarning:
 
     def test_large_prompt_emits_warning(self, real_renderer):
         """A prompt exceeding 70% of context window should log a warning."""
-        # 200k tokens * 4 chars/token * 0.7 threshold = 560k chars
-        large_spec = "x" * 600_000
+        # 200k tokens / 1.5 tokens-per-word * 0.7 threshold ≈ 93k words
+        large_spec = " ".join(["word"] * 100_000)
         with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
             real_renderer.render_agent_prompt(
                 template_name="backend_developer.md.j2",

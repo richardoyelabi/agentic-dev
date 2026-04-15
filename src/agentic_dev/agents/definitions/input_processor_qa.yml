@@ -2,7 +2,7 @@ name: input_processor_qa
 description: "Reviews structured input for completeness, accuracy, and correct project type detection"
 team: design_architecture
 claude:
-  model: opus
+  model: sonnet
   permission_mode: bypassPermissions
   allowed_tools: []
   max_turns: 5

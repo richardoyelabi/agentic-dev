@@ -424,10 +424,10 @@ async def test_round_qa_reports_saved_to_doc_store(
 
 
 @pytest.mark.asyncio
-async def test_correction_prompt_uses_correction_mode(
+async def test_correction_uses_session_continuation(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """The correction run renders the prompt with correction_mode=True."""
+    """When action agent returns a session_id, correction uses --resume."""
     claude.run.side_effect = [
         _make_claude_result("v1", cost=0.10),
         _make_claude_result("ISSUES_FOUND: fix it", cost=0.05),
@@ -446,11 +446,43 @@ async def test_correction_prompt_uses_correction_mode(
         prompt_renderer=prompt_renderer,
     )
 
-    # 3rd call to render_agent_prompt is the correction
-    correction_call = prompt_renderer.render_agent_prompt.call_args_list[2]
-    assert correction_call.kwargs.get("correction_mode") is True
-    assert correction_call.kwargs.get("previous_output") == "v1"
-    assert "ISSUES_FOUND" in correction_call.kwargs.get("qa_feedback", "")
+    # 3rd claude.run call is the correction — should use session continuation
+    correction_call = claude.run.call_args_list[2]
+    assert correction_call.kwargs.get("session_id") == "sess-123"
+    correction_prompt = correction_call.kwargs.get("prompt", "")
+    assert "ISSUES_FOUND" in correction_prompt
+    # Session continuation does NOT re-render the full template
+    assert prompt_renderer.render_agent_prompt.call_count == 3  # action + QA + re-review
+
+
+@pytest.mark.asyncio
+async def test_correction_falls_back_without_session_id(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """Without a session_id, correction falls back to full re-render."""
+    claude.run.side_effect = [
+        ClaudeResult(text="v1", cost_usd=0.10, session_id=None, exit_code=0),
+        _make_claude_result("ISSUES_FOUND: fix it", cost=0.05),
+        _make_claude_result("v2", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={"req.md": "reqs"},
+        output_doc_name="doc.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    # Without session_id, correction uses render_agent_prompt with correction_mode
+    correction_render = prompt_renderer.render_agent_prompt.call_args_list[2]
+    assert correction_render.kwargs.get("correction_mode") is True
+    assert correction_render.kwargs.get("previous_output") == "v1"
+    assert "ISSUES_FOUND" in correction_render.kwargs.get("qa_feedback", "")
 
 
 # ---------------------------------------------------------------------------
@@ -809,8 +841,8 @@ async def test_qa_output_key_used_in_re_review(
         prompt_renderer=prompt_renderer,
     )
 
-    # 4th render call is the re-review QA
-    re_review_call = prompt_renderer.render_agent_prompt.call_args_list[3]
+    # With session continuation, render calls are: action + QA + re-review (3 total)
+    re_review_call = prompt_renderer.render_agent_prompt.call_args_list[2]
     re_review_input_docs = re_review_call.kwargs.get(
         "input_documents",
         re_review_call.args[1] if len(re_review_call.args) > 1 else None,

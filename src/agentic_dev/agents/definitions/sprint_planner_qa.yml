@@ -2,7 +2,7 @@ name: sprint_planner_qa
 description: "Reviews sprint decomposition for completeness and correct ordering"
 team: design_architecture
 claude:
-  model: opus
+  model: sonnet
   permission_mode: bypassPermissions
   allowed_tools: []
   max_turns: 5

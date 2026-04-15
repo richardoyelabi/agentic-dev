@@ -2,7 +2,7 @@ name: design_change_detection
 description: "Detects design changes by comparing live Figma state against existing specs"
 team: design_architecture
 claude:
-  model: opus
+  model: sonnet
   permission_mode: bypassPermissions
   allowed_tools: ["Read", "Glob", "Grep"]
   max_turns: 15

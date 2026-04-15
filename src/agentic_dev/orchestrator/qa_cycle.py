@@ -13,6 +13,7 @@ from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import (
     AgentEmptyRetryEvent,
+    BudgetWarningEvent,
     ContentMarkerRecoveryEvent,
     QACycleStartEvent,
     QACycleVerdictEvent,
@@ -24,6 +25,13 @@ from agentic_dev.orchestrator.agent_bridge import AgentRunConfig, to_run_config
 from agentic_dev.prompts.renderer import PromptRenderer
 
 _event_log = get_event_logger("qa_cycle")
+
+_SESSION_CORRECTION_PROMPT = (
+    "A quality assurance reviewer has found issues with your output:\n\n"
+    "{qa_feedback}\n\n"
+    "Please address all feedback and produce a corrected version of your "
+    "output. Maintain the same output format."
+)
 
 ISSUES_FOUND_MARKER = "ISSUES_FOUND"
 
@@ -117,6 +125,27 @@ class QACycleResult:
         )
 
 
+def _check_budget(
+    agent_name: str,
+    cost_usd: float,
+    max_budget_usd: float,
+    sprint: int | None = None,
+) -> None:
+    """Emit a warning if cost exceeds the agent's budget."""
+    if cost_usd > max_budget_usd:
+        emit(_event_log, BudgetWarningEvent(
+            agent_name=agent_name,
+            cost_usd=cost_usd,
+            max_budget_usd=max_budget_usd,
+            sprint=sprint,
+            level="WARNING",
+            message=(
+                f"Agent '{agent_name}' exceeded budget: "
+                f"${cost_usd:.4f} > ${max_budget_usd:.2f}"
+            ),
+        ))
+
+
 async def _run_qa_review(
     claude: ClaudeRunner,
     qa_agent: AgentDefinition,
@@ -130,9 +159,13 @@ async def _run_qa_review(
     sprint: int | None = None,
     max_empty_retries: int = 1,
     empty_retry_delay: float = 5.0,
+    skip_action_output: bool = False,
 ) -> tuple[str, float]:
     """Run QA agent and return (report_text, cost). Raises on empty output."""
-    qa_input_docs = {**input_docs, qa_key: output_text}
+    if skip_action_output:
+        qa_input_docs = dict(input_docs)
+    else:
+        qa_input_docs = {**input_docs, qa_key: output_text}
     qa_prompt = prompt_renderer.render_agent_prompt(
         template_name=qa_agent.prompt_template,
         input_documents=qa_input_docs,
@@ -173,6 +206,7 @@ async def run_qa_cycle(
     skip_to_correction: bool = False,
     mcp_config: Path | None = None,
     content_markers: list[str] | None = None,
+    skip_action_output_in_qa: bool = False,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -265,8 +299,12 @@ async def run_qa_cycle(
                 ))
                 action_output_text = recovered
 
-        # 2. Save the action output
+        # 2. Save the action output and check budget
         doc_store.write(output_doc_name, action_output_text)
+        _check_budget(
+            action_agent.name, action_cost,
+            action_agent.claude.max_budget_usd, sprint,
+        )
 
         if on_substep is not None:
             on_substep("qa")
@@ -285,6 +323,7 @@ async def run_qa_cycle(
             sprint=sprint,
             max_empty_retries=max_empty_retries,
             empty_retry_delay=empty_retry_delay,
+            skip_action_output=skip_action_output_in_qa,
         )
 
         # 4. Save the initial QA report
@@ -317,16 +356,24 @@ async def run_qa_cycle(
                 f"qa_reports/{output_doc_name}_initial", initial_qa_report
             )
 
-        # Correction: action agent reruns with QA feedback
-        correction_prompt = prompt_renderer.render_agent_prompt(
-            template_name=action_agent.prompt_template,
-            input_documents=input_docs,
-            constraints=action_agent.constraints,
-            correction_mode=True,
-            previous_output=latest_output,
-            qa_feedback=latest_qa_report,
-            extra_context=extra_context,
-        )
+        # Correction: prefer session continuation when we have a session ID
+        # to avoid re-embedding the full previous output in the prompt.
+        correction_session_id: str | None = None
+        if action_session_id:
+            correction_prompt = _SESSION_CORRECTION_PROMPT.format(
+                qa_feedback=latest_qa_report,
+            )
+            correction_session_id = action_session_id
+        else:
+            correction_prompt = prompt_renderer.render_agent_prompt(
+                template_name=action_agent.prompt_template,
+                input_documents=input_docs,
+                constraints=action_agent.constraints,
+                correction_mode=True,
+                previous_output=latest_output,
+                qa_feedback=latest_qa_report,
+                extra_context=extra_context,
+            )
         correction_result = await _run_with_empty_retry(
             claude=claude,
             agent_config=action_config,
@@ -337,10 +384,14 @@ async def run_qa_cycle(
             sprint=sprint,
             max_empty_retries=max_empty_retries,
             empty_retry_delay=empty_retry_delay,
+            session_id=correction_session_id,
         )
 
         latest_output = correction_result.text
         doc_store.write(output_doc_name, latest_output)
+        # Update session ID for potential subsequent correction rounds
+        if correction_result.session_id:
+            action_session_id = correction_result.session_id
 
         emit(_event_log, QACycleCorrectionEvent(
             action_agent=action_agent.name,
@@ -367,6 +418,7 @@ async def run_qa_cycle(
             sprint=sprint,
             max_empty_retries=max_empty_retries,
             empty_retry_delay=empty_retry_delay,
+            skip_action_output=skip_action_output_in_qa,
         )
 
         re_review_issues = ISSUES_FOUND_MARKER in re_review_report

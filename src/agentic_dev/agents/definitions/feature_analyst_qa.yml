@@ -2,7 +2,7 @@ name: feature_analyst_qa
 description: "Reviews Features Request for completeness, testability, and correctness"
 team: design_architecture
 claude:
-  model: opus
+  model: sonnet
   permission_mode: bypassPermissions
   allowed_tools: []
   max_turns: 5

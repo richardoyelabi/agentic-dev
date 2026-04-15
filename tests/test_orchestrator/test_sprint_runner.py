@@ -627,7 +627,11 @@ class TestCrossSprintSummaries:
         docs = {
             "backend_spec": "# Backend Spec",
             "api_contract": "# API Contract",
-            "sprint_1_backend": "# Sprint 1\nCreated User model\n5 tests passing",
+            "sprint_rolling_summary": (
+                "## Prior Sprint Summaries\n\n"
+                "### Sprint 1 (backend)\n"
+                "Created User model\n5 tests passing"
+            ),
         }
 
         def mock_exists(name):
@@ -669,13 +673,32 @@ class TestCrossSprintSummaries:
     @pytest.mark.asyncio
     @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle")
     async def test_sprint_1_has_no_prior_summaries(
-        self, mock_qa_cycle, runner_with_docs, claude,
+        self, mock_qa_cycle, claude, registry, prompt_renderer, project_dir,
     ):
+        """Sprint 1 has no rolling summary document yet."""
         mock_qa_cycle.return_value = MagicMock(
             total_cost=0.1, output="backend output", session_id="s1",
         )
 
-        await runner_with_docs.run_sprint(1, "Build Auth")
+        store = MagicMock(spec=DocumentStore)
+        docs = {
+            "backend_spec": "# Backend Spec",
+            "api_contract": "# API Contract",
+        }
+        store.exists = MagicMock(side_effect=lambda name: name in docs)
+        store.read = MagicMock(side_effect=lambda name: docs.get(name, ""))
+        store.write = MagicMock()
+
+        runner = SprintRunner(
+            claude=claude,
+            registry=registry,
+            doc_store=store,
+            prompt_renderer=prompt_renderer,
+            project_dir=project_dir,
+            project_type="backend_only",
+        )
+
+        await runner.run_sprint(1, "Build Auth")
 
         call_kwargs = mock_qa_cycle.call_args.kwargs
         input_docs = call_kwargs["input_docs"]

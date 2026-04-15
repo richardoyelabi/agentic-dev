@@ -10,6 +10,7 @@ from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
 from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
+from agentic_dev.documents.scoping import extract_sprint_feature_ids, scope_spec_to_features
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.onboarding.figma import FigmaMCPNotConfigured, check_figma_mcp_available
@@ -93,10 +94,41 @@ class SprintRunner:
         self._state_manager = state_manager
         self._pipeline_state = pipeline_state
 
+    _SUMMARY_LINES_PER_SPRINT = 10
+
     def _save_state(self) -> None:
         """Save pipeline state if state_manager is configured."""
         if self._state_manager is not None and self._pipeline_state is not None:
             self._state_manager.save(self._pipeline_state)
+
+    def _update_rolling_summary(self, sprint_number: int) -> None:
+        """Append this sprint's summary to the rolling summary document.
+
+        Keeps only the last ``_SUMMARY_LINES_PER_SPRINT`` lines from each
+        sub-phase output, producing a fixed-size entry per sprint.
+        """
+        parts: list[str] = []
+        for suffix in ("backend", "frontend", "integration"):
+            doc_name = f"sprint_{sprint_number}_{suffix}"
+            if self._doc_store.exists(doc_name):
+                content = self._doc_store.read(doc_name)
+                lines = content.strip().splitlines()
+                tail = lines[-self._SUMMARY_LINES_PER_SPRINT:] if len(lines) > self._SUMMARY_LINES_PER_SPRINT else lines
+                parts.append(
+                    f"### Sprint {sprint_number} ({suffix})\n" + "\n".join(tail)
+                )
+
+        if not parts:
+            return
+
+        new_entry = "\n\n".join(parts)
+        if self._doc_store.exists("sprint_rolling_summary"):
+            existing = self._doc_store.read("sprint_rolling_summary")
+            updated = existing.rstrip() + "\n\n" + new_entry + "\n"
+        else:
+            updated = "## Prior Sprint Summaries\n\n" + new_entry + "\n"
+
+        self._doc_store.write("sprint_rolling_summary", updated)
 
     def _resolve_integration_mcp_config(self, services: list[str]) -> Path | None:
         """Check MCP availability for integration services.
@@ -157,6 +189,8 @@ class SprintRunner:
                 sprint_number, sprint_scope, needs_integration, partial_cost,
                 sprint_state,
             )
+
+            self._update_rolling_summary(sprint_number)
 
             duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
             emit(_event_log, SprintCompleteEvent(
@@ -221,27 +255,27 @@ class SprintRunner:
                     self._save_state()
             return callback
 
-        backend_spec = self._doc_store.read("backend_spec") if self._has_backend else ""
-        frontend_spec = self._doc_store.read("frontend_spec") if self._has_frontend else ""
-        api_contract = self._doc_store.read("api_contract") if self._has_backend else ""
+        # Scope specs to only sprint-relevant sections based on feature IDs
+        feature_ids = extract_sprint_feature_ids(sprint_scope)
+        backend_spec = (
+            scope_spec_to_features(self._doc_store.read("backend_spec"), feature_ids)
+            if self._has_backend else ""
+        )
+        frontend_spec = (
+            scope_spec_to_features(self._doc_store.read("frontend_spec"), feature_ids)
+            if self._has_frontend else ""
+        )
+        api_contract = (
+            scope_spec_to_features(self._doc_store.read("api_contract"), feature_ids)
+            if self._has_backend else ""
+        )
 
         extra_context: dict[str, str] = {}
 
-        # Collect summaries from prior sprints for cross-sprint context
-        prior_summaries: list[str] = []
-        for prev_num in range(1, sprint_number):
-            for suffix in ("backend", "frontend", "integration"):
-                doc_name = f"sprint_{prev_num}_{suffix}"
-                if self._doc_store.exists(doc_name):
-                    content = self._doc_store.read(doc_name)
-                    lines = content.strip().splitlines()
-                    summary_lines = lines[-20:] if len(lines) > 20 else lines
-                    prior_summaries.append(
-                        f"### Sprint {prev_num} ({suffix})\n" + "\n".join(summary_lines)
-                    )
-        if prior_summaries:
+        # Use rolling summary for cross-sprint context (constant size)
+        if self._doc_store.exists("sprint_rolling_summary"):
             extra_context["prior_sprint_summaries"] = (
-                "## Prior Sprint Summaries\n\n" + "\n\n".join(prior_summaries)
+                self._doc_store.read("sprint_rolling_summary")
             )
 
         if self._doc_store.exists("checkpoint_feedback"):
@@ -296,6 +330,7 @@ class SprintRunner:
                 session_id=sprint_state.backend_session_id if sprint_state else None,
                 on_substep=_make_on_substep(SprintStatus.BACKEND_QA, SprintStatus.BACKEND_CORRECTION),
                 skip_to_correction=_should_skip(current_status, SprintStatus.BACKEND_QA),
+                skip_action_output_in_qa=True,
             )
             partial_cost[0] += backend_result.total_cost
 
@@ -333,6 +368,7 @@ class SprintRunner:
                 session_id=sprint_state.frontend_session_id if sprint_state else None,
                 on_substep=_make_on_substep(SprintStatus.FRONTEND_QA, SprintStatus.FRONTEND_CORRECTION),
                 skip_to_correction=_should_skip(current_status, SprintStatus.FRONTEND_QA),
+                skip_action_output_in_qa=True,
             )
             partial_cost[0] += frontend_result.total_cost
 
@@ -373,6 +409,7 @@ class SprintRunner:
                 on_substep=_make_on_substep(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION_CORRECTION),
                 skip_to_correction=_should_skip(current_status, SprintStatus.INTEGRATION_QA),
                 mcp_config=mcp_config,
+                skip_action_output_in_qa=True,
             )
             partial_cost[0] += integration_result.total_cost
 

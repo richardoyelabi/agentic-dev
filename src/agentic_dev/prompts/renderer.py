@@ -75,8 +75,11 @@ class PromptRenderer:
 
         result = self.render(template_name, context)
 
-        # Warn if rendered prompt approaches model context window limits
-        estimated_tokens = len(result) // 4
+        # Warn if rendered prompt approaches model context window limits.
+        # Word-based estimate: ~1.3 tokens/word for English, higher for code.
+        # Blended multiplier of 1.5 is more accurate than len//4 for mixed content.
+        word_count = len(result.split())
+        estimated_tokens = int(word_count * 1.5)
         context_window_limit = 200_000
         warn_threshold = 0.7
         if estimated_tokens > context_window_limit * warn_threshold:

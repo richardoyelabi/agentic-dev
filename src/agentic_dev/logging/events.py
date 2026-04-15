@@ -143,6 +143,16 @@ class AgentEmptyRetryEvent(LogEvent):
     sprint: int | None = None
 
 
+class BudgetWarningEvent(LogEvent):
+    """Emitted when an agent's accumulated cost exceeds its max_budget_usd."""
+
+    event_type: str = "budget_warning"
+    agent_name: str
+    cost_usd: float
+    max_budget_usd: float
+    sprint: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # QA cycle
 # ---------------------------------------------------------------------------

@@ -75,7 +75,7 @@ class TestAgentRegistry:
     def test_design_change_detection_agent_loaded(self, registry: AgentRegistry):
         agent = registry.get("design_change_detection")
         assert agent.team == "design_architecture"
-        assert agent.claude.model == "opus"
+        assert agent.claude.model == "sonnet"
         assert agent.claude.allowed_tools == ["Read", "Glob", "Grep"]
         assert agent.claude.max_turns == 15
         assert agent.input_documents == ["frontend_spec", "figma_sources"]
