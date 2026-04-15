@@ -703,3 +703,116 @@ class TestCrossSprintSummaries:
         call_kwargs = mock_qa_cycle.call_args.kwargs
         input_docs = call_kwargs["input_docs"]
         assert "prior_sprint_summaries" not in input_docs
+
+
+# ---------------------------------------------------------------------------
+# Rolling summary (_update_rolling_summary) (R6)
+# ---------------------------------------------------------------------------
+
+
+class TestRollingSummary:
+    """Tests for the _update_rolling_summary method."""
+
+    @pytest.fixture
+    def runner_for_summary(
+        self, claude, registry, prompt_renderer, project_dir,
+    ):
+        store = MagicMock(spec=DocumentStore)
+        docs: dict[str, str] = {
+            "backend_spec": "# Backend Spec",
+            "api_contract": "# API Contract",
+            "sprint_1_backend": "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+            "sprint_1_frontend": "FE line 1\nFE line 2\nFE line 3",
+        }
+
+        def mock_exists(name):
+            return name in docs
+
+        def mock_read(name):
+            return docs.get(name, "")
+
+        def mock_write(name, content):
+            docs[name] = content
+
+        store.exists = MagicMock(side_effect=mock_exists)
+        store.read = MagicMock(side_effect=mock_read)
+        store.write = MagicMock(side_effect=mock_write)
+        store._docs = docs
+
+        runner = SprintRunner(
+            claude=claude,
+            registry=registry,
+            doc_store=store,
+            prompt_renderer=prompt_renderer,
+            project_dir=project_dir,
+            project_type="fullstack",
+        )
+        return runner, store, docs
+
+    def test_creates_rolling_summary_on_first_sprint(self, runner_for_summary):
+        runner, store, docs = runner_for_summary
+        runner._update_rolling_summary(1)
+
+        store.write.assert_called_once()
+        name, content = store.write.call_args[0]
+        assert name == "sprint_rolling_summary"
+        assert "## Prior Sprint Summaries" in content
+        assert "### Sprint 1 (backend)" in content
+        assert "### Sprint 1 (frontend)" in content
+
+    def test_appends_to_existing_rolling_summary(self, runner_for_summary):
+        runner, store, docs = runner_for_summary
+        docs["sprint_rolling_summary"] = (
+            "## Prior Sprint Summaries\n\n### Sprint 1 (backend)\nOld content"
+        )
+        docs["sprint_2_backend"] = "Sprint 2 backend work\nDone"
+
+        runner._update_rolling_summary(2)
+
+        write_calls = [c for c in store.write.call_args_list
+                       if c[0][0] == "sprint_rolling_summary"]
+        assert len(write_calls) == 1
+        content = write_calls[0][0][1]
+        assert "### Sprint 1 (backend)" in content
+        assert "### Sprint 2 (backend)" in content
+
+    def test_truncates_long_output_to_summary_lines(self, runner_for_summary):
+        runner, store, docs = runner_for_summary
+        long_output = "\n".join(f"Line {i}" for i in range(50))
+        docs["sprint_1_backend"] = long_output
+
+        runner._update_rolling_summary(1)
+
+        name, content = store.write.call_args[0]
+        backend_section = content.split("### Sprint 1 (backend)\n")[1]
+        if "### Sprint 1 (frontend)" in backend_section:
+            backend_section = backend_section.split("### Sprint 1 (frontend)")[0]
+        lines = [l for l in backend_section.strip().splitlines() if l.strip()]
+        assert len(lines) == runner._SUMMARY_LINES_PER_SPRINT
+
+    def test_skips_missing_subphases(self, runner_for_summary):
+        runner, store, docs = runner_for_summary
+        # Remove frontend doc, keep only backend
+        del docs["sprint_1_frontend"]
+
+        runner._update_rolling_summary(1)
+
+        name, content = store.write.call_args[0]
+        assert "### Sprint 1 (backend)" in content
+        assert "### Sprint 1 (frontend)" not in content
+
+    def test_no_write_when_no_docs_exist(self, runner_for_summary):
+        runner, store, docs = runner_for_summary
+        # Sprint 99 has no docs
+        runner._update_rolling_summary(99)
+        store.write.assert_not_called()
+
+    def test_includes_integration_subphase(self, runner_for_summary):
+        runner, store, docs = runner_for_summary
+        docs["sprint_1_integration"] = "Integration test results\nAll passing"
+
+        runner._update_rolling_summary(1)
+
+        name, content = store.write.call_args[0]
+        assert "### Sprint 1 (integration)" in content
+        assert "Integration test results" in content

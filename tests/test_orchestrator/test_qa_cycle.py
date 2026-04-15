@@ -1431,3 +1431,199 @@ async def test_content_markers_no_session_id_skips_recovery(
 
     mock_recover.assert_not_called()
     assert result.output == "Summary without markers."
+
+
+# ---------------------------------------------------------------------------
+# skip_action_output_in_qa (R5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skip_action_output_excludes_output_from_qa_input(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When skip_action_output_in_qa=True, QA input docs should NOT contain
+    the action output text."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={"spec": "backend spec content"},
+        output_doc_name="sprint_1_backend",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        skip_action_output_in_qa=True,
+    )
+
+    qa_render_call = prompt_renderer.render_agent_prompt.call_args_list[1]
+    qa_input_docs = qa_render_call.kwargs.get(
+        "input_documents",
+        qa_render_call.args[1] if len(qa_render_call.args) > 1 else None,
+    )
+    assert "sprint_1_backend" not in qa_input_docs
+    assert "spec" in qa_input_docs
+
+
+@pytest.mark.asyncio
+async def test_skip_action_output_false_includes_output_in_qa_input(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """Default behavior (skip_action_output_in_qa=False) includes action output."""
+    claude.run.side_effect = [
+        _make_claude_result("action output", cost=0.15),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={"spec": "backend spec content"},
+        output_doc_name="sprint_1_backend",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        skip_action_output_in_qa=False,
+    )
+
+    qa_render_call = prompt_renderer.render_agent_prompt.call_args_list[1]
+    qa_input_docs = qa_render_call.kwargs.get(
+        "input_documents",
+        qa_render_call.args[1] if len(qa_render_call.args) > 1 else None,
+    )
+    assert "sprint_1_backend" in qa_input_docs
+    assert qa_input_docs["sprint_1_backend"] == "action output"
+
+
+@pytest.mark.asyncio
+async def test_skip_action_output_also_applies_to_re_review(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """skip_action_output_in_qa should also apply to re-review after correction."""
+    claude.run.side_effect = [
+        _make_claude_result("v1", cost=0.10),
+        _make_claude_result("ISSUES_FOUND: fix", cost=0.05),
+        _make_claude_result("v2", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={"spec": "content"},
+        output_doc_name="sprint_1_backend",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        skip_action_output_in_qa=True,
+    )
+
+    # Re-review is the 3rd render call (action + QA + re-review, correction uses session)
+    re_review_call = prompt_renderer.render_agent_prompt.call_args_list[2]
+    re_review_input_docs = re_review_call.kwargs.get(
+        "input_documents",
+        re_review_call.args[1] if len(re_review_call.args) > 1 else None,
+    )
+    assert "sprint_1_backend" not in re_review_input_docs
+
+
+# ---------------------------------------------------------------------------
+# Budget enforcement (R7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_budget_warning_emitted_when_cost_exceeds_budget(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """A BudgetWarningEvent should be emitted when cost exceeds max_budget_usd."""
+    action_agent.claude.max_budget_usd = 0.10
+    claude.run.side_effect = [
+        _make_claude_result("output", cost=0.50),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    with patch("agentic_dev.orchestrator.qa_cycle.emit") as mock_emit:
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={"input.md": "reqs"},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+        )
+
+        budget_warnings = [
+            c for c in mock_emit.call_args_list
+            if hasattr(c[0][1], "event_type") and c[0][1].event_type == "budget_warning"
+        ]
+        assert len(budget_warnings) == 1
+        event = budget_warnings[0][0][1]
+        assert event.agent_name == "action_agent"
+        assert event.cost_usd == 0.50
+        assert event.max_budget_usd == 0.10
+
+
+@pytest.mark.asyncio
+async def test_no_budget_warning_when_cost_within_budget(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """No BudgetWarningEvent when cost is within max_budget_usd."""
+    action_agent.claude.max_budget_usd = 5.00
+    claude.run.side_effect = [
+        _make_claude_result("output", cost=0.50),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    with patch("agentic_dev.orchestrator.qa_cycle.emit") as mock_emit:
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={"input.md": "reqs"},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+        )
+
+        budget_warnings = [
+            c for c in mock_emit.call_args_list
+            if hasattr(c[0][1], "event_type") and c[0][1].event_type == "budget_warning"
+        ]
+        assert len(budget_warnings) == 0
+
+
+@pytest.mark.asyncio
+async def test_budget_warning_does_not_stop_execution(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """Budget warning is informational — execution continues normally."""
+    action_agent.claude.max_budget_usd = 0.01
+    claude.run.side_effect = [
+        _make_claude_result("output", cost=0.50),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={"input.md": "reqs"},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+    )
+
+    assert result.output == "output"
+    assert result.action_cost == 0.50

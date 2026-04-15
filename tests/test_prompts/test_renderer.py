@@ -882,3 +882,72 @@ class TestPromptSizeWarning:
                 if hasattr(c[0][1], "level") and c[0][1].level == "WARNING"
             ]
             assert len(warning_calls) == 0
+
+    def test_token_estimate_uses_word_count(self, real_renderer):
+        """Token estimation should use word count * 1.5, not char count / 4."""
+        # 10 words * 1.5 = 15 estimated tokens (well under threshold)
+        # But 50 chars / 4 = 12.5 tokens — both are low, so verify via
+        # a case where the two methods diverge significantly.
+        # "x" * 600_000 is 1 word -> 1.5 tokens (no warning)
+        # Under old method: 600_000 / 4 = 150,000 tokens (would warn)
+        single_long_word = "x" * 600_000
+        with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
+            real_renderer.render_agent_prompt(
+                template_name="backend_developer.md.j2",
+                input_documents={
+                    "backend_spec": single_long_word,
+                    "api_contract": "# API",
+                    "sprint_scope": "Sprint 1",
+                },
+                constraints=["TDD"],
+            )
+            warning_calls = [
+                c for c in mock_emit.call_args_list
+                if hasattr(c[0][1], "level") and c[0][1].level == "WARNING"
+            ]
+            # Word-based: ~few words -> no warning. Old char-based would warn.
+            assert len(warning_calls) == 0
+
+    def test_warning_message_includes_token_estimate(self, real_renderer):
+        """Warning message should contain the estimated token count."""
+        large_spec = " ".join(["word"] * 100_000)
+        with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
+            real_renderer.render_agent_prompt(
+                template_name="backend_developer.md.j2",
+                input_documents={
+                    "backend_spec": large_spec,
+                    "api_contract": "# API",
+                    "sprint_scope": "Sprint 1",
+                },
+                constraints=["TDD"],
+            )
+            warning_calls = [
+                c for c in mock_emit.call_args_list
+                if hasattr(c[0][1], "level") and c[0][1].level == "WARNING"
+            ]
+            assert len(warning_calls) >= 1
+            msg = warning_calls[0][0][1].message
+            assert "tokens" in msg
+            assert "approaching context window" in msg
+
+    def test_prompt_rendered_event_emitted_for_normal_prompt(self, real_renderer):
+        """A PromptRenderedEvent should be emitted for every render."""
+        with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
+            real_renderer.render_agent_prompt(
+                template_name="backend_developer.md.j2",
+                input_documents={
+                    "backend_spec": "# Spec",
+                    "api_contract": "# API",
+                    "sprint_scope": "Sprint 1",
+                },
+                constraints=["TDD"],
+            )
+            rendered_events = [
+                c for c in mock_emit.call_args_list
+                if hasattr(c[0][1], "event_type")
+                and c[0][1].event_type == "prompt_rendered"
+            ]
+            assert len(rendered_events) >= 1
+            event = rendered_events[0][0][1]
+            assert event.template_name == "backend_developer.md.j2"
+            assert event.output_length > 0
