@@ -12,10 +12,10 @@ from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 
 DEFAULT_PROJECTS_DIR = Path.home() / "projects"
 
-AGENCY_DIR = Path(__file__).parent.parent.parent
+_PACKAGE_DIR = Path(__file__).parent  # always the agentic_dev/ package dir
 
-AGENT_DEFINITIONS_DIR = AGENCY_DIR / "src" / "agentic_dev" / "agents" / "definitions"
-PROMPT_TEMPLATES_DIR = AGENCY_DIR / "src" / "agentic_dev" / "prompts" / "templates"
+AGENT_DEFINITIONS_DIR = _PACKAGE_DIR / "agents" / "definitions"
+PROMPT_TEMPLATES_DIR = _PACKAGE_DIR / "prompts" / "templates"
 
 AGENTIC_DEV_METADATA_DIR = ".agentic-dev"
 STATE_FILE = "state.json"

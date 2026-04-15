@@ -32,6 +32,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"agentic_dev" = [
+    "prompts/templates/*.j2",
+    "agents/definitions/*.yml",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
