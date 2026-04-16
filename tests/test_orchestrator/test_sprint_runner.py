@@ -838,3 +838,97 @@ class TestRollingSummary:
         name, content = store.write.call_args[0]
         assert "### Sprint 1 (integration)" in content
         assert "Integration test results" in content
+
+
+# ---------------------------------------------------------------------------
+# Integration QA receives its action output (regression for Bug 2)
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrationQAReceivesActionOutput:
+    """Regression: integration QA template needs the Integration Guide text.
+
+    Unlike backend/frontend QA (which re-read code from disk), integration QA
+    reviews a markdown artifact directly via ``{{ integration_guide }}``. The
+    ``skip_action_output_in_qa`` optimisation must NOT apply to integration.
+    """
+
+    @pytest.mark.asyncio
+    @patch(
+        "agentic_dev.orchestrator.sprint_runner.run_qa_cycle",
+        new_callable=AsyncMock,
+    )
+    async def test_integration_qa_does_not_skip_action_output(
+        self, mock_qa_cycle, runner, claude,
+    ):
+        """The integration QA cycle must receive the action's output text."""
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="guide text", session_id="s1",
+        )
+
+        await runner.run_sprint(
+            sprint_number=2,
+            sprint_scope="payment",
+            needs_integration=True,
+        )
+
+        # Three calls: backend, frontend, integration.
+        assert mock_qa_cycle.call_count == 3
+        integration_call = mock_qa_cycle.call_args_list[2]
+        assert not integration_call.kwargs.get("skip_action_output_in_qa", False), (
+            "Integration QA must pass the action output into the QA prompt; "
+            "its template renders {{ integration_guide }} directly."
+        )
+        # Backend and frontend still use the optimisation.
+        for idx in (0, 1):
+            assert mock_qa_cycle.call_args_list[idx].kwargs.get(
+                "skip_action_output_in_qa",
+            ) is True
+
+    def test_integration_qa_template_renders_with_integration_guide(self):
+        """The integration_qa.md.j2 template must render given integration_guide.
+
+        Positive scenario: when ``integration_guide`` IS present, the template
+        renders successfully. Pairs with the
+        ``test_integration_qa_template_crashes_without_integration_guide`` case.
+        """
+        from agentic_dev.config import PROMPT_TEMPLATES_DIR
+
+        real_renderer = PromptRenderer(templates_dir=PROMPT_TEMPLATES_DIR)
+        input_documents = {
+            "api_contract": "# API Contract",
+            "sprint_scope": "Sprint 2 scope",
+            "integration_guide": "# Integration Guide\n## Service: AWS S3",
+        }
+        result = real_renderer.render_agent_prompt(
+            template_name="integration_qa.md.j2",
+            input_documents=input_documents,
+            constraints=["No hardcoded credentials"],
+        )
+        assert "# Integration Guide" in result
+        assert "AWS S3" in result
+        assert "API Contract" in result
+
+    def test_integration_qa_template_crashes_without_integration_guide(self):
+        """Negative scenario: rendering the integration QA template without an
+        ``integration_guide`` key raises ``TemplateRenderError``.
+
+        This is exactly what the skillsbloom pipeline hit on resume. The test
+        pins the contract so that any future change to the optimisation must
+        either keep the key in QA inputs or update the template.
+        """
+        from agentic_dev.config import PROMPT_TEMPLATES_DIR
+        from agentic_dev.prompts.renderer import TemplateRenderError
+
+        real_renderer = PromptRenderer(templates_dir=PROMPT_TEMPLATES_DIR)
+        input_documents = {
+            "api_contract": "# API Contract",
+            "sprint_scope": "Sprint 2 scope",
+            # integration_guide omitted — this is the broken pipeline state.
+        }
+        with pytest.raises(TemplateRenderError, match="integration_guide"):
+            real_renderer.render_agent_prompt(
+                template_name="integration_qa.md.j2",
+                input_documents=input_documents,
+                constraints=["No hardcoded credentials"],
+            )

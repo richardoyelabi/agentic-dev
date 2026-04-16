@@ -402,6 +402,10 @@ class SprintRunner:
             }
             integration_services = sprint_state.integration_services if sprint_state else []
             mcp_config = self._resolve_integration_mcp_config(integration_services)
+            # Note: skip_action_output_in_qa is NOT set here (unlike backend/
+            # frontend QA). Integration QA reviews the Integration Guide text
+            # itself via ``{{ integration_guide }}`` in its template, so the
+            # action output must be passed through to the QA prompt.
             integration_result = await run_qa_cycle(
                 claude=self._claude,
                 action_agent=self._registry.get("integration"),
@@ -416,7 +420,6 @@ class SprintRunner:
                 on_substep=_make_on_substep(SprintStatus.INTEGRATION_QA, SprintStatus.INTEGRATION_CORRECTION),
                 skip_to_correction=_should_skip(current_status, SprintStatus.INTEGRATION_QA),
                 mcp_config=mcp_config,
-                skip_action_output_in_qa=True,
             )
             partial_cost[0] += integration_result.total_cost
 

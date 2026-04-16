@@ -827,26 +827,115 @@ class TestShortResultRecovery:
         mock_longest.assert_not_called()
         assert result.text == long_result
 
-    async def test_empty_result_uses_existing_recovery(self, tmp_path: Path):
-        """Empty result still uses _recover_result_from_session (existing behavior)."""
+    async def test_empty_result_prefers_longest_session_text_over_last(
+        self, tmp_path: Path,
+    ):
+        """Empty result: prefer a substantially longer earlier assistant
+        message over the final one.
+
+        Regression: previously, an empty result always fell back to
+        ``_recover_result_from_session`` (last assistant text). If the agent
+        produced a long document and then a short sign-off, the sign-off was
+        picked and the real document was silently dropped. The fix checks
+        ``_recover_longest_from_session`` first and only falls back to
+        last-assistant when no substantially longer message exists.
+        """
         runner = ClaudeRunner(enable_usage_api=False)
         agent = FakeAgentConfig()
+        long_guide = "# Integration Guide\n" + "y" * 2000
         output_json = json.dumps({
             "result": "",
-            "session_id": "sess-empty",
+            "session_id": "sess-empty-longest",
             "total_cost_usd": 0.05,
         })
         mock_process = self._make_mock_process(output_json)
 
-        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_process):
-            with patch.object(
-                ClaudeRunner, "_recover_result_from_session", return_value="Recovered last text.",
-            ) as mock_last:
-                with patch.object(
-                    ClaudeRunner, "_recover_longest_from_session",
-                ) as mock_longest:
-                    result = await runner.run(agent, "prompt", tmp_path)
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch.object(
+            ClaudeRunner,
+            "_recover_longest_from_session",
+            return_value=long_guide,
+        ) as mock_longest, patch.object(
+            ClaudeRunner,
+            "_recover_result_from_session",
+            return_value="Already verified — all tests pass.",
+        ) as mock_last:
+            result = await runner.run(agent, "prompt", tmp_path)
 
-        mock_last.assert_called_once_with("sess-empty", tmp_path)
-        mock_longest.assert_not_called()
+        mock_longest.assert_called_once_with("sess-empty-longest", tmp_path)
+        mock_last.assert_not_called()
+        assert result.text == long_guide
+
+    async def test_empty_result_falls_back_to_last_when_no_longer_message(
+        self, tmp_path: Path,
+    ):
+        """Empty result: when no substantially longer earlier message exists,
+        fall back to the last-assistant-text recovery.
+
+        Preserves existing behavior for the common case where the session
+        genuinely ends with a short reply.
+        """
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        output_json = json.dumps({
+            "result": "",
+            "session_id": "sess-empty-fallback",
+            "total_cost_usd": 0.05,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch.object(
+            ClaudeRunner,
+            "_recover_longest_from_session",
+            return_value="",
+        ) as mock_longest, patch.object(
+            ClaudeRunner,
+            "_recover_result_from_session",
+            return_value="Recovered last text.",
+        ) as mock_last:
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_longest.assert_called_once_with("sess-empty-fallback", tmp_path)
+        mock_last.assert_called_once_with("sess-empty-fallback", tmp_path)
         assert result.text == "Recovered last text."
+
+    async def test_empty_result_with_short_longest_uses_last_assistant(
+        self, tmp_path: Path,
+    ):
+        """Empty result + short longest (below 1000 chars) → use last-assistant.
+
+        The longest-message heuristic only kicks in when the candidate is
+        substantially larger than 1000 chars; otherwise treat it as another
+        short reply and fall back to last-assistant, which keeps behaviour
+        stable on short sessions.
+        """
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        output_json = json.dumps({
+            "result": "",
+            "session_id": "sess-empty-short-longest",
+            "total_cost_usd": 0.05,
+        })
+        mock_process = self._make_mock_process(output_json)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch.object(
+            ClaudeRunner,
+            "_recover_longest_from_session",
+            return_value="A brief earlier reply.",
+        ), patch.object(
+            ClaudeRunner,
+            "_recover_result_from_session",
+            return_value="Final sign-off text.",
+        ) as mock_last:
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        mock_last.assert_called_once()
+        assert result.text == "Final sign-off text."

@@ -437,19 +437,23 @@ class ClaudeRunner:
 
         # Fallback recovery from session JSONL when the CLI result is
         # missing or appears to be a trailing summary.
-        if sid:
-            if not result_text.strip():
-                # Empty result: recover the last assistant text.
+        #
+        # Both the "empty" and "short" cases can occur when the agent produced
+        # a long document and then signed off with a brief status line — the
+        # final CLI ``result`` field captures only the sign-off.  In both
+        # cases we prefer a substantially longer earlier assistant message
+        # when one exists.  If not, and the result is empty, fall back to the
+        # last assistant text (which at least gives us something rather than
+        # an empty string).
+        if sid and (not result_text.strip() or len(result_text) < 500):
+            longest = self._recover_longest_from_session(sid, working_dir)
+            threshold = max(len(result_text) * 5, 1000)
+            if longest.strip() and len(longest) > threshold:
+                result_text = longest
+            elif not result_text.strip():
                 recovered = self._recover_result_from_session(sid, working_dir)
                 if recovered.strip():
                     result_text = recovered
-            elif len(result_text) < 500:
-                # Short result: the agent may have appended a brief summary
-                # after the real document.  If the session contains a much
-                # longer assistant message, prefer it.
-                longest = self._recover_longest_from_session(sid, working_dir)
-                if len(longest) > max(len(result_text) * 5, 1000):
-                    result_text = longest
 
         result = ClaudeResult(
             text=result_text,

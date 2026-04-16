@@ -21,7 +21,7 @@ class JSONLinesFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "event_type": "log_message",
             "level": record.levelname,
-            "message": self.formatMessage(record),
+            "message": record.getMessage(),
             "logger": record.name,
         })
 

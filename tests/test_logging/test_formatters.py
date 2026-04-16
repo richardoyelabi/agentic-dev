@@ -106,6 +106,39 @@ class TestJSONLinesFormatter:
 
         assert parsed["logger"] == "agentic_dev.events.test"
 
+    def test_format_handles_percent_args_without_premade_message(self) -> None:
+        """Regression: %-style args must be resolved without relying on a
+        pre-populated record.message attribute.
+
+        Real logging calls like ``log.warning("svc=%s", name)`` produce a
+        LogRecord whose ``message`` attribute is only populated by
+        ``Formatter.format()``. Our custom ``format()`` bypasses that step, so
+        the JSON formatter must resolve args itself (via ``record.getMessage``).
+        """
+        record = logging.LogRecord(
+            name="agentic_dev.events.test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="No MCP server for '%s' found. Run 'claude mcp add %s'.",
+            args=("aws s3", "aws s3"),
+            exc_info=None,
+        )
+        assert not hasattr(record, "message"), (
+            "Precondition: record.message must not be pre-set for this test "
+            "to exercise the real-world logging path."
+        )
+
+        formatter = JSONLinesFormatter()
+        result = formatter.format(record)
+        parsed = json.loads(result)
+
+        assert parsed["message"] == (
+            "No MCP server for 'aws s3' found. Run 'claude mcp add aws s3'."
+        )
+        assert parsed["event_type"] == "log_message"
+        assert parsed["level"] == "WARNING"
+
     def test_format_output_is_single_line(self) -> None:
         event = LogEvent(message="no newlines", event_type="test")
         record = _make_record(event=event)

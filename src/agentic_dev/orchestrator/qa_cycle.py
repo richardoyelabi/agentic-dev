@@ -222,6 +222,13 @@ async def run_qa_cycle(
         skip_to_correction: When True, skip the action agent and initial QA
             review, loading their outputs from the doc_store instead. Used
             to resume mid-QA-cycle after a crash.
+        skip_action_output_in_qa: When True, the action agent's output is NOT
+            injected into the QA prompt as ``{qa_output_key: output_text}``.
+            Only safe for code-review QA where the reviewer re-reads the
+            filesystem (e.g. backend_qa, frontend_qa). Do NOT enable this for
+            QA agents whose prompt template references the action output key
+            directly (e.g. ``integration_qa`` renders ``{{ integration_guide
+            }}``) — rendering will fail with ``StrictUndefined``.
     """
     ctx = get_run_context()
     sprint = ctx.sprint_number if ctx else None
