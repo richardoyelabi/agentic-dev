@@ -1,15 +1,21 @@
 """Tests for the agentic-dev CLI."""
 
+import asyncio
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
-from agentic_dev.cli import app
+from agentic_dev.cli import (
+    _run_engine_with_rate_limit_resume,
+    _sleep_for_rate_limit_reset,
+    app,
+)
 from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, CONFIG_FILE
 from agentic_dev.documents.store import DocumentStore
+from agentic_dev.exceptions import GracefulShutdown, RateLimitPause
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import PipelinePhase, SprintState, SprintStatus
@@ -1170,3 +1176,128 @@ class TestIntegrateCommand:
 
         assert result.exit_code == 0, result.output
         mock_run_integration.assert_called_once()
+
+
+class TestRateLimitPauseResume:
+    """CLI-level sleep-and-re-enter loop around ``engine.run()``."""
+
+    @pytest.mark.asyncio
+    async def test_resumes_engine_after_pause_then_succeeds(self):
+        """Engine raises RateLimitPause once; wrapper sleeps, resumes, completes."""
+        calls = 0
+
+        async def fake_run() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RateLimitPause(
+                    phase="sprinting", wait_seconds=0.01, source="fallback",
+                )
+
+        engine = MagicMock()
+        engine.run = fake_run
+        event_log = MagicMock()
+        sleep_fn = AsyncMock(return_value=True)
+
+        await _run_engine_with_rate_limit_resume(
+            engine, event_log,
+            max_consecutive_pauses=5,
+            sleep_fn=sleep_fn,
+        )
+
+        assert calls == 2
+        sleep_fn.assert_awaited_once_with(0.01)
+
+    @pytest.mark.asyncio
+    async def test_consecutive_pause_limit_raises(self):
+        """After N consecutive pauses the wrapper re-raises the pause."""
+
+        async def always_pause() -> None:
+            raise RateLimitPause(
+                phase="sprinting", wait_seconds=0.01, source="fallback",
+            )
+
+        engine = MagicMock()
+        engine.run = always_pause
+        event_log = MagicMock()
+        sleep_fn = AsyncMock(return_value=True)
+
+        with pytest.raises(RateLimitPause):
+            await _run_engine_with_rate_limit_resume(
+                engine, event_log,
+                max_consecutive_pauses=2,
+                sleep_fn=sleep_fn,
+            )
+
+        # Exactly 2 sleeps accepted; the 3rd pause exceeds the cap and re-raises.
+        assert sleep_fn.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_shutdown_during_pause_raises_graceful_shutdown(self):
+        """sleep_fn returning False (shutdown fired) escalates to GracefulShutdown."""
+
+        async def always_pause() -> None:
+            raise RateLimitPause(
+                phase="sprinting", wait_seconds=1.0, source="fallback",
+            )
+
+        engine = MagicMock()
+        engine.run = always_pause
+        event_log = MagicMock()
+        sleep_fn = AsyncMock(return_value=False)
+
+        with pytest.raises(GracefulShutdown):
+            await _run_engine_with_rate_limit_resume(
+                engine, event_log,
+                max_consecutive_pauses=5,
+                sleep_fn=sleep_fn,
+            )
+
+    @pytest.mark.asyncio
+    async def test_passes_through_other_exceptions_unchanged(self):
+        """Non-pause exceptions propagate without retry."""
+
+        async def explode() -> None:
+            raise ValueError("boom")
+
+        engine = MagicMock()
+        engine.run = explode
+        event_log = MagicMock()
+        sleep_fn = AsyncMock()
+
+        with pytest.raises(ValueError, match="boom"):
+            await _run_engine_with_rate_limit_resume(
+                engine, event_log, sleep_fn=sleep_fn,
+            )
+
+        sleep_fn.assert_not_called()
+
+
+class TestSleepForRateLimitReset:
+    """Shutdown-aware sleep helper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_full_wait_elapses(self):
+        """With a very small wait and idle shutdown event, returns True."""
+        import agentic_dev.orchestrator.shutdown as shutdown_mod
+        shutdown_mod._shutdown_event = asyncio.Event()
+
+        result = await _sleep_for_rate_limit_reset(
+            wait_seconds=0.02, poll_interval=0.01,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_shutdown_event_set(self):
+        """When the shutdown event is already set, returns False immediately."""
+        import agentic_dev.orchestrator.shutdown as shutdown_mod
+        shutdown_mod._shutdown_event = asyncio.Event()
+        shutdown_mod._shutdown_event.set()
+
+        result = await _sleep_for_rate_limit_reset(
+            wait_seconds=10.0, poll_interval=0.01,
+        )
+        assert result is False
+
+        # Clean up so later tests don't see a pre-set event
+        shutdown_mod._shutdown_event = asyncio.Event()

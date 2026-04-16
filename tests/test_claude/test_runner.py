@@ -651,6 +651,113 @@ class TestRetry:
         assert call_count == 3  # 1 initial + 2 retries
 
 
+class TestUsageApiFallback:
+    """Empty-stderr / unrecognised-error fallback via the usage API.
+
+    When the CLI exits non-zero but stderr does not match any of the
+    pattern-based rate-limit signals, the runner should consult the
+    Anthropic usage API.  If the API confirms we are over quota, the run
+    should be retried like any other rate-limit; otherwise the error
+    propagates as a normal AgentRunError.
+    """
+
+    @staticmethod
+    def _make_mock_process(stdout: str, returncode: int = 0, stderr: str = ""):
+        return TestRun._make_mock_process(stdout, returncode, stderr)
+
+    async def test_empty_stderr_with_usage_api_limited_retries(self, tmp_path: Path):
+        """Empty stderr + usage API says limited → treat as rate limit and retry."""
+        from agentic_dev.claude.rate_limiter import UsageStatus
+
+        runner = ClaudeRunner(max_retries=2, base_delay=1.0)
+        agent = FakeAgentConfig()
+        success_json = json.dumps({"result": "done", "total_cost_usd": 0.5})
+
+        fail_proc = self._make_mock_process("", returncode=1, stderr="")
+        success_proc = self._make_mock_process(success_json)
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return fail_proc if call_count == 1 else success_proc
+
+        limited_status = UsageStatus(five_hour=100.0, is_limited=True)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ):
+            with patch.object(
+                runner._usage_client, "get_utilization",
+                new_callable=AsyncMock, return_value=limited_status,
+            ) as mock_get:
+                with patch("asyncio.sleep", new_callable=AsyncMock):
+                    result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "done"
+        assert call_count == 2
+        mock_get.assert_called()  # usage API consulted for fallback
+
+    async def test_empty_stderr_usage_api_says_ok_raises_agent_run_error(
+        self, tmp_path: Path,
+    ):
+        """Empty stderr + usage API healthy → propagate as AgentRunError."""
+        from agentic_dev.claude.rate_limiter import UsageStatus
+
+        runner = ClaudeRunner(max_retries=2)
+        agent = FakeAgentConfig(name="frontend_developer")
+        fail_proc = self._make_mock_process("", returncode=1, stderr="")
+
+        healthy_status = UsageStatus(five_hour=42.0, is_limited=False)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=fail_proc,
+        ):
+            with patch.object(
+                runner._usage_client, "get_utilization",
+                new_callable=AsyncMock, return_value=healthy_status,
+            ):
+                with pytest.raises(AgentRunError, match="frontend_developer"):
+                    await runner.run(agent, "prompt", tmp_path)
+
+    async def test_empty_stderr_without_usage_api_raises_agent_run_error(
+        self, tmp_path: Path,
+    ):
+        """Empty stderr + usage API disabled → propagate as AgentRunError (existing behavior)."""
+        runner = ClaudeRunner(max_retries=2, enable_usage_api=False)
+        agent = FakeAgentConfig(name="planner")
+        fail_proc = self._make_mock_process("", returncode=1, stderr="")
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=fail_proc,
+        ):
+            with pytest.raises(AgentRunError, match="planner"):
+                await runner.run(agent, "prompt", tmp_path)
+
+    async def test_usage_api_failure_falls_through_to_agent_run_error(
+        self, tmp_path: Path,
+    ):
+        """When the usage API itself errors out, we don't loop forever."""
+        runner = ClaudeRunner(max_retries=2)
+        agent = FakeAgentConfig(name="architect")
+        fail_proc = self._make_mock_process("", returncode=1, stderr="")
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=fail_proc,
+        ):
+            with patch.object(
+                runner._usage_client, "get_utilization",
+                new_callable=AsyncMock, return_value=None,
+            ):
+                with pytest.raises(AgentRunError, match="architect"):
+                    await runner.run(agent, "prompt", tmp_path)
+
+
 class TestShortResultRecovery:
     """Tests for the short-result recovery heuristic in ClaudeRunner.run()."""
 

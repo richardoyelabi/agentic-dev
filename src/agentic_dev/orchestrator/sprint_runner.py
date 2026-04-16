@@ -12,7 +12,7 @@ from agentic_dev.config import DirectoryMap
 from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
 from agentic_dev.documents.scoping import extract_sprint_feature_ids, scope_spec_to_features
 from agentic_dev.documents.store import DocumentStore
-from agentic_dev.exceptions import AgentRunError
+from agentic_dev.exceptions import AgentRunError, RateLimitError
 from agentic_dev.onboarding.figma import FigmaMCPNotConfigured, check_figma_mcp_available
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
@@ -205,6 +205,13 @@ class SprintRunner:
                 ctx.sprint_number = None
 
             return result
+        except RateLimitError:
+            # Do NOT convert to a failed SprintResult — the engine
+            # handles rate limits via a pause-and-resume path that
+            # preserves the sprint state for retry.
+            if ctx is not None:
+                ctx.sprint_number = None
+            raise
         except AgentRunError as exc:
             duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
             emit(_event_log, SprintFailedEvent(

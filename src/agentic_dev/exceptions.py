@@ -1,5 +1,7 @@
 """Custom exception hierarchy for the agentic-dev agency."""
 
+from datetime import datetime
+
 
 class AgenticDevError(Exception):
     """Base exception for all agentic-dev errors."""
@@ -61,6 +63,36 @@ class GracefulShutdown(AgenticDevError):
     def __init__(self, phase: str, message: str = ""):
         self.phase = phase
         super().__init__(message or f"Graceful shutdown at phase: {phase}")
+
+
+class RateLimitPause(AgenticDevError):
+    """Signal that the pipeline should pause until the rate-limit window resets.
+
+    This is a control-flow signal raised by the engine when a ``RateLimitError``
+    bubbles up after the runner has exhausted its internal retries.  The CLI
+    layer catches it, sleeps until the reset window, and re-enters
+    ``engine.run()``.  It is NOT a failure — the pipeline state remains at the
+    same phase throughout the pause.
+    """
+
+    def __init__(
+        self,
+        phase: str,
+        wait_seconds: float,
+        resets_at: datetime | None = None,
+        source: str = "fallback",
+        agent_name: str | None = None,
+        message: str = "",
+    ):
+        self.phase = phase
+        self.wait_seconds = wait_seconds
+        self.resets_at = resets_at
+        self.source = source
+        self.agent_name = agent_name
+        super().__init__(
+            message
+            or f"Rate limit hit at {phase}; pausing {wait_seconds:.0f}s"
+        )
 
 
 class RateLimitError(AgentRunError):

@@ -9,7 +9,7 @@ from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
-from agentic_dev.exceptions import AgentRunError
+from agentic_dev.exceptions import AgentRunError, RateLimitError
 from agentic_dev.orchestrator.sprint_runner import SprintResult, SprintRunner, _should_skip
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
@@ -168,6 +168,28 @@ async def test_sprint_failure_returns_failed_result(runner, claude):
     assert result.success is False
     assert result.sprint_number == 1
     assert "backend_developer" in result.error
+
+
+@pytest.mark.asyncio
+async def test_sprint_propagates_rate_limit_error(runner, claude):
+    """RateLimitError is re-raised rather than wrapped in a failed SprintResult.
+
+    The engine handles rate limits via a pause-and-resume path, not by treating
+    them as sprint failures — wrapping them in a ``SprintResult`` would destroy
+    the type information the engine needs.
+    """
+    claude.run.side_effect = RateLimitError(
+        agent_name="backend_developer",
+        message="Rate limited after 6 attempts",
+        attempts=6,
+        exit_code=1,
+    )
+
+    with pytest.raises(RateLimitError) as exc_info:
+        await runner.run_sprint(sprint_number=1, sprint_scope="scope")
+
+    assert exc_info.value.agent_name == "backend_developer"
+    assert exc_info.value.attempts == 6
 
 
 @pytest.mark.asyncio

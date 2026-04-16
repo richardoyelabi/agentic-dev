@@ -7,8 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agentic_dev.agents.registry import AgentRegistry
-from agentic_dev.config import DirectoryMap
+from agentic_dev.config import (
+    DirectoryMap,
+    RATE_LIMIT_PAUSE_MAX_SECONDS,
+)
 from agentic_dev.claude.output_parser import OutputParser
+from agentic_dev.claude.rate_limiter import UsageApiClient, WaitStrategy
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import (
@@ -16,6 +20,8 @@ from agentic_dev.exceptions import (
     CheckpointPause,
     GracefulShutdown,
     OutputParseError,
+    RateLimitError,
+    RateLimitPause,
 )
 from agentic_dev.orchestrator.agent_bridge import to_run_config
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig, should_pause
@@ -91,6 +97,62 @@ class PipelineEngine:
             directory_map=self._directory_map,
         )
 
+    async def _compute_rate_limit_wait(
+        self,
+    ) -> tuple[float, datetime | None, str]:
+        """Determine how long to pause before re-entering the pipeline.
+
+        Prefers the Anthropic usage API for an authoritative reset time;
+        falls back to a short default when the API is unavailable.
+
+        Returns ``(wait_seconds, resets_at, source)`` where *source* is one
+        of ``"usage_api"`` or ``"fallback"``.
+        """
+        try:
+            client = UsageApiClient()
+            status = await client.get_utilization()
+        except Exception:  # noqa: BLE001 — degrade gracefully
+            status = None
+
+        if status and status.resets_at:
+            delta = (status.resets_at - datetime.now(timezone.utc)).total_seconds()
+            if delta > 0:
+                return delta + WaitStrategy.BUFFER, status.resets_at, "usage_api"
+
+        # Fallback: 5 minutes is long enough to clear transient bursts and
+        # short enough that a misdetection doesn't tie up the terminal.
+        return 300.0, None, "fallback"
+
+    def _emit_rate_limit_pause(
+        self,
+        *,
+        phase: PipelinePhase,
+        wait_seconds: float,
+        resets_at: datetime | None,
+        source: str,
+        agent_name: str | None,
+    ) -> None:
+        """Emit the structured log event recording a pipeline-level rate-limit pause."""
+        from agentic_dev.logging import emit, get_event_logger
+        from agentic_dev.logging.events import PipelineRateLimitPauseEvent
+
+        _event_log = get_event_logger("engine")
+        resets_iso = resets_at.isoformat() if resets_at else None
+        emit(_event_log, PipelineRateLimitPauseEvent(
+            phase=str(phase),
+            wait_seconds=wait_seconds,
+            resets_at=resets_iso,
+            source=source,
+            agent_name=agent_name,
+            level="WARNING",
+            message=(
+                f"Pipeline pausing at {phase} for {wait_seconds:.0f}s "
+                f"(source={source}"
+                + (f", resets_at={resets_iso}" if resets_iso else "")
+                + ")"
+            ),
+        ))
+
     async def run(self) -> None:
         """Main loop: load state, execute current phase, advance, persist.
 
@@ -110,6 +172,35 @@ class PipelineEngine:
 
             try:
                 state = await self._execute_phase(state)
+            except RateLimitError as exc:
+                # Pause-and-resume path: preserve phase, let CLI sleep,
+                # re-enter engine.run(). Do NOT transition to FAILED.
+                wait_seconds, resets_at, source = await self._compute_rate_limit_wait()
+                if wait_seconds > RATE_LIMIT_PAUSE_MAX_SECONDS:
+                    # Reset is too far away — fail rather than block forever.
+                    state.failed_at_phase = state.phase
+                    state.phase = PipelinePhase.FAILED
+                    state.error = (
+                        f"Rate-limit reset exceeds pause cap "
+                        f"({wait_seconds:.0f}s > {RATE_LIMIT_PAUSE_MAX_SECONDS}s): {exc}"
+                    )
+                    self._state_manager.save(state)
+                    raise
+                self._state_manager.save(state)  # phase preserved
+                self._emit_rate_limit_pause(
+                    phase=state.phase,
+                    wait_seconds=wait_seconds,
+                    resets_at=resets_at,
+                    source=source,
+                    agent_name=exc.agent_name,
+                )
+                raise RateLimitPause(
+                    phase=str(state.phase),
+                    wait_seconds=wait_seconds,
+                    resets_at=resets_at,
+                    source=source,
+                    agent_name=exc.agent_name,
+                )
             except (AgentRunError, OutputParseError) as exc:
                 state.failed_at_phase = state.phase
                 state.phase = PipelinePhase.FAILED

@@ -19,10 +19,17 @@ from agentic_dev.config import (
     DEFAULT_PROJECTS_DIR,
     LATEST_SYMLINK,
     LOGS_DIR,
+    MAX_CONSECUTIVE_RATE_LIMIT_PAUSES,
+    RATE_LIMIT_PAUSE_POLL_INTERVAL_SECONDS,
     RUNS_DIR,
 )
 from agentic_dev.documents.store import DocumentStore
-from agentic_dev.exceptions import AgenticDevError, CheckpointPause, GracefulShutdown
+from agentic_dev.exceptions import (
+    AgenticDevError,
+    CheckpointPause,
+    GracefulShutdown,
+    RateLimitPause,
+)
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig, from_autonomy_level
 from agentic_dev.mcp.setup import check_mcp_prerequisites
 from agentic_dev.state.manager import StateManager
@@ -169,6 +176,97 @@ def _read_requirements_file(file_path: str) -> str:
     return content.strip()
 
 
+def _display_rate_limit_pause(pause: RateLimitPause) -> None:
+    """Render a Rich banner describing the pending rate-limit pause."""
+    detail = (
+        f"[bold]Phase:[/bold] {pause.phase}\n"
+        f"[bold]Wait:[/bold] {pause.wait_seconds:.0f}s (~{pause.wait_seconds/60:.1f} min)\n"
+        f"[bold]Source:[/bold] {pause.source}\n"
+    )
+    if pause.resets_at is not None:
+        detail += f"[bold]Resets at:[/bold] {pause.resets_at.isoformat()}\n"
+    if pause.agent_name:
+        detail += f"[bold]Agent:[/bold] {pause.agent_name}\n"
+    detail += (
+        "\nPipeline will automatically resume after the window resets.\n"
+        "Press Ctrl+C to save state and exit."
+    )
+    console.print(Panel(
+        detail,
+        title="Rate Limit Reached — Pausing Pipeline",
+        border_style="yellow",
+    ))
+
+
+async def _sleep_for_rate_limit_reset(
+    wait_seconds: float,
+    poll_interval: float = RATE_LIMIT_PAUSE_POLL_INTERVAL_SECONDS,
+) -> bool:
+    """Sleep in small increments, honouring shutdown signals.
+
+    Returns ``True`` if the full wait elapsed; ``False`` if a shutdown
+    signal (SIGINT/SIGTERM) was received mid-sleep.
+    """
+    from agentic_dev.orchestrator.shutdown import get_shutdown_event
+
+    shutdown_event = get_shutdown_event()
+    remaining = wait_seconds
+    while remaining > 0:
+        step = min(poll_interval, remaining)
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=step)
+            return False  # shutdown fired during the step
+        except asyncio.TimeoutError:
+            remaining -= step
+    return True
+
+
+async def _run_engine_with_rate_limit_resume(
+    engine,
+    event_log,
+    *,
+    max_consecutive_pauses: int = MAX_CONSECUTIVE_RATE_LIMIT_PAUSES,
+    sleep_fn=_sleep_for_rate_limit_reset,
+) -> None:
+    """Run ``engine.run()`` in a loop, pausing and re-entering on RateLimitPause.
+
+    Other exceptions (CheckpointPause, GracefulShutdown, AgenticDevError)
+    are allowed to propagate to the caller unchanged.
+    """
+    from agentic_dev.logging import emit
+    from agentic_dev.logging.events import PipelineRateLimitResumeEvent
+
+    consecutive_pauses = 0
+    while True:
+        try:
+            await engine.run()
+            return
+        except RateLimitPause as pause:
+            consecutive_pauses += 1
+            if consecutive_pauses > max_consecutive_pauses:
+                console.print(
+                    f"[bold red]Rate-limit pause threshold exceeded "
+                    f"({max_consecutive_pauses} consecutive pauses). "
+                    f"Aborting.[/bold red]"
+                )
+                raise
+            _display_rate_limit_pause(pause)
+            start = datetime.now(timezone.utc)
+            completed = await sleep_fn(pause.wait_seconds)
+            actual_wait_s = (datetime.now(timezone.utc) - start).total_seconds()
+            if not completed:
+                # Shutdown signalled during the pause — treat as graceful.
+                raise GracefulShutdown(phase=pause.phase) from None
+            emit(event_log, PipelineRateLimitResumeEvent(
+                phase=pause.phase,
+                actual_wait_seconds=actual_wait_s,
+                message=(
+                    f"Pipeline resuming at {pause.phase} "
+                    f"after {actual_wait_s:.0f}s wait"
+                ),
+            ))
+
+
 def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
     """Create and run the PipelineEngine, handling checkpoint pauses and errors."""
     from agentic_dev.agents.registry import AgentRegistry  # noqa: WPS433
@@ -228,7 +326,7 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
     ))
 
     try:
-        asyncio.run(engine.run())
+        asyncio.run(_run_engine_with_rate_limit_resume(engine, _event_log))
         duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
         current_state = state_manager.load()
         emit(_event_log, PipelineCompleteEvent(

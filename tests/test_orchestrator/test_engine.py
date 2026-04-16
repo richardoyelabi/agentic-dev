@@ -9,7 +9,14 @@ from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
-from agentic_dev.exceptions import AgentRunError, CheckpointPause, GracefulShutdown, OutputParseError
+from agentic_dev.exceptions import (
+    AgentRunError,
+    CheckpointPause,
+    GracefulShutdown,
+    OutputParseError,
+    RateLimitError,
+    RateLimitPause,
+)
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.orchestrator.engine import PipelineEngine
 from agentic_dev.prompts.renderer import PromptRenderer
@@ -237,6 +244,106 @@ class TestErrorHandling:
         assert state.phase == PipelinePhase.FAILED
         assert "boom" in state.error
         state_manager.save.assert_called()
+
+
+class TestRateLimitPauseHandling:
+    """RateLimitError must pause the pipeline, not fail it."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_error_raises_pause_preserving_phase(
+        self, engine, state_manager, claude,
+    ):
+        """RateLimitError during a phase raises RateLimitPause without transitioning to FAILED."""
+        state = _make_state(PipelinePhase.INPUT_PROCESSING)
+        state_manager.load = MagicMock(return_value=state)
+        claude.run.side_effect = RateLimitError(
+            agent_name="input_processor",
+            message="Rate limited after 6 attempts",
+            attempts=6,
+            exit_code=1,
+        )
+
+        with pytest.raises(RateLimitPause) as exc_info:
+            await engine.run()
+
+        # Phase preserved — NOT transitioned to FAILED
+        assert state.phase == PipelinePhase.INPUT_PROCESSING
+        assert state.failed_at_phase is None
+        assert state.error is None
+        # Pause carries the agent name
+        assert exc_info.value.agent_name == "input_processor"
+        # State was still saved so re-entry picks up the same phase
+        state_manager.save.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_error_during_sprint_propagates_as_pause(
+        self, engine, state_manager, claude, project_dir,
+    ):
+        """A RateLimitError inside a sprint surfaces as RateLimitPause, not FAILED."""
+        (project_dir / "frontend").mkdir(parents=True)
+        (project_dir / "backend").mkdir(parents=True)
+        sprint = SprintState(sprint_number=1, name="Sprint 1")
+        state = _make_state(
+            PipelinePhase.SPRINTING,
+            sprints=[sprint],
+            current_sprint=1,
+        )
+        state_manager.load = MagicMock(return_value=state)
+        doc_store = engine._doc_store
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="content")
+
+        claude.run.side_effect = RateLimitError(
+            agent_name="backend_developer",
+            message="Rate limited after 6 attempts",
+            attempts=6,
+        )
+
+        with patch(
+            "agentic_dev.orchestrator.engine.has_changes",
+            new_callable=AsyncMock, return_value=False,
+        ), patch(
+            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock,
+        ):
+            with pytest.raises(RateLimitPause):
+                await engine.run()
+
+        # Sprint phase preserved — the sprint can resume on re-entry
+        assert state.phase == PipelinePhase.SPRINTING
+        assert state.failed_at_phase is None
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_pause_fails_when_wait_exceeds_cap(
+        self, engine, state_manager, claude,
+    ):
+        """When the computed wait exceeds the configured cap, fall through to FAILED."""
+        from datetime import datetime, timedelta, timezone
+
+        from agentic_dev.claude.rate_limiter import UsageStatus
+
+        state = _make_state(PipelinePhase.INPUT_PROCESSING)
+        state_manager.load = MagicMock(return_value=state)
+        claude.run.side_effect = RateLimitError(
+            agent_name="input_processor",
+            message="Rate limited",
+            attempts=6,
+        )
+
+        # Usage API says reset is in 10 hours — over the 6-hour cap
+        long_reset = datetime.now(timezone.utc) + timedelta(hours=10)
+        status = UsageStatus(five_hour=100.0, is_limited=True, resets_at=long_reset)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.UsageApiClient"
+        ) as mock_cls:
+            mock_instance = AsyncMock()
+            mock_instance.get_utilization = AsyncMock(return_value=status)
+            mock_cls.return_value = mock_instance
+
+            with pytest.raises(AgentRunError):  # RateLimitError IS an AgentRunError
+                await engine.run()
+
+        assert state.phase == PipelinePhase.FAILED
 
     @pytest.mark.asyncio
     async def test_output_parse_error_sets_failed(self, engine, state_manager, claude):

@@ -63,6 +63,25 @@ class PipelineCheckpointEvent(LogEvent):
     documents_produced: list[str]
 
 
+class PipelineRateLimitPauseEvent(LogEvent):
+    """Emitted when the pipeline pauses to wait for a rate-limit window to reset."""
+
+    event_type: str = "pipeline_rate_limit_pause"
+    phase: str
+    wait_seconds: float
+    resets_at: str | None = None
+    source: str = "fallback"
+    agent_name: str | None = None
+
+
+class PipelineRateLimitResumeEvent(LogEvent):
+    """Emitted when the pipeline resumes after a rate-limit pause."""
+
+    event_type: str = "pipeline_rate_limit_resume"
+    phase: str
+    actual_wait_seconds: float
+
+
 # ---------------------------------------------------------------------------
 # Phase transitions
 # ---------------------------------------------------------------------------

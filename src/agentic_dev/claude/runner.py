@@ -76,13 +76,35 @@ class ClaudeRunner:
         max_retries: int = 5,
         base_delay: float = 30.0,
         enable_usage_api: bool = True,
+        usage_client: UsageApiClient | None = None,
     ) -> None:
         self._log_dir = log_dir
         self._max_retries = max_retries
-        usage_client = UsageApiClient() if enable_usage_api else None
+        if usage_client is None and enable_usage_api:
+            usage_client = UsageApiClient()
+        self._usage_client = usage_client
         self._wait_strategy = WaitStrategy(
             usage_client=usage_client, base_delay=base_delay,
         )
+
+    async def _usage_api_indicates_limit(self) -> bool:
+        """Ask the Anthropic usage API whether we are currently rate-limited.
+
+        Used as a fallback when the CLI exits non-zero with a stderr that
+        doesn't match any known rate-limit pattern (observed in the wild
+        when the CLI exits silently during a 5-hour quota window).
+
+        Returns ``False`` when the usage client is not configured or the
+        request fails — we prefer to surface a clean AgentRunError over
+        looping forever on an unknown failure.
+        """
+        if self._usage_client is None:
+            return False
+        try:
+            status = await self._usage_client.get_utilization()
+        except Exception:  # noqa: BLE001 — degrade gracefully
+            return False
+        return status is not None and status.is_limited
 
     def _resolve_model(self, model_alias: str) -> str:
         """Resolve a short model alias (e.g. 'opus') to a full model ID."""
@@ -324,8 +346,16 @@ class ClaudeRunner:
             if extracted_sid:
                 resume_session_id = extracted_sid
 
-            # Only retry rate limits — other errors raise immediately
-            if not RateLimitDetector.is_rate_limit(stderr_text):
+            # Only retry rate limits — other errors raise immediately.
+            # Fallback: when stderr is empty or unrecognised, ask the usage
+            # API before giving up — the CLI has been observed to exit
+            # silently during 5-hour quota windows.
+            rate_limit_detected = RateLimitDetector.is_rate_limit(stderr_text)
+            rate_limit_from_usage_api = False
+            if not rate_limit_detected:
+                rate_limit_from_usage_api = await self._usage_api_indicates_limit()
+
+            if not rate_limit_detected and not rate_limit_from_usage_api:
                 duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
                 emit(_event_log, AgentFailedEvent(
                     agent_name=agent.name,
@@ -369,6 +399,10 @@ class ClaudeRunner:
             assert isinstance(wait_result, tuple)
             wait_seconds, wait_source = wait_result
 
+            retry_reason = stderr_text[:200]
+            if rate_limit_from_usage_api and not stderr_text.strip():
+                retry_reason = "empty_stderr_usage_api_limited"
+
             emit(_event_log, AgentRetryEvent(
                 agent_name=agent.name,
                 model=agent.model,
@@ -376,7 +410,7 @@ class ClaudeRunner:
                 max_retries=self._max_retries,
                 wait_seconds=wait_seconds,
                 wait_source=wait_source,
-                reason=stderr_text[:200],
+                reason=retry_reason,
                 will_resume_session=resume_session_id is not None,
                 sprint=sprint,
                 message=(

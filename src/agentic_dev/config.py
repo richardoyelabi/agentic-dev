@@ -41,6 +41,22 @@ MODELS = {
     "sonnet": "claude-sonnet-4-6",
 }
 
+# ---------------------------------------------------------------------------
+# Rate-limit pause (pipeline-level) settings
+# ---------------------------------------------------------------------------
+
+# Maximum wait allowed during a single rate-limit pause before the pipeline
+# bails out to FAILED.  Must comfortably cover Anthropic's 5-hour quota window.
+RATE_LIMIT_PAUSE_MAX_SECONDS = 21_600  # 6 hours
+
+# Granularity of the CLI's sleep loop; keeps shutdown (Ctrl+C) responsive.
+RATE_LIMIT_PAUSE_POLL_INTERVAL_SECONDS = 10
+
+# Safeguard against pathological pause loops — e.g. the usage API flapping or
+# the runner repeatedly treating healthy failures as rate limits.  After this
+# many back-to-back pauses the CLI aborts with a clear error.
+MAX_CONSECUTIVE_RATE_LIMIT_PAUSES = 5
+
 DOCUMENT_SEPARATOR = "<!-- DOCUMENT: {name} -->"
 DOCUMENT_SEPARATOR_PATTERN = r"<!-- DOCUMENT: (\w+) -->"
 
