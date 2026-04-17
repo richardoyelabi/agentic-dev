@@ -1,3 +1,4 @@
+- option to brainstorm specs before starting
 - e2e for backends too?
 - multiple frontends and/or backends
 - support multiple codebases per frontend/backend e.g. for microservices and microfrontends
