@@ -1,7 +1,7 @@
-- uat for backend-only projects
+- e2e for backends too?
 - multiple frontends and/or backends
 - support multiple codebases per frontend/backend e.g. for microservices and microfrontends
--Native iOS / Android (no RN / Flutter) frontends
+- Native iOS / Android (no RN / Flutter) frontends
 - Multi-frontend projects (one project, both CLI and web) — if needed later, UAT becomes a fan-out
 - Accessibility assertions in web UAT
 - Visual regression in web/desktop UAT
