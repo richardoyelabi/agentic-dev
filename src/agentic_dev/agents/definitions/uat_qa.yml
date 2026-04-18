@@ -13,7 +13,8 @@ output_documents: [uat_qa_report]
 qa_agent: null
 constraints:
   - "Evaluate: does the UAT report test every acceptance criterion from the features?"
-  - "Evaluate: are pass/fail verdicts supported by concrete evidence?"
-  - "Check for superficial passes with no real verification"
+  - "Evaluate: are PASS verdicts supported by concrete driver-specific evidence (screenshots, transcripts, run logs)?"
+  - "Flag false-PASS sentinels: runtime mode without artifacts; Driver=none with overall PASS in uat_mode: full"
   - "Check for missing acceptance criteria not covered by the report"
   - "Check that cross-feature interactions were tested"
+  - "Spot-check artifact paths actually exist under .agentic-dev/uat_artifacts/<run_id>/"

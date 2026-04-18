@@ -37,6 +37,54 @@ The API Contract is the **single source of truth** for the frontend/backend inte
 
 {{ structured_input }}
 
+{% if frontend_kind is defined and project_type != "backend_only" %}
+# Frontend Kind: {{ frontend_kind }}
+
+The `## Frontend Kind` in the structured input indicates a **{{ frontend_kind }}** client surface. The `frontend_spec` MUST begin with a machine-readable header:
+
+```markdown
+## Frontend Kind
+{{ frontend_kind }}
+```
+
+{% if frontend_kind == "web" %}
+Use the default web-app frontend_spec structure shown below (Pages & Routes, Shared Components, State Management, etc.).
+{% elif frontend_kind == "cli" %}
+Structure the frontend_spec around the CLI surface rather than pages:
+
+- **Commands & Subcommands** — Each command gets an ID, purpose, required/optional flags, argument schema, stdout contract (data shape), stderr contract (error messages), and exit codes.
+- **Config & Environment** — Config file format, env vars, default paths.
+- **Interactive Mode vs Non-Interactive Mode** — Every command MUST support non-interactive invocation for automation.
+- **Error Handling** — Exit code table; stderr message format; how errors distinguish from data.
+- Replace "Pages & Routes" / "Shared Components" / "Authentication & Authorization" sections with Commands / Shared Helpers / Auth Flow (if any).
+{% elif frontend_kind == "desktop" %}
+Structure the frontend_spec for a desktop application. The spec MUST include a framework header:
+
+```markdown
+## desktop_framework
+electron | tauri
+```
+
+- **Windows & Menus** — Window definitions, menu structures, tray items.
+- **IPC Contracts** — Messages between main and renderer/webview.
+- **Packaging Target** — OS targets, installer format, auto-update channel.
+- In addition to the standard web-style sections (Pages, Components, State) for the webview content.
+{% elif frontend_kind == "mobile" %}
+Structure the frontend_spec for a mobile application. The spec MUST include a framework header:
+
+```markdown
+## mobile_framework
+react_native | flutter
+```
+
+- **Screens & Navigation** — Each screen with ID, features, and transitions; the navigation graph.
+- **Platform Lifecycle** — Foreground/background handling, deep links, notifications.
+- **State & Persistence** — In-memory state + on-device storage strategy.
+- **Target OSes** — iOS, Android, both; min versions.
+- Replace "Pages & Routes" with Screens & Navigation. Keep Shared Components, State Management, Error Handling.
+{% endif %}
+{% endif %}
+
 {% if figma_sources is defined and figma_sources %}
 # Figma Design Reference
 

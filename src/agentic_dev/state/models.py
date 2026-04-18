@@ -15,6 +15,21 @@ class ProjectType(StrEnum):
     BACKEND_ONLY = "backend_only"
 
 
+class FrontendKind(StrEnum):
+    """Kind of user-facing surface the project delivers.
+
+    Orthogonal to ProjectType: a CLI-only app is frontend_only+cli; a
+    mobile app with an HTTP backend is fullstack+mobile. NONE is valid
+    only when ProjectType == BACKEND_ONLY.
+    """
+
+    WEB = "web"
+    CLI = "cli"
+    DESKTOP = "desktop"
+    MOBILE = "mobile"
+    NONE = "none"
+
+
 class PipelinePhase(StrEnum):
     """Finite state machine phases for the development pipeline."""
 
@@ -89,6 +104,7 @@ class PipelineState(BaseModel):
 
     project_name: str
     project_type: ProjectType | None = None
+    frontend_kind: FrontendKind | None = None
     phase: PipelinePhase = PipelinePhase.IDLE
     mode: Literal["new", "update", "remediate", "adopt"] = "new"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

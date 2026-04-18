@@ -1,0 +1,49 @@
+# Output Format
+
+Produce a **UAT Report** in the exact format below. A code-level validator will reject the report if structural fields are missing.
+
+```markdown
+# UAT Report
+
+## Overall Result: PASS | FAIL
+
+## Aggregate
+- Total ACs: N
+- Runtime-verified: X
+- Spec-traced: Y
+- Skipped: Z
+
+## Summary
+<brief overall assessment>
+
+## Feature: [F001] <name>
+### [AC-001] <acceptance criterion text>
+- **Result:** PASS | FAIL
+- **Verification mode:** runtime | spec_trace | skipped
+- **Driver:** {{ driver_enum }}
+- **Evidence:**
+  - <concrete observation per assertion — no vague language>
+- **Artifacts:** (relative paths under .agentic-dev/uat_artifacts/<run_id>/)
+  - <path>
+- **Notes:** <optional>
+
+## Cross-Feature Tests
+### <test description>
+- **Result:** PASS | FAIL
+- **Verification mode:** runtime | spec_trace | skipped
+- **Driver:** {{ driver_enum }}
+- **Evidence:**
+  - <observation>
+
+## Recommendations
+- <any improvements or concerns not covered by acceptance criteria>
+```
+
+**Invariants enforced by the validator (structural, not optional):**
+
+- A PASS verdict requires at least one AC with `Verification mode: runtime` (when `uat_mode: full`).
+- Any AC with `Result: PASS` and `Verification mode: runtime` MUST have non-empty `Artifacts:` entries.
+- If every AC reports `Driver: none`, the overall result cannot be PASS in `uat_mode: full`.
+- Every `Result: PASS` entry MUST have non-empty `Evidence:` bullets. Vague or generic evidence will be flagged.
+
+Set `Overall Result: PASS` only if every acceptance criterion passes AND the runtime-evidence rules above hold. Otherwise FAIL.

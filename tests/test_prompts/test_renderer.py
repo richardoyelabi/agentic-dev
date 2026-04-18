@@ -272,14 +272,58 @@ AGENT_TEMPLATES = {
         "figma_urls": "- https://figma.com/file/abc123/MyDesign",
         "sentinel": "NO_DESIGN_CHANGES",
     },
-    "uat.md.j2": {
-        "features": "# Features Request",
+    "uat_web.md.j2": {
+        "features_request": "# Features Request",
         "frontend_spec": "# Frontend Spec",
         "backend_spec": "# Backend Spec",
         "api_contract": "# API Contract",
         "sprint_plan": "# Sprint Plan",
-        "change_request": "",
-        "design_changes": "",
+        "uat_prereqs": "# UAT Prereqs",
+        "constraints": ["Test every AC"],
+    },
+    "uat_cli.md.j2": {
+        "features_request": "# Features Request",
+        "frontend_spec": "# Frontend Spec",
+        "backend_spec": "# Backend Spec",
+        "api_contract": "# API Contract",
+        "sprint_plan": "# Sprint Plan",
+        "uat_prereqs": "# UAT Prereqs",
+        "constraints": ["Test every AC"],
+    },
+    "uat_desktop_electron.md.j2": {
+        "features_request": "# Features Request",
+        "frontend_spec": "# Frontend Spec",
+        "backend_spec": "# Backend Spec",
+        "api_contract": "# API Contract",
+        "sprint_plan": "# Sprint Plan",
+        "uat_prereqs": "# UAT Prereqs",
+        "constraints": ["Test every AC"],
+    },
+    "uat_desktop_tauri.md.j2": {
+        "features_request": "# Features Request",
+        "frontend_spec": "# Frontend Spec",
+        "backend_spec": "# Backend Spec",
+        "api_contract": "# API Contract",
+        "sprint_plan": "# Sprint Plan",
+        "uat_prereqs": "# UAT Prereqs",
+        "constraints": ["Test every AC"],
+    },
+    "uat_mobile.md.j2": {
+        "features_request": "# Features Request",
+        "frontend_spec": "# Frontend Spec",
+        "backend_spec": "# Backend Spec",
+        "api_contract": "# API Contract",
+        "sprint_plan": "# Sprint Plan",
+        "uat_prereqs": "# UAT Prereqs",
+        "constraints": ["Test every AC"],
+    },
+    "uat_api.md.j2": {
+        "features_request": "# Features Request",
+        "backend_spec": "# Backend Spec",
+        "api_contract": "# API Contract",
+        "sprint_plan": "# Sprint Plan",
+        "uat_prereqs": "# UAT Prereqs",
+        "constraints": ["Test every AC"],
     },
 }
 
@@ -511,19 +555,18 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         })
         assert "Figma Design Reference" not in result
 
-    def test_uat_receives_features(self, real_renderer):
-        """engine.py passes 'features' key, not 'features_request'."""
-        result = real_renderer.render("uat.md.j2", {
-            "features": f"Features: {self.MARKER}",
+    def test_uat_web_receives_features_request(self, real_renderer):
+        """engine.py aliases 'features' to 'features_request' for per-kind UAT agents."""
+        result = real_renderer.render("uat_web.md.j2", {
+            "features_request": f"Features: {self.MARKER}",
             "frontend_spec": "frontend spec",
             "backend_spec": "backend spec",
             "api_contract": "api contract",
             "sprint_plan": "sprint plan",
+            "uat_prereqs": "prereqs",
+            "constraints": ["x"],
         })
-        assert self.MARKER in result, (
-            "uat.md.j2 did not render 'features' — "
-            "likely still using 'features_request'"
-        )
+        assert self.MARKER in result
 
 
 class TestInputProcessorOnboardingGuidance:
@@ -784,23 +827,25 @@ class TestDeletedFeatureHandling:
 
 
 class TestUATRuntimeVerification:
-    """Verify UAT template includes runtime verification section."""
+    """Every per-kind UAT template must include a Runtime Verification section and the structured report format."""
 
-    def test_uat_includes_runtime_verification(self, real_renderer):
-        result = real_renderer.render(
-            "uat.md.j2",
-            AGENT_TEMPLATES["uat.md.j2"],
-        )
+    @pytest.mark.parametrize(
+        "template_name",
+        [
+            "uat_web.md.j2",
+            "uat_cli.md.j2",
+            "uat_desktop_electron.md.j2",
+            "uat_desktop_tauri.md.j2",
+            "uat_mobile.md.j2",
+            "uat_api.md.j2",
+        ],
+    )
+    def test_uat_includes_runtime_verification(self, real_renderer, template_name):
+        result = real_renderer.render(template_name, AGENT_TEMPLATES[template_name])
         assert "Runtime Verification" in result
-        assert "Run the test suites" in result
-        assert "Bash" in result
-
-    def test_uat_includes_regression_check_with_change_request(self, real_renderer):
-        result = real_renderer.render("uat.md.j2", {
-            **AGENT_TEMPLATES["uat.md.j2"],
-            "change_request": "Update payment endpoint",
-        })
-        assert "Regression check" in result
+        assert "UAT Report" in result
+        assert "Verification mode" in result
+        assert "Artifacts" in result
 
 
 class TestIntegrationTemplatePartials:

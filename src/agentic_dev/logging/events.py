@@ -464,3 +464,12 @@ class MCPValidationEvent(LogEvent):
     event_type: str = "mcp_validation"
     warnings: list[str]
     level: str = "WARNING"
+
+
+class UATPrereqValidationEvent(LogEvent):
+    """Emitted when pre-UAT prereq validation finds missing tools or runtime env."""
+
+    event_type: str = "uat_prereq_validation"
+    agent_name: str
+    missing: list[str]
+    level: str = "WARNING"

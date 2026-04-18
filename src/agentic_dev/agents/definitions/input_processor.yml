@@ -15,3 +15,4 @@ constraints:
   - "Separate feature requirements from preferences (tech stack, deployment, UI/UX)"
   - "Assign feature IDs in format [F001]"
   - "Preserve all user preferences without modification"
+  - "Emit a ## Frontend Kind block with one of: web, cli, desktop, mobile, none — see frontend kind rules in the output format section"

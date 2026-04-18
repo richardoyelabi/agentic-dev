@@ -32,6 +32,7 @@ from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import (
     AgentRunRecord,
+    FrontendKind,
     PipelinePhase,
     PipelineState,
     ProjectType,
@@ -267,6 +268,10 @@ class PipelineEngine:
         await self._commit_docs_changes("docs: structured input from requirements")
 
         state.project_type = self._parse_project_type(result.output)
+        if state.frontend_kind is None:
+            state.frontend_kind = self._parse_frontend_kind(
+                result.output, has_frontend=state.has_frontend
+            )
 
         # Create code directories based on detected project type
         frontend_name = self._directory_map.frontend or "frontend"
@@ -288,6 +293,24 @@ class PipelineEngine:
         if match:
             return ProjectType(match.group(1))
         return ProjectType.FULLSTACK
+
+    @staticmethod
+    def _parse_frontend_kind(
+        structured_input: str, has_frontend: bool
+    ) -> FrontendKind:
+        """Extract the frontend kind from the structured input document.
+
+        When the block is absent or value is unrecognized, defaults to ``web``
+        for projects that have a frontend and ``none`` otherwise.
+        """
+        match = re.search(
+            r"##\s*Frontend\s+Kind\s*\n\s*(web|cli|desktop|mobile|none)",
+            structured_input,
+            re.IGNORECASE,
+        )
+        if match:
+            return FrontendKind(match.group(1).lower())
+        return FrontendKind.WEB if has_frontend else FrontendKind.NONE
 
     async def _merge_change_request(self, state: PipelineState) -> None:
         """Merge a pending change_request into structured_input.
@@ -382,6 +405,8 @@ class PipelineEngine:
 
         project_type_str = state.project_type.value if state.project_type else "fullstack"
         extra_context = {"project_type": project_type_str}
+        if state.frontend_kind is not None:
+            extra_context["frontend_kind"] = state.frontend_kind.value
         extra_context.update(self._update_extra_context(state))
 
         result = await run_qa_cycle(
@@ -703,17 +728,74 @@ class PipelineEngine:
         return advance_phase(state, PipelinePhase.UAT)
 
     async def _run_uat(self, state: PipelineState) -> PipelineState:
-        """Run the UAT agent with QA cycle."""
-        input_docs = {}
-        for doc_name in ["features", "frontend_spec", "backend_spec", "api_contract", "sprint_plan"]:
+        """Run the per-kind UAT agent with QA cycle + false-PASS validator."""
+        from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, load_project_config
+        from agentic_dev.uat.dispatcher import (
+            _read_desktop_framework,
+            pick_uat_agent,
+        )
+        from agentic_dev.uat.prereqs import (
+            check_prereqs,
+            render_doc as render_prereqs_doc,
+        )
+        from agentic_dev.uat.validator import validate_uat_report
+
+        project_type = state.project_type or ProjectType.FULLSTACK
+        frontend_kind = state.frontend_kind or (
+            FrontendKind.NONE if project_type == ProjectType.BACKEND_ONLY
+            else FrontendKind.WEB
+        )
+
+        desktop_framework: str | None = None
+        if (
+            frontend_kind == FrontendKind.DESKTOP
+            and self._doc_store.exists("frontend_spec")
+        ):
+            desktop_framework = _read_desktop_framework(
+                self._doc_store.read("frontend_spec")
+            )
+
+        prereq_result = check_prereqs(
+            project_type=project_type,
+            frontend_kind=frontend_kind,
+            desktop_framework=desktop_framework,
+            project_dir=self._project_dir,
+        )
+        self._doc_store.write("uat_prereqs", render_prereqs_doc(prereq_result))
+
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        artifacts_dir = (
+            self._project_dir / AGENTIC_DEV_METADATA_DIR / "uat_artifacts" / run_id
+        )
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        agent_name = pick_uat_agent(
+            project_type=project_type,
+            frontend_kind=frontend_kind,
+            desktop_framework=desktop_framework,
+        )
+        agent_def = self._registry.get(agent_name)
+
+        input_docs: dict[str, str] = {}
+        for doc_name in agent_def.input_documents:
             if self._doc_store.exists(doc_name):
                 input_docs[doc_name] = self._doc_store.read(doc_name)
+        # Back-compat alias: older specs used "features"; the new UAT agents
+        # declare "features_request". Supply it from either name.
+        if (
+            "features_request" in agent_def.input_documents
+            and "features_request" not in input_docs
+            and self._doc_store.exists("features")
+        ):
+            input_docs["features_request"] = self._doc_store.read("features")
 
         extra_context = self._update_extra_context(state)
+        extra_context["frontend_kind"] = frontend_kind.value
+        extra_context["run_id"] = run_id
 
         result = await run_qa_cycle(
             claude=self._claude,
-            action_agent=self._registry.get("uat"),
+            action_agent=agent_def,
             qa_agent=self._registry.get("uat_qa"),
             input_docs=input_docs,
             output_doc_name="uat_report",
@@ -724,9 +806,15 @@ class PipelineEngine:
             extra_context=extra_context,
         )
 
+        cfg = load_project_config(self._project_dir)
+        uat_report = self._doc_store.read("uat_report")
+        validated = validate_uat_report(uat_report, uat_mode=cfg.uat_mode)
+        if validated != uat_report:
+            self._doc_store.write("uat_report", validated)
+
         state.total_cost_usd += result.total_cost
         state.active_session_id = None
-        self._record_agent_run(state, "uat", result.total_cost)
+        self._record_agent_run(state, agent_name, result.total_cost)
         await self._commit_docs_changes("docs: UAT report")
 
         return advance_phase(state, PipelinePhase.UAT_QA)

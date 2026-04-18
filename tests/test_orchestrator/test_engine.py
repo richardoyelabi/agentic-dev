@@ -22,6 +22,7 @@ from agentic_dev.orchestrator.engine import PipelineEngine
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import (
+    FrontendKind,
     PipelinePhase,
     PipelineState,
     ProjectType,
@@ -616,6 +617,84 @@ class TestProjectTypeDetection:
                 await engine.run()
 
         assert state.project_type == ProjectType.FULLSTACK
+
+
+class TestParseFrontendKind:
+    """Static tests for PipelineEngine._parse_frontend_kind."""
+
+    @pytest.mark.parametrize(
+        "block_value,expected",
+        [
+            ("web", FrontendKind.WEB),
+            ("cli", FrontendKind.CLI),
+            ("desktop", FrontendKind.DESKTOP),
+            ("mobile", FrontendKind.MOBILE),
+            ("none", FrontendKind.NONE),
+        ],
+    )
+    def test_parses_explicit_block(self, block_value, expected):
+        text = (
+            "# Structured Input\n"
+            "## Project Type\nfullstack\n"
+            f"## Frontend Kind\n{block_value}\n"
+            "## Feature Requirements\n- x"
+        )
+        assert PipelineEngine._parse_frontend_kind(text, has_frontend=True) == expected
+
+    def test_missing_block_defaults_to_web_when_has_frontend(self):
+        text = "# Structured Input\n## Project Type\nfullstack"
+        assert (
+            PipelineEngine._parse_frontend_kind(text, has_frontend=True)
+            == FrontendKind.WEB
+        )
+
+    def test_missing_block_defaults_to_none_when_no_frontend(self):
+        text = "# Structured Input\n## Project Type\nbackend_only"
+        assert (
+            PipelineEngine._parse_frontend_kind(text, has_frontend=False)
+            == FrontendKind.NONE
+        )
+
+    def test_case_insensitive_header_and_value(self):
+        text = "## frontend kind\nCLI\n"
+        assert (
+            PipelineEngine._parse_frontend_kind(text, has_frontend=True)
+            == FrontendKind.CLI
+        )
+
+    def test_unknown_value_falls_back_to_default(self):
+        text = "## Frontend Kind\nunknown_value\n"
+        assert (
+            PipelineEngine._parse_frontend_kind(text, has_frontend=True)
+            == FrontendKind.WEB
+        )
+
+    @pytest.mark.asyncio
+    async def test_input_processing_stores_frontend_kind_on_state(
+        self, engine, state_manager, claude, doc_store
+    ):
+        """_run_input_processing should populate state.frontend_kind."""
+        state = _make_state(PipelinePhase.INPUT_PROCESSING)
+        state_manager.load = MagicMock(return_value=state)
+
+        structured_output = (
+            "# Structured Input\n"
+            "## Project Type\nfrontend_only\n"
+            "## Frontend Kind\nmobile\n"
+            "## Feature Requirements\n- Build a mobile app"
+        )
+        claude.run.side_effect = [
+            _make_claude_result(structured_output, cost=0.05),
+            _make_claude_result("APPROVED", cost=0.03),
+        ]
+
+        with patch.object(
+            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
+        ):
+            with pytest.raises(AgentRunError):
+                await engine.run()
+
+        assert state.frontend_kind == FrontendKind.MOBILE
 
     @pytest.mark.asyncio
     async def test_architecture_uses_expected_docs_for_frontend_only(

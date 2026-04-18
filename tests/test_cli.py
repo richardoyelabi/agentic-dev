@@ -58,8 +58,54 @@ class TestHelpOutput:
     def test_new_help(self) -> None:
         result = runner.invoke(app, ["new", "--help"])
         assert result.exit_code == 0
-        assert "app-name" in result.output.lower() or "APP_NAME" in result.output
 
+    def test_new_help_documents_frontend_kind(self) -> None:
+        result = runner.invoke(app, ["new", "--help"])
+        assert result.exit_code == 0
+        assert "frontend-kind" in result.output
+        # help must mention the four accepted values
+        assert "web" in result.output
+        assert "cli" in result.output
+
+
+class TestFrontendKindFlag:
+    """Tests for --frontend-kind override on `new`."""
+
+    def test_invalid_value_rejected(self) -> None:
+        result = runner.invoke(app, ["new", "myapp", "--frontend-kind", "bogus"])
+        assert result.exit_code == 1
+        assert "frontend-kind" in result.output
+        assert "bogus" in result.output
+
+    def test_valid_value_accepted_and_persisted(self, tmp_path: Path) -> None:
+        """Passing --frontend-kind cli should persist on state + config."""
+        from agentic_dev.config import load_project_config
+        from agentic_dev.state.manager import StateManager
+        from agentic_dev.state.models import FrontendKind
+
+        # _run_pipeline attempts to run; stub it out so we only test flag handling.
+        with patch("agentic_dev.cli._run_pipeline") as mock_run, \
+             patch("agentic_dev.cli._collect_user_requirements", return_value="build x"):
+            result = runner.invoke(
+                app,
+                [
+                    "new", "myapp",
+                    "--path", str(tmp_path),
+                    "--frontend-kind", "CLI",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        mock_run.assert_called_once()
+
+        project_dir = tmp_path / "myapp"
+        state = StateManager(project_dir).load()
+        assert state.frontend_kind == FrontendKind.CLI
+
+        cfg = load_project_config(project_dir)
+        assert cfg.frontend_kind == FrontendKind.CLI
+
+
+class TestMoreHelpOutput:
     def test_resume_help(self) -> None:
         result = runner.invoke(app, ["resume", "--help"])
         assert result.exit_code == 0

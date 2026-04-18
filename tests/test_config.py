@@ -17,6 +17,7 @@ from agentic_dev.config import (
     save_project_config,
 )
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
+from agentic_dev.state.models import FrontendKind
 
 
 class TestDirectoryMap:
@@ -163,6 +164,105 @@ class TestConfigMigration:
         assert config.checkpoint.after_design is True
         assert config.checkpoint.after_each_sprint is True
         assert config.checkpoint.before_uat is True
+
+
+class TestProjectConfigFrontendKind:
+    """Tests for frontend_kind and uat_mode on ProjectConfig + migration."""
+
+    def test_defaults_frontend_kind_none_uat_mode_full(self):
+        config = ProjectConfig(app_name="my-app")
+        assert config.frontend_kind is None
+        assert config.uat_mode == "full"
+
+    def test_set_frontend_kind_and_uat_mode_explicitly(self):
+        config = ProjectConfig(
+            app_name="my-app",
+            frontend_kind=FrontendKind.CLI,
+            uat_mode="spec_only",
+        )
+        assert config.frontend_kind == FrontendKind.CLI
+        assert config.uat_mode == "spec_only"
+
+    def test_invalid_uat_mode_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ProjectConfig(app_name="my-app", uat_mode="something_else")
+
+    def test_load_config_without_new_fields_uses_defaults(self, tmp_path):
+        """Old config without frontend_kind or uat_mode loads with defaults."""
+        project_dir = tmp_path / "my-app"
+        config_dir = project_dir / AGENTIC_DEV_METADATA_DIR
+        config_dir.mkdir(parents=True)
+        (config_dir / CONFIG_FILE).write_text(json.dumps({
+            "app_name": "my-app",
+            "checkpoint": {
+                "after_design": True,
+                "after_each_sprint": False,
+                "before_uat": False,
+            },
+        }))
+
+        config = load_project_config(project_dir)
+        assert config.uat_mode == "full"
+
+    def test_migration_defaults_frontend_kind_to_web_when_frontend_dir_set(
+        self, tmp_path
+    ):
+        """Existing project with a frontend dir but no frontend_kind migrates to web."""
+        project_dir = tmp_path / "my-app"
+        config_dir = project_dir / AGENTIC_DEV_METADATA_DIR
+        config_dir.mkdir(parents=True)
+        (config_dir / CONFIG_FILE).write_text(json.dumps({
+            "app_name": "my-app",
+            "directory_map": {"frontend": "client", "backend": "server"},
+        }))
+
+        config = load_project_config(project_dir)
+        assert config.frontend_kind == FrontendKind.WEB
+
+    def test_migration_leaves_frontend_kind_none_when_no_frontend_dir(
+        self, tmp_path
+    ):
+        """Backend-only projects (no frontend dir) keep frontend_kind=None."""
+        project_dir = tmp_path / "my-app"
+        config_dir = project_dir / AGENTIC_DEV_METADATA_DIR
+        config_dir.mkdir(parents=True)
+        (config_dir / CONFIG_FILE).write_text(json.dumps({
+            "app_name": "my-app",
+            "directory_map": {"backend": "server"},
+        }))
+
+        config = load_project_config(project_dir)
+        assert config.frontend_kind is None
+
+    def test_explicit_frontend_kind_is_honored(self, tmp_path):
+        """An explicit frontend_kind in the JSON must not be overridden by migration."""
+        project_dir = tmp_path / "my-app"
+        config_dir = project_dir / AGENTIC_DEV_METADATA_DIR
+        config_dir.mkdir(parents=True)
+        (config_dir / CONFIG_FILE).write_text(json.dumps({
+            "app_name": "my-app",
+            "directory_map": {"frontend": "client"},
+            "frontend_kind": "cli",
+        }))
+
+        config = load_project_config(project_dir)
+        assert config.frontend_kind == FrontendKind.CLI
+
+    def test_save_reload_roundtrip_preserves_new_fields(self, tmp_path):
+        project_dir = tmp_path / "my-app"
+        (project_dir / AGENTIC_DEV_METADATA_DIR).mkdir(parents=True)
+
+        original = ProjectConfig(
+            app_name="my-app",
+            frontend_kind=FrontendKind.MOBILE,
+            uat_mode="spec_only",
+        )
+        save_project_config(project_dir, original)
+        restored = load_project_config(project_dir)
+        assert restored.frontend_kind == FrontendKind.MOBILE
+        assert restored.uat_mode == "spec_only"
 
 
 class TestProjectRegistry:

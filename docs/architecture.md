@@ -90,22 +90,47 @@ Text-based service detection using regex patterns. Scans sprint plan text for re
 Rich-formatted prerequisite validation and guided setup helpers. Checks Claude Code settings for configured MCP servers and guides users to `claude mcp add` or Claude Code's OAuth UI.
 
 ### `config.py`
-Global settings, constants, and project configuration models. Contains `ProjectConfig` (with `DirectoryMap`, `ExternalSource`, checkpoint config, sync ignores), config migration logic, and the global project registry.
+Global settings, constants, and project configuration models. Contains `ProjectConfig` (with `DirectoryMap`, `ExternalSource`, checkpoint config, sync ignores, `frontend_kind`, and `uat_mode`), config migration logic, and the global project registry.
+
+### `uat/dispatcher.py`
+Pure-logic module that maps `(ProjectType, FrontendKind, desktop_framework)` to a concrete UAT agent name (`uat_web`, `uat_cli`, `uat_desktop_electron`, `uat_desktop_tauri`, `uat_mobile`, `uat_api`). Invalid combinations raise `ValueError`. Also hosts `_read_desktop_framework()` which extracts the `desktop_framework` header from a `frontend_spec` text.
+
+### `uat/prereqs.py`
+Runtime prereq probes for each per-kind UAT agent. Checks that driver tools are not only on PATH but actually usable (e.g., `maestro --version` plus `maestro doctor`; `flutter --version` plus a booted non-web device). Emits `UATPrereqValidationEvent` and writes a structured `uat_prereqs` document the UAT agent reads before starting.
+
+### `uat/validator.py`
+Code-level enforcement of the false-PASS invariant. Parses the UAT report after the action agent completes and rewrites `Overall: PASS` to `FAIL` (prepending a `## Validator Override` section) when any of four structural rules fail: no runtime AC, runtime PASS without artifacts, all-`none` drivers with overall PASS in `uat_mode: full`, or any PASS AC lacking concrete `Evidence:` bullets.
 
 ## Data Flow
 
 Text and design are parallel input channels that merge into `extra_context` flowing to all downstream agents.
 
-1. User input → Input Processor → Structured Input
+1. User input → Input Processor → Structured Input (includes `## Project Type` and `## Frontend Kind`)
 2. Figma URLs → Figma Analyzer → Design Analyses + Figma Sources (stored independently)
 3. On update (`--full-spec`): old + new Structured Input → Spec Diff → Spec Changes
 4. On update (`--from-figma`): old + new Design Analyses → Design Diff → Design Changes
 5. Structured Input → Feature Analyst (+QA) → Features Request
-6. Features Request → Architect (+QA) → Frontend Spec + Backend Spec + API Contract
+6. Features Request → Architect (+QA; frontend_kind-aware) → Frontend Spec + Backend Spec + API Contract
 7. All specs → Sprint Planner (+QA) → Sprint Plan
-8. Per sprint: specs + sprint scope + extra_context → Dev agents (+QA) → Code
+8. Per sprint: specs + sprint scope + `frontend_kind` + extra_context → Dev agents (+QA; kind-aware templates) → Code
    - Frontend agents also receive Figma Sources + `figma_mcp_available` for direct design access
-9. All code + extra_context → UAT → Report
+9. Pre-UAT: prereq probes write `uat_prereqs` doc; artifacts directory created at `.agentic-dev/uat_artifacts/<run_id>/`
+10. Per-kind UAT agent drives the running product → UAT Report → Validator (false-PASS gate) → UAT QA review
+
+## FrontendKind axis
+
+`FrontendKind` is orthogonal to `ProjectType`. `ProjectType` decides which specs exist (fullstack/frontend_only/backend_only); `FrontendKind` decides *how* the client is built and verified.
+
+| FrontendKind | Developer guidance | UAT driver |
+|---|---|---|
+| `web` | Pages / components / routing | Playwright MCP |
+| `cli` | Commands / flags / stdout-stderr contract / non-interactive mode | subprocess (Bash) |
+| `desktop` (electron) | Windows, menus, IPC, packaging | Playwright attached via CDP |
+| `desktop` (tauri) | Windows, menus, IPC, packaging | `tauri-driver` (WebDriver) |
+| `mobile` | Screens, navigation, platform lifecycle | Maestro (fallback: project's own integration_test) |
+| `none` | — | `uat_api` drives HTTP surface directly |
+
+The detected kind lives on `PipelineState.frontend_kind` and `ProjectConfig.frontend_kind`. It can also be overridden at project creation time via `agentic-dev new --frontend-kind <kind>`.
 
 ## State Machine
 
@@ -113,7 +138,8 @@ Text and design are parallel input channels that merge into `extra_context` flow
 New project pipeline:
 IDLE → INPUT_PROCESSING → INPUT_PROCESSING_QA → FEATURE_ANALYSIS →
 FEATURE_ANALYSIS_QA → ARCHITECTURE → ARCHITECTURE_QA → SPRINT_PLANNING →
-SPRINT_PLANNING_QA → DESIGN_CHECKPOINT → SPRINTING → UAT → UAT_QA → COMPLETE
+SPRINT_PLANNING_QA → DESIGN_CHECKPOINT → SPRINTING →
+UAT (prereq-probe → dispatch → runtime-drive → validator) → UAT_QA → COMPLETE
 
 Adoption:
 IDLE → ADOPTING → ADOPTED (or → INPUT_PROCESSING if --extend)

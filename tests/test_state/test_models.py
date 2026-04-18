@@ -4,6 +4,7 @@ import pytest
 
 from agentic_dev.state.models import (
     DriftItem,
+    FrontendKind,
     PipelinePhase,
     PipelineState,
     ProjectType,
@@ -345,3 +346,80 @@ class TestDriftItemAndSyncReport:
         restored = SyncReport.model_validate(data)
         assert restored.items[0].id == "DRIFT-001"
         assert restored.items[0].resolution == "to_code"
+
+
+class TestFrontendKind:
+    """Tests for the FrontendKind enum."""
+
+    def test_enum_values(self):
+        assert FrontendKind.WEB == "web"
+        assert FrontendKind.CLI == "cli"
+        assert FrontendKind.DESKTOP == "desktop"
+        assert FrontendKind.MOBILE == "mobile"
+        assert FrontendKind.NONE == "none"
+
+    def test_from_string(self):
+        assert FrontendKind("web") == FrontendKind.WEB
+        assert FrontendKind("cli") == FrontendKind.CLI
+        assert FrontendKind("desktop") == FrontendKind.DESKTOP
+        assert FrontendKind("mobile") == FrontendKind.MOBILE
+        assert FrontendKind("none") == FrontendKind.NONE
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError):
+            FrontendKind("invalid")
+
+
+class TestPipelineStateFrontendKind:
+    """Tests for frontend_kind field on PipelineState."""
+
+    def test_frontend_kind_defaults_to_none(self):
+        state = PipelineState(project_name="test")
+        assert state.frontend_kind is None
+
+    def test_frontend_kind_set_explicitly(self):
+        state = PipelineState(
+            project_name="test",
+            frontend_kind=FrontendKind.MOBILE,
+        )
+        assert state.frontend_kind == FrontendKind.MOBILE
+
+    def test_frontend_kind_serializes_to_json(self):
+        state = PipelineState(
+            project_name="test",
+            frontend_kind=FrontendKind.CLI,
+        )
+        data = state.model_dump()
+        assert data["frontend_kind"] == "cli"
+
+    def test_frontend_kind_deserializes_from_json(self):
+        data = {"project_name": "test", "frontend_kind": "desktop"}
+        state = PipelineState.model_validate(data)
+        assert state.frontend_kind == FrontendKind.DESKTOP
+
+    def test_frontend_kind_missing_in_json(self):
+        data = {"project_name": "test"}
+        state = PipelineState.model_validate(data)
+        assert state.frontend_kind is None
+
+    def test_frontend_kind_independent_of_project_type(self):
+        """frontend_kind and project_type are orthogonal axes; any combo is allowed by the model itself (invalid combos are rejected by the dispatcher, not the model)."""
+        state = PipelineState(
+            project_name="test",
+            project_type=ProjectType.FULLSTACK,
+            frontend_kind=FrontendKind.MOBILE,
+        )
+        assert state.project_type == ProjectType.FULLSTACK
+        assert state.frontend_kind == FrontendKind.MOBILE
+
+    def test_expected_architecture_docs_unchanged_regardless_of_frontend_kind(self):
+        """Adding FrontendKind must not alter expected_architecture_docs logic."""
+        for kind in FrontendKind:
+            state = PipelineState(
+                project_name="test",
+                project_type=ProjectType.FULLSTACK,
+                frontend_kind=kind,
+            )
+            assert state.expected_architecture_docs == [
+                "frontend_spec", "backend_spec", "api_contract"
+            ]

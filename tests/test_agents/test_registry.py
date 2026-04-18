@@ -20,7 +20,8 @@ class TestAgentRegistry:
 
     def test_loads_all_definitions(self, registry: AgentRegistry):
         agents = registry.list_agents()
-        assert len(agents) == 31
+        # 31 original − 1 removed (old `uat`) + 6 per-kind UAT agents = 36
+        assert len(agents) == 36
 
     def test_get_returns_correct_agent(self, registry: AgentRegistry):
         architect = registry.get("architect")
@@ -62,9 +63,17 @@ class TestAgentRegistry:
 
     def test_list_by_team_qa(self, registry: AgentRegistry):
         qa_agents = registry.list_by_team("qa")
-        assert len(qa_agents) == 2
+        assert len(qa_agents) == 7
         names = {a.name for a in qa_agents}
-        assert names == {"uat", "uat_qa"}
+        assert names == {
+            "uat_web",
+            "uat_cli",
+            "uat_desktop_electron",
+            "uat_desktop_tauri",
+            "uat_mobile",
+            "uat_api",
+            "uat_qa",
+        }
 
     def test_list_by_team_returns_empty_for_unknown_team(
         self, registry: AgentRegistry

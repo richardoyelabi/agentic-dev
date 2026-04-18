@@ -44,6 +44,8 @@ Produce a **Structured Input** document in the following markdown format:
 # Structured Input
 ## Project Type
 <fullstack | frontend_only | backend_only>
+## Frontend Kind
+<web | cli | desktop | mobile | none>
 ## Feature Requirements
 - [F001] <feature name>: <description>
 - [F002] ...
@@ -64,9 +66,17 @@ Produce a **Structured Input** document in the following markdown format:
 ```
 
 **Project type rules:**
-- `fullstack` — The project has both a custom frontend and a custom backend.
-- `frontend_only` — The project has only a frontend/UI. This includes apps that use a Backend-as-a-Service (BaaS) like Supabase, Firebase, or Convex — the BaaS replaces a custom backend. If the user mentions a BaaS provider or describes only UI/client-side features with no custom server logic, use this type.
-- `backend_only` — The project has only a backend: an API, CLI tool, library, or service with no user-facing UI.
+- `fullstack` — The project has both a user-facing surface (web, CLI, desktop, or mobile) and a custom backend.
+- `frontend_only` — The project has only a user-facing surface — no custom backend. This includes apps that use a Backend-as-a-Service (BaaS) like Supabase, Firebase, or Convex; the BaaS replaces a custom backend. Also includes standalone CLIs, desktop apps, and mobile apps with no custom server.
+- `backend_only` — The project has only a backend: an API, library, or service with no user-facing surface at all.
 - When in doubt, default to `fullstack`.
+
+**Frontend kind rules:**
+- `web` — A web app (browser-based). Use this for React/Vue/Next/Svelte/etc.
+- `cli` — A command-line tool invoked from a shell. Use this for `typer`, `click`, `cobra`, Bubble Tea, etc.
+- `desktop` — A desktop app. Use this for Tauri or Electron applications.
+- `mobile` — A mobile app. Use this for React Native (Expo) or Flutter.
+- `none` — Only valid when `Project Type` is `backend_only`. Indicates there is no user-facing surface at all.
+- If the user specifies the finer stack (e.g. "React Native" vs "Flutter"), record it under Preferences > Tech Stack while keeping the Frontend Kind coarse-grained.
 
 If the user did not specify a preference, omit that line rather than guessing. Keep feature descriptions concise but complete. Each feature should represent a distinct, testable piece of functionality.

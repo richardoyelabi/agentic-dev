@@ -633,6 +633,65 @@ class TestFigmaExtraContext:
 
         await frontend_only_runner.run_sprint(1, "Build UI")
 
+
+class TestFrontendKindExtraContext:
+    """frontend_kind from pipeline_state threads into frontend dev/QA extra_context."""
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle", new_callable=AsyncMock)
+    async def test_frontend_kind_passed_when_state_has_it(
+        self, mock_qa_cycle, claude, registry, doc_store, prompt_renderer, project_dir
+    ):
+        from agentic_dev.orchestrator.sprint_runner import SprintRunner
+        from agentic_dev.state.models import FrontendKind, PipelineState
+
+        state = PipelineState(project_name="p", frontend_kind=FrontendKind.CLI)
+        runner = SprintRunner(
+            claude=claude,
+            registry=registry,
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            project_dir=project_dir,
+            project_type="frontend_only",
+            pipeline_state=state,
+        )
+
+        doc_store.exists.return_value = False
+        doc_store.read.side_effect = lambda name: {
+            "frontend_spec": "# Frontend Spec",
+            "api_contract": "",
+        }.get(name.replace(".md", ""), "")
+
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="frontend output", session_id="s1",
+        )
+
+        await runner.run_sprint(1, "Build CLI")
+
+        call_kwargs = mock_qa_cycle.call_args.kwargs
+        assert call_kwargs["input_docs"]["frontend_kind"] == "cli"
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.orchestrator.sprint_runner.run_qa_cycle", new_callable=AsyncMock)
+    async def test_frontend_kind_absent_when_no_state(
+        self, mock_qa_cycle, frontend_only_runner, doc_store
+    ):
+        """Without pipeline_state, extra_context has no frontend_kind key."""
+        doc_store.exists.return_value = False
+        doc_store.read.side_effect = lambda name: {
+            "frontend_spec": "# Frontend Spec",
+            "api_contract": "",
+        }.get(name.replace(".md", ""), "")
+
+        mock_qa_cycle.return_value = MagicMock(
+            total_cost=0.1, output="frontend output", session_id="s1",
+        )
+
+        await frontend_only_runner.run_sprint(1, "Build UI")
+
+        call_kwargs = mock_qa_cycle.call_args.kwargs
+        assert "frontend_kind" not in call_kwargs["input_docs"]
+
         call_kwargs = mock_qa_cycle.call_args.kwargs
         assert "figma_sources" not in call_kwargs["input_docs"]
         assert "figma_mcp_available" not in call_kwargs["input_docs"]

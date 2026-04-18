@@ -36,18 +36,26 @@ The following design elements changed in this update cycle. Verify the UAT repor
 
 Evaluate against these five criteria:
 
-1. **Does it do what it is supposed to do?** — Every acceptance criterion from the Features Request has a corresponding test entry in the UAT Report. No criteria are skipped or missing.
-2. **Does it work well?** — Each pass/fail verdict is supported by concrete evidence (test output, file inspection, runtime verification). No superficial passes where the evidence is vague or generic.
+1. **Does it do what it is supposed to do?** — Every acceptance criterion from the Features Request has a corresponding entry in the UAT Report with a concrete `Result`, `Verification mode`, and `Driver`. No criteria are skipped or missing.
+2. **Does it work well?** — Each PASS verdict is supported by concrete, specific evidence that matches the declared `Driver`:
+   - `playwright` — browser transcripts / screenshots (artifact paths present)
+   - `subprocess` — stdout/stderr/exit-code transcripts
+   - `maestro` — Maestro run outputs
+   - `tauri_driver` — WebDriver session logs
+   - `httpx` / `curl` — HTTP request/response transcripts
+   - `none` — means no driver ran; any PASS AC with `Driver: none` in `uat_mode: full` is a false-PASS sentinel.
 3. **Is it reasonably well designed?** — Cross-feature interactions are tested. Edge cases (invalid inputs, unauthorized access, empty states, error conditions) are covered.
-4. **Is it safe?** — Security-related acceptance criteria (authentication, authorization, input validation) are tested with specific evidence. The overall verdict (PASS/FAIL) is consistent with the individual test results.
-5. **No obvious scaling issues?** — The report format is correct and includes all required sections.
+4. **Is it safe?** — Security-related acceptance criteria (authentication, authorization, input validation) are tested with specific evidence. The overall verdict (PASS/FAIL) is consistent with the individual AC verdicts.
+5. **No obvious scaling issues?** — The report format is correct (includes `Overall Result`, `Aggregate`, per-AC fields, and `Recommendations`).
 
 # Spot-Check Instructions
 
 Use your tools to verify a sample of claims from the UAT report:
-- If the report claims tests pass, use `Grep` to find the test files and verify they exist.
-- If the report references specific files or endpoints, use `Read` to confirm they exist.
-- Flag any claim that cannot be verified.
+
+- If the report claims `Verification mode: runtime` and references artifact paths under `.agentic-dev/uat_artifacts/<run_id>/`, use `Read` or `Glob` to confirm those files actually exist. **Runtime claims without artifacts are false-PASS; flag them.**
+- If the report references specific files, endpoints, or commands, use `Read`/`Grep` to confirm they exist.
+- Flag vague evidence ("functionality works correctly", "behaviour as expected") — runtime PASS requires specific observations.
+- Flag any AC where `Verification mode: runtime` is claimed but `Driver: none` is reported (internal inconsistency).
 
 # Output Format
 

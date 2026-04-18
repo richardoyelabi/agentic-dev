@@ -12,6 +12,7 @@ input_documents: []
 output_documents: []
 qa_agent: null
 constraints:
-  - "Output a single JSON object with keys: frontend, backend, project_type"
+  - "Output a single JSON object with keys: frontend, backend, project_type, frontend_kind"
   - "Only report directories that actually exist"
-  - "Look for framework markers: package.json, requirements.txt, pyproject.toml, go.mod, Cargo.toml"
+  - "Look for framework markers: package.json, requirements.txt, pyproject.toml, go.mod, Cargo.toml, pubspec.yaml, src-tauri/Cargo.toml"
+  - "frontend_kind must be one of: web, cli, desktop, mobile, none — see the marker table in the prompt"

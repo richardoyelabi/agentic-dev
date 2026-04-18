@@ -23,7 +23,7 @@ from agentic_dev.logging.events import (
 from agentic_dev.orchestrator.qa_cycle import QACycleResult, run_qa_cycle
 from agentic_dev.workspace.git import commit, has_changes, init_repo
 from agentic_dev.prompts.renderer import PromptRenderer
-from agentic_dev.state.models import ProjectType
+from agentic_dev.state.models import FrontendKind, ProjectType
 
 _event_log = get_event_logger("adoption")
 
@@ -52,6 +52,7 @@ async def run_adoption(
     project_dir: Path,
     directory_map: DirectoryMap,
     project_type: ProjectType,
+    frontend_kind: FrontendKind | None = None,
 ) -> AdoptionResult:
     """Run the full adoption pipeline to reverse-engineer specs from code.
 
@@ -162,7 +163,9 @@ async def run_adoption(
         result.endpoints_count = api_text.count("[E0")
 
     # Step 4: Generate structured_input summary
-    structured_input = _build_structured_input(doc_store, project_type)
+    structured_input = _build_structured_input(
+        doc_store, project_type, frontend_kind=frontend_kind
+    )
     doc_store.write("structured_input", structured_input)
     result.documents_produced.append("structured_input")
 
@@ -255,13 +258,22 @@ async def _extract_features(
 def _build_structured_input(
     doc_store: DocumentStore,
     project_type: ProjectType,
+    frontend_kind: FrontendKind | None = None,
 ) -> str:
     """Build a structured_input document summarizing the adopted project."""
+    if frontend_kind is None:
+        frontend_kind = (
+            FrontendKind.NONE if project_type == ProjectType.BACKEND_ONLY
+            else FrontendKind.WEB
+        )
     lines = [
         "# Structured Input",
         "",
         "## Project Type",
         project_type.value,
+        "",
+        "## Frontend Kind",
+        frontend_kind.value,
         "",
         "## Feature Requirements",
     ]

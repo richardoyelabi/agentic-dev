@@ -26,6 +26,23 @@ You can also specify preferences:
 - Deployment: "Deploy frontend on Vercel, backend on AWS"
 - UI/UX: "Minimalist design, dark mode support"
 
+### Choosing the frontend kind
+
+The agency supports four user-facing surfaces: `web`, `cli`, `desktop`, and `mobile`. The Input Processor normally infers the kind from your description ("build a CLI tool that…" → `cli`, "React Native app for…" → `mobile`). You can also force it explicitly:
+
+```bash
+agentic-dev new my-tool --frontend-kind cli
+agentic-dev new my-app  --frontend-kind mobile
+```
+
+The chosen kind shapes three things:
+
+1. **Architect** — `frontend_spec` is structured per kind (commands for CLI, screens + navigation for mobile, windows + IPC for desktop, pages + routes for web).
+2. **Developers & QA** — prompt constraints adapt per kind (e.g. CLI dev requires non-interactive mode; mobile dev handles platform lifecycle).
+3. **UAT** — a kind-specific UAT agent drives the running product (Playwright for web / Electron, `tauri-driver` for Tauri, Maestro for mobile, subprocess for CLI, `httpx`/`curl` for backend-only).
+
+For desktop, the architect also picks the framework (`electron` or `tauri`) and records it as a `desktop_framework` header in `frontend_spec`; the engine reads this to select the correct UAT driver.
+
 ### Referencing Existing Sources
 
 You can reference existing codebases and Figma designs to give the agency context before it generates your new project's specifications. Both flags are optional and additive — they enrich the agency's understanding but don't replace your requirements. The existing sources are analyzed read-only; nothing about them is changed or managed.
@@ -255,6 +272,55 @@ The command:
 4. Runs the integration + integration QA cycle for each qualifying sprint
 
 Sprints that crashed mid-integration (e.g. due to a network error) are automatically resumed from where they left off. Sprints that already completed integration are skipped unless `--force` is used.
+
+## Runtime-Driven UAT
+
+UAT is not just spec-tracing — a per-kind UAT agent drives the running product and records evidence per acceptance criterion.
+
+### What runs under the hood
+
+Before the UAT agent starts, the engine:
+
+1. Probes the environment for the driver tools your project needs (e.g. `npx`, `maestro`, `tauri-driver`, Playwright MCP, `flutter devices`).
+2. Writes a `uat_prereqs` document the UAT agent reads.
+3. Creates `.agentic-dev/uat_artifacts/<run_id>/` where the agent saves screenshots, subprocess transcripts, Maestro logs, WebDriver sessions, or HTTP traces.
+4. Picks the correct UAT agent from `(ProjectType, FrontendKind, desktop_framework)`.
+
+### The false-PASS gate
+
+A code-level validator rejects reports that claim PASS without real runtime evidence. Under the default `uat_mode: full`, a PASS is forced to FAIL when:
+
+- No AC was verified at runtime
+- A runtime PASS AC has no artifact paths
+- Every AC reports `Driver: none`
+- Any PASS AC lacks concrete `Evidence:` bullets
+
+When triggered, the report is rewritten with a `## Validator Override` section explaining which rule failed, so the remediation loop sees an accurate verdict.
+
+### `uat_mode: spec_only` for CI environments
+
+If your CI (or local sandbox) legitimately cannot run driver tools, you can revert UAT to the legacy spec-tracing behaviour by editing `.agentic-dev/config.json`:
+
+```json
+{
+  "app_name": "my-app",
+  "uat_mode": "spec_only"
+}
+```
+
+In `spec_only`, the false-PASS rules other than "every PASS AC needs Evidence" are suspended. A clear warning is emitted at pipeline start whenever `spec_only` is active. Use this sparingly — it defeats the main purpose of runtime UAT.
+
+### Driver prereqs at a glance
+
+| Kind | Required tools on PATH + runtime |
+|---|---|
+| `web` / `desktop_electron` | Playwright MCP server registered; `npx` |
+| `desktop_tauri` | `tauri-driver` |
+| `cli` | Bash (always present) |
+| `mobile` | Either `maestro` + `maestro doctor` passing, or `flutter` + at least one non-web device in `flutter devices` |
+| `backend_only` | `curl` |
+
+If a required tool is missing when `uat_mode: full`, UAT's overall result is FAIL with reason `runtime_driver_unavailable` — this is the correct behaviour, not a bug. Install the tool (or switch to `spec_only`) before re-running.
 
 ## Configuring Checkpoints
 

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
+from agentic_dev.state.models import FrontendKind
 
 
 DEFAULT_PROJECTS_DIR = Path.home() / "projects"
@@ -92,6 +94,8 @@ class ProjectConfig(BaseModel):
     sources: dict[str, list[ExternalSource]] = Field(default_factory=dict)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     sync_ignores: list[str] = Field(default_factory=list)
+    frontend_kind: FrontendKind | None = None
+    uat_mode: Literal["spec_only", "full"] = "full"
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +130,9 @@ def load_project_config(project_dir: Path) -> ProjectConfig:
 
     if "app_name" not in data:
         data["app_name"] = project_dir.name
+
+    if "frontend_kind" not in data and data.get("directory_map", {}).get("frontend"):
+        data["frontend_kind"] = FrontendKind.WEB.value
 
     return ProjectConfig.model_validate(data)
 

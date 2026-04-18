@@ -311,6 +311,12 @@ class SprintRunner:
                 )
                 extra_context["figma_mcp_available"] = "false"
 
+        if (
+            self._pipeline_state is not None
+            and self._pipeline_state.frontend_kind is not None
+        ):
+            extra_context["frontend_kind"] = self._pipeline_state.frontend_kind.value
+
         # Backend QA cycle
         backend_result = None
         if self._has_backend and not _should_skip(current_status, SprintStatus.BACKEND_CORRECTION):

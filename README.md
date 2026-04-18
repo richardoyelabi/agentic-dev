@@ -1,10 +1,13 @@
 # Agentic-Dev
 
-Autonomous software development agency powered by Claude Code CLI. Takes a product description and produces complete web/mobile applications with frontend and backend.
+Autonomous software development agency powered by Claude Code CLI. Takes a product description and produces complete applications — web, CLI, desktop (Electron/Tauri), and mobile (React Native Expo, Flutter) — with frontend, backend, and runtime-verified UAT.
 
 ## Features
 
-- **31 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
+- **36 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
+- **Multi-kind frontend support** — web, CLI, desktop, and mobile apps on the same pipeline via `--frontend-kind`
+- **Runtime-driven UAT** — six per-kind UAT agents actually drive the running product (Playwright, subprocess, tauri-driver, Maestro) rather than reading files
+- **False-PASS enforcement** — code-level validator rejects UAT reports that lack runtime evidence, overriding prompt discipline
 - **Independent QA review** at every stage with one-cycle correction
 - **Feature-based sprints** break large projects into manageable chunks
 - **Configurable checkpoints** for human review (default: pause after design)
@@ -51,10 +54,11 @@ Create a new project and start the development pipeline.
 
 ```
 Options:
-  --path TEXT           Directory to create the project in (default: ~/projects)
-  --from-file TEXT      Path to a file containing project requirements
-  --from-figma TEXT     Figma URL to import designs from (supports value::annotation, repeatable)
-  --from-codebase TEXT  Path to existing codebase to use as reference context (supports value::annotation, repeatable)
+  --path TEXT            Directory to create the project in (default: ~/projects)
+  --from-file TEXT       Path to a file containing project requirements
+  --from-figma TEXT      Figma URL to import designs from (supports value::annotation, repeatable)
+  --from-codebase TEXT   Path to existing codebase to use as reference context (supports value::annotation, repeatable)
+  --frontend-kind TEXT   Frontend runtime: web, cli, desktop, mobile (auto-detected when omitted)
 ```
 
 `--from-codebase` and `--from-figma` analyze existing sources read-only and use them as context for the new project — they do not manage or modify the existing codebase. To bring an existing project under agentic-dev management in-place, use `adopt` instead.
@@ -149,17 +153,17 @@ Show cost breakdown by agent and sprint.
 
 ## Architecture
 
-The agency consists of 7 teams with 31 agents:
+The agency consists of 7 teams with 36 agents:
 
 | Team | Agents | Purpose |
 |---|---|---|
 | Design & Architecture | Input Processor + QA, Input Updater + QA, Feature Analyst + QA, Architect + QA, Sprint Planner + QA, Design Diff, Spec Diff | Requirements analysis, specifications, sprint planning, change diffing |
 | Adoption | Structure Detector, Spec Reverse Engineer + QA, Feature Extractor + QA | Reverse-engineer specs from existing codebases |
 | Sync | Code Analyzer + QA, Drift Detector + QA, Spec Updater + QA | Detect and resolve drift between code and specs |
-| Frontend | Frontend Developer + QA | UI implementation per sprint (with direct Figma MCP access) |
+| Frontend | Frontend Developer + QA | Kind-aware UI implementation per sprint (web/CLI/desktop/mobile); direct Figma MCP access |
 | Backend | Backend Developer + QA | API and business logic per sprint |
 | Integration | Integration Agent + QA | Third-party service connections |
-| QA | UAT Agent + QA | User acceptance testing |
+| QA | `uat_web`, `uat_cli`, `uat_desktop_electron`, `uat_desktop_tauri`, `uat_mobile`, `uat_api` + shared UAT QA | Runtime-driven user acceptance testing dispatched by `(ProjectType, FrontendKind)` |
 
 ### Pipeline Flow
 
@@ -192,7 +196,8 @@ Every agent has an independent QA counterpart. QA receives only the agent's inpu
 - **Design Changes** — Summary of what changed between old and new design analyses (`design_diff`)
 - **Spec Changes** — Summary of what changed between old and new full specs (`spec_diff`)
 - **QA Reports** — Review feedback at every stage
-- **UAT Report** — Final acceptance test results
+- **UAT Prereqs** — Runtime probe results written before UAT dispatch (driver availability, Playwright MCP, devices)
+- **UAT Report** — Final acceptance test results with per-AC runtime evidence (screenshots, subprocess transcripts, HTTP traces)
 
 ## Configuration
 

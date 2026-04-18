@@ -387,9 +387,29 @@ def new(
     from_codebase: list[str] | None = typer.Option(
         None, help="Existing codebase to use as reference context (use '::' for annotation, repeatable)"
     ),
+    frontend_kind: str | None = typer.Option(
+        None,
+        "--frontend-kind",
+        help="Override detected frontend kind: web | cli | desktop | mobile",
+        case_sensitive=False,
+    ),
 ) -> None:
     """Create a new project and start the development pipeline."""
     try:
+        from agentic_dev.state.models import FrontendKind  # noqa: WPS433
+
+        override_kind: FrontendKind | None = None
+        if frontend_kind is not None:
+            normalized = frontend_kind.strip().lower()
+            allowed = {"web", "cli", "desktop", "mobile"}
+            if normalized not in allowed:
+                console.print(
+                    f"[bold red]--frontend-kind must be one of "
+                    f"{sorted(allowed)}; got {frontend_kind!r}.[/bold red]"
+                )
+                raise typer.Exit(code=1)
+            override_kind = FrontendKind(normalized)
+
         workspace_mgr = _get_workspace_manager(path)
         project_dir = workspace_mgr.create_project(app_name)
         console.print(f"[green]Created project workspace at {project_dir}[/green]")
@@ -397,9 +417,24 @@ def new(
         # Save initial pipeline state
         state_mgr = StateManager(project_dir)
         state = state_mgr.create_initial(app_name)
+        if override_kind is not None:
+            state.frontend_kind = override_kind
+            state_mgr.save(state)
 
         # Save default checkpoint config
         _save_config(project_dir, CheckpointConfig())
+
+        if override_kind is not None:
+            from agentic_dev.config import (  # noqa: WPS433
+                load_project_config,
+                save_project_config,
+            )
+            cfg = load_project_config(project_dir)
+            cfg.frontend_kind = override_kind
+            save_project_config(project_dir, cfg)
+            console.print(
+                f"[cyan]Frontend kind override: {override_kind.value}[/cyan]"
+            )
 
         # Collect user requirements
         if from_file:
@@ -743,7 +778,9 @@ def remediate(
 
         from agentic_dev.orchestrator.uat_composer import compose_remediation_input  # noqa: WPS433
 
-        change_input = compose_remediation_input(uat_report, app_name)
+        change_input = compose_remediation_input(
+            uat_report, app_name, frontend_kind=state.frontend_kind
+        )
 
         console.print(
             f"[cyan]Starting remediation cycle {state.remediation_cycle + 1} "
@@ -1000,6 +1037,9 @@ def adopt(
         workspace_mgr.adopt_project(path, app_name)
         console.print(f"[green]Initialized agentic-dev in {path}[/green]")
 
+        from agentic_dev.state.models import FrontendKind, ProjectType  # noqa: WPS433
+
+        detected_frontend_kind: FrontendKind | None = None
         if frontend_dir or backend_dir:
             directory_map = DirectoryMap(frontend=frontend_dir, backend=backend_dir)
             console.print(
@@ -1013,13 +1053,14 @@ def adopt(
 
             log_dir = path / AGENTIC_DEV_METADATA_DIR / "logs"
             claude = ClaudeRunner(log_dir=log_dir)
-            directory_map = asyncio.run(detect_structure(claude, path))
+            detection = asyncio.run(detect_structure(claude, path))
+            directory_map = detection.directory_map
+            detected_frontend_kind = detection.frontend_kind
             console.print(
                 f"[green]Detected: frontend={directory_map.frontend}, "
-                f"backend={directory_map.backend}[/green]"
+                f"backend={directory_map.backend}, "
+                f"frontend_kind={detected_frontend_kind.value}[/green]"
             )
-
-        from agentic_dev.state.models import ProjectType  # noqa: WPS433
 
         if directory_map.frontend and directory_map.backend:
             project_type = ProjectType.FULLSTACK
@@ -1027,6 +1068,12 @@ def adopt(
             project_type = ProjectType.FRONTEND_ONLY
         else:
             project_type = ProjectType.BACKEND_ONLY
+
+        if detected_frontend_kind is None:
+            detected_frontend_kind = (
+                FrontendKind.NONE if project_type == ProjectType.BACKEND_ONLY
+                else FrontendKind.WEB
+            )
 
         console.print(f"[cyan]Project type: {project_type.value}[/cyan]")
 
@@ -1043,6 +1090,7 @@ def adopt(
         config = ProjectConfig(
             app_name=app_name,
             directory_map=directory_map,
+            frontend_kind=detected_frontend_kind,
         )
         save_project_config(path, config)
 
@@ -1050,6 +1098,7 @@ def adopt(
         state = PipelineState(
             project_name=app_name,
             project_type=project_type,
+            frontend_kind=detected_frontend_kind,
             phase=PipelinePhase.ADOPTING,
             mode="adopt",
             origin="adopted",
@@ -1096,6 +1145,7 @@ def adopt(
             project_dir=path,
             directory_map=directory_map,
             project_type=project_type,
+            frontend_kind=detected_frontend_kind,
         ))
 
         state = state_mgr.load()
