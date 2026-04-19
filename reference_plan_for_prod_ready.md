@@ -111,18 +111,69 @@ This is what has never existed. It's the only way to prove FE and BE actually in
   5. School without `ai_narrative_enabled` — AI button is disabled; school with it enabled — button generates and writes narrative.
 - Each E2E test also runs against the **career-readiness** critical path to catch cross-feature regressions (a student dashboard load, course assignment creation, single lesson submission).
 
-## Phase 5 — Bug triage loop
+## Phase 4.5 — Automated fidelity & perceptual checks
 
-Only after Phases 0–4 land does this phase begin. Phases above exist precisely to make this loop productive.
+The surfaces that are stereotypically "manual QA" (visual, PDF, canvas, LLM output) are largely automatable with mature tooling. Automate the *regression* layer here so humans in Phase 5 only do *exploratory* work.
 
-- Run the full suite (backend pytest incl. `integration`, frontend vitest, Playwright E2E) and triage every failure into `docs/BUGS.md` with severity (blocker / major / minor / cosmetic) and surface (BE / FE / contract / infra).
-- Fix blocker + major only. Each fix: (a) write a failing test at the narrowest layer that catches it, (b) fix, (c) confirm no other tests regress, (d) commit with a descriptive message referencing the bug id.
-- Do manual human QA on the five E2E flows above in a browser while watching the backend log for silent 500s / warnings. Anything weird gets a bug entry. Pay special attention to the surfaces that can't be easily auto-tested: TipTap editor UX, signature canvas ergonomics on touch devices, PDF rendering fidelity, AI narrative readability.
-- Re-run full suite after all blockers/majors are resolved. Document remaining minor/cosmetic issues as follow-up tickets.
+### 4.5a. Visual regression
+
+- Enable Playwright's built-in snapshot diffing (`page.toHaveScreenshot`) on every E2E journey. Commit golden images under `e2e/__screenshots__/`. Tolerance set to catch real regressions, not anti-aliasing noise.
+- Platform-pin to one Chromium version + viewport matrix (desktop 1440, tablet 1024, mobile 390) to avoid flakiness.
+- First-time baseline approval is the one-time human step; after that, diffs fail CI.
+
+### 4.5b. PDF fidelity
+
+- Text-layer assertions: use `pdfjs-dist` to extract text from the exported report and assert on expected strings (student identifier, date range, template section titles, embedded chart captions).
+- Byte-level sanity: file exists, size within expected band, page count matches template.
+- Pixel regression: rasterize each page with `pdftoppm` or the `pdfjs-dist` canvas renderer, visual-diff against golden images with `pixelmatch` (or [`diff-pdf`](https://github.com/vslavik/diff-pdf)). Catches layout shifts, font-substitution, clipped content.
+- Run on every report template × realistic student data combination (a small fixture matrix).
+
+### 4.5c. Signature canvas — touch & cross-device
+
+- Local tier: Playwright with `hasTouch: true, isMobile: true, deviceScaleFactor: 2` to emulate iPad; dispatch pointer event streams that trace a known stroke path; assert `canvas.toDataURL()` pixel-matches a baseline within tolerance.
+- Real-device tier (optional, paid): run the same scripts against BrowserStack / Sauce Labs on real iOS Safari and Android Chrome — nightly only, not per-PR, to keep CI fast and costs bounded.
+- Error-boundary behavior: trigger a forced canvas failure in one pad; assert the other two pads still render.
+
+### 4.5d. AI narrative evaluation
+
+- Use `promptfoo` (or `DeepEval` / OpenAI Evals) with a fixed input set (~10 synthesized sessions covering each note_type × data-collection-type combination).
+- Deterministic checks (always run, cheap): banned-phrase filter (`"As an AI"`, `"I cannot"`, refusal patterns), Flesch-Kincaid grade in [8, 14] range, length in [150, 1000] words, mentions each observed target at least once, contains no PHI (re-run the same substring list used in `test_ai_phi_exclusion.py`).
+- LLM-as-judge (run on PR touching AI code + nightly): a GPT-4-class judge grades each output against a rubric drafted with a BCBA (clinical appropriateness, ABA terminology accuracy, objectivity, actionability). Gate at ≥80% rubric pass across the fixture set. Zheng et al. (MT-Bench, 2023) establishes LLM-judge agreement with humans at ~80%, comparable to human-human agreement.
+- Non-determinism handling: run 3 samples per input, assert pass-rate not exact match.
+- One-time human input: BCBA reviews 20 generated narratives to establish the rubric and the initial golden set. After that, the eval runs unattended.
+
+### 4.5e. Accessibility
+
+- `@axe-core/playwright` on every E2E route. Fails CI on critical/serious violations. Catches roughly 30–40% of a11y issues (per Deque's published research) — not a full audit, but a repeatable floor.
+- Keyboard-only navigation test on the session edit page (tab order reaches every form field and every signature-pad mode selector without a mouse).
+
+### 4.5f. Performance regression (lightweight)
+
+- Lighthouse CI on the top 5 BI routes, budgets committed (`lighthouse-budget.json`). Fails on TTI / CLS / LCP regressions above threshold.
+- Record p95 form-render time for `SessionNoteForm` and `ObservationModal` via `performance.mark` in Playwright — catches TipTap / RHF regressions.
+
+## Phase 5 — Bug triage & exploratory QA
+
+Only after Phases 0–4.5 land does this phase begin.
+
+- Run the full suite (backend pytest incl. `integration`, frontend vitest, Playwright E2E, visual regression, PDF diff, axe, Lighthouse, AI eval). Triage every failure into `docs/BUGS.md` with severity (blocker / major / minor / cosmetic) and surface (BE / FE / contract / infra / a11y / perf).
+- Fix blocker + major only. Each fix: (a) write a failing test at the narrowest layer that catches it, (b) fix, (c) confirm no other tests regress, (d) commit referencing the bug id.
+- **Exploratory QA, not regression QA.** Allocate a 30–60 minute human session per release as a *charter-driven exploratory test* (per Bach/Bolton's session-based test management). Example charters:
+  - "Use the signature flow on a real iPad for 15 minutes. Try to break it."
+  - "Type a session narrative that mixes CJK + emoji + RTL + bullet lists. Does TipTap handle paste, undo, and save correctly?"
+  - "Generate a report for a student with 30 goals and 6 months of data. Does the PDF render? Does the editor stay responsive?"
+  Exploratory findings that recur get promoted into Phase 4.5 automation.
+- Re-run full suite after blocker/major resolution. Minor/cosmetic → follow-up tickets.
 
 ## Phase 6 — Production readiness
 
-- **CI**: create `.github/workflows/ci.yml` at the repo root running three jobs on every PR: (1) backend `./scripts/pytest.sh -m "not e2e"` against Postgres service container, (2) frontend `yarn lint && yarn test && yarn build`, (3) Playwright E2E against `docker-compose.e2e.yml`. Delete or subsume the frontend-only workflow. Upload coverage to an artifact.
+- **CI**: create `.github/workflows/ci.yml` at the repo root running on every PR:
+  1. **Backend** — `./scripts/pytest.sh -m "not e2e"` against a Postgres service container.
+  2. **Frontend** — `yarn lint && yarn test && yarn build`.
+  3. **E2E** — Playwright against `docker-compose.e2e.yml`, including visual regression, PDF diff, axe-core, and the deterministic AI eval checks from Phase 4.5d.
+  4. **Lighthouse CI** — against the built frontend, budgets enforced.
+  A separate nightly workflow runs: the LLM-as-judge eval (cost-bounded, non-blocking for PRs) and the real-device signature tests on BrowserStack (if opted in). Upload coverage + screenshots + PDF diffs as artifacts.
+  Delete or subsume the frontend-only workflow.
 - **Secrets audit**: `SECRET_KEY`, `SIGNATURE_ENCRYPTION_KEY`, `FIELD_ENCRYPTION_KEY`, `OPENAI_API_KEY`, AWS creds — confirm every required var is documented in `backend/django_server/.env.dist`, listed in a deployment runbook, and not checked in. Add a Django management command `check_production_env` that refuses to start if any required prod var is unset.
 - **Encryption-key rotation runbook**: `SIGNATURE_ENCRYPTION_KEY` overrides `FIELD_ENCRYPTION_KEY`; document exactly how to rotate without losing existing signatures (the usual pattern: read with old key, re-encrypt with new, commit atomically per row).
 - **Logging & observability**: confirm structured logging on the LLM failure path (502s from `AISessionNarrativeService` are counted and rate-watched), on signature uploads, and on closed-session 403s. Add a `/healthz` and `/readyz` if not already present.
@@ -143,11 +194,16 @@ Only after Phases 0–4 land does this phase begin. Phases above exist precisely
 - `frontend/src/services/generated/api-types.ts` + `frontend/src/services/dto-contract.test-d.ts`
 - Co-located `*.test.tsx` for components listed in Phase 3a
 - `e2e/` directory with Playwright tests for the 5 BI journeys + 3 career-readiness sanity journeys
+- `e2e/__screenshots__/` — committed golden images for visual regression (Phase 4.5a)
+- `e2e/fixtures/pdf-baselines/` — committed golden PDF rasterizations (Phase 4.5b)
+- `e2e/promptfoo.yaml` + `e2e/ai-fixtures/` — AI narrative eval config + input set (Phase 4.5d)
+- `e2e/lighthouse-budget.json` — perf budgets (Phase 4.5f)
+- `docs/ai-narrative-rubric.md` — BCBA-authored rubric for LLM-as-judge
 
 **Modify (small touches):**
 - `backend/django_server/requirements.txt` — add `drf-spectacular`
 - `backend/django_server/*/urls.py` — wire schema endpoint
-- `frontend/package.json` — add `openapi-typescript`, `msw`, `@playwright/test`, `tsd`
+- `frontend/package.json` — add `openapi-typescript`, `msw`, `@playwright/test`, `tsd`, `@axe-core/playwright`, `pdfjs-dist`, `pixelmatch`, `promptfoo`, `@lhci/cli`
 - Existing DRF serializers / frontend DTOs for each contract mismatch found in Phase 1
 - `frontend/.github/workflows/ci.yml` — delete (replaced by root CI)
 
@@ -158,11 +214,13 @@ The plan is complete when **all** of the following are true:
 - `./scripts/pytest.sh` passes in backend root (includes new `@pytest.mark.integration` tests).
 - `./scripts/pytest-e2e.sh` passes (if any e2e-marked backend tests are added).
 - `yarn test && yarn lint && yarn build` pass in `frontend/`.
-- `docker compose -f docker-compose.e2e.yml up --build` brings the stack up and Playwright suite passes against it.
+- `docker compose -f docker-compose.e2e.yml up --build` brings the stack up and the Playwright suite passes against it, including visual regression, PDF fidelity diffs, axe-core, and deterministic AI eval checks.
 - `drf-spectacular` schema regen produces no diff against committed `openapi.yaml`.
 - Backend line coverage for `behavior_intervention/` ≥ 80% (stretch: 90%); frontend coverage for `app/behavior-intervention/` ≥ 70%.
-- Root CI is green on a clean PR with all three jobs.
-- Manual QA on the five BI journeys in a browser produces no P1/P2 bugs.
+- Lighthouse CI budgets pass on the top 5 BI routes.
+- LLM-as-judge AI narrative eval passes at ≥80% rubric score across the fixture set (nightly).
+- Root CI is green on a clean PR across all PR-blocking jobs.
+- One full exploratory session (charter-driven, ≥30 min) has been completed per release on real hardware and logged in `docs/BUGS.md`; no new blocker or major bugs surface.
 - `docs/BUGS.md` has zero open blocker or major items.
 - Every env var required in production is documented in `.env.dist` and `check_production_env` passes against a prod-shaped env.
 
