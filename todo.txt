@@ -1,5 +1,7 @@
 - retry transient claude api errors - claude plan already in place
 - make products more production ready - convo already started with claude
+- remove the several docs to avoid having to sync and adopt first? is it more efficient considering the capabilities of coding models these days?
+- put coding guidance in claude.md so it is easy to code outside of the agent too.
 - integrate claude design - see if can use the same --from-figma interface, renamed to --from-design (adapt to Google Stitch too if possible)
 - option to brainstorm specs before starting
 - e2e for backends too?
