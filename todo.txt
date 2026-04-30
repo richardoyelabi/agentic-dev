@@ -5,6 +5,7 @@
 - ?? some kind of graph to store the state of the code vs docs?? - https://www.xda-developers.com/gave-claude-code-persistent-memory-and-now-its-unstoppable/
 - put coding guidance in claude.md so it is easy to code outside of the agent too.
 - implement best practices by tech stack and domain in addition to general software engineering best practices (anything else I'm missing here?)
+- add quality enforcement commands. one for functionality, one for refactoring and another that includes both. these are commands where you're not trying to implement anything in particular. just have the ai review and improve without regression
 - integrate claude design - see if can use the same --from-figma interface, renamed to --from-design (adapt to Google Stitch too if possible)
 - option to brainstorm specs before starting
 - option to separate technical guidelines from request input
