@@ -1,6 +1,7 @@
 - retry transient claude api errors - claude plan already in place
 - make products more production ready - convo already started with claude
 - break sprints up even further for ralph loops, both for docs and code
+- replace markdown api contracts with something more standardized using dtos and open specifications
 - remove the several docs to avoid having to sync and adopt first? is it more efficient considering the capabilities of coding models these days?
 - ?? some kind of graph to store the state of the code vs docs?? - https://www.xda-developers.com/gave-claude-code-persistent-memory-and-now-its-unstoppable/
 - put coding guidance in claude.md so it is easy to code outside of the agent too.
