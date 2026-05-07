@@ -11,6 +11,7 @@ from agentic_dev.config import (
     DirectoryMap,
     RATE_LIMIT_PAUSE_MAX_SECONDS,
 )
+from agentic_dev.claude.llm_parser import parse_with_llm
 from agentic_dev.claude.output_parser import OutputParser
 from agentic_dev.claude.rate_limiter import UsageApiClient, WaitStrategy
 from agentic_dev.claude.runner import ClaudeRunner
@@ -39,6 +40,7 @@ from agentic_dev.state.models import (
     SprintState,
     SprintStatus,
 )
+from agentic_dev.state.parser_models import ParsedSprintPlan
 from agentic_dev.state.transitions import advance_phase
 from agentic_dev.workspace.claude_md import (
     generate_backend_claude_md,
@@ -488,7 +490,7 @@ class PipelineEngine:
             agent_name="sprint_planner",
         )
         sprint_plan_text = sprint_docs.get("sprint_plan", result.output)
-        state.sprints = self._parse_sprint_plan(sprint_plan_text)
+        state.sprints = await self._parse_sprint_plan(sprint_plan_text)
         state.current_sprint = 1 if state.sprints else None
 
         # Validate feature conventions in sprint scopes
@@ -911,60 +913,80 @@ class PipelineEngine:
 
         return warnings
 
-    @staticmethod
-    def _parse_sprint_plan(plan_text: str) -> list[SprintState]:
-        """Extract sprint entries from the plan text.
+    _SPRINT_HEADER_COUNT_RE = re.compile(r"^##\s+Sprint\s+\d+:", re.MULTILINE)
 
-        Looks for lines matching "Sprint N: <name>" pattern and parses
-        integration fields (``Needs Integration`` and ``Integration Services``)
-        for each sprint block.
+    async def _parse_sprint_plan(self, plan_text: str) -> list[SprintState]:
+        """Extract sprint entries from the plan text via an LLM parser.
 
-        Falls back to a single sprint if no pattern is found.
+        The plan is prose-rich markdown that frequently contains narrative
+        references like "dependency on **Sprint 4:**" inside notes sections.
+        Regex-only parsing was vulnerable to misreading those as headers and
+        emitting phantom sprint entries; an LLM parser handles the prose
+        cleanly. A regex-based ``^##\\s+Sprint\\s+\\d+:`` count acts as a
+        sanity check on the LLM's output, catching hallucinated extras or
+        omissions.
+
+        Raises ``OutputParseError`` when no real Sprint header is present
+        (we fail loudly rather than fabricating a default sprint).
         """
-        import re
+        header_count = len(self._SPRINT_HEADER_COUNT_RE.findall(plan_text))
+        if header_count == 0:
+            raise OutputParseError(
+                agent_name="sprint_planner",
+                message="No '## Sprint N:' headers found in sprint plan",
+            )
 
-        sprint_header_re = re.compile(r"Sprint\s+(\d+):\s*(.+)")
-        needs_integration_re = re.compile(
-            r"\*\*Needs Integration:\*\*\s*(yes|no)", re.IGNORECASE
+        def sanity_check(parsed: ParsedSprintPlan) -> None:
+            if len(parsed.sprints) != header_count:
+                raise ValueError(
+                    f"sprint count mismatch: input has {header_count} "
+                    f"'## Sprint N:' headers, LLM returned {len(parsed.sprints)}",
+                )
+            seen: set[int] = set()
+            for entry in parsed.sprints:
+                if entry.sprint_number in seen:
+                    raise ValueError(
+                        f"duplicate sprint_number {entry.sprint_number}",
+                    )
+                seen.add(entry.sprint_number)
+
+        extraction_prompt = (
+            "Extract every sprint defined in the sprint plan below. A sprint "
+            "is introduced by a markdown header of the form `## Sprint N: "
+            "<name>` (where N is an integer). Narrative paragraphs that "
+            "merely reference a sprint by number (e.g. inside a notes section "
+            "or a bullet about dependencies) are NOT sprint definitions and "
+            "must be ignored.\n\n"
+            "For each sprint, extract:\n"
+            "- sprint_number: the integer N from the header\n"
+            "- name: the text after the colon on the header line\n"
+            "- scope_text: the full block from the header up to (but not "
+            "including) the next sprint header or end of document, trimmed\n"
+            "- needs_integration: true iff a `**Needs Integration:** yes` "
+            "line appears inside the sprint block\n"
+            "- integration_services: when needs_integration is true, the "
+            "comma-separated list from `**Integration Services:**`, "
+            "lowercased and trimmed; otherwise an empty list"
         )
-        integration_services_re = re.compile(
-            r"\*\*Integration Services:\*\*\s*(.+)", re.IGNORECASE
+
+        parsed = await parse_with_llm(
+            claude=self._claude,
+            text=plan_text,
+            schema_model=ParsedSprintPlan,
+            extraction_prompt=extraction_prompt,
+            working_dir=self._project_dir,
+            sanity_check=sanity_check,
+            agent_name="sprint_plan_parser",
         )
 
-        # Split text into blocks per sprint header
-        headers = list(sprint_header_re.finditer(plan_text))
-        if not headers:
-            return [SprintState(sprint_number=1, name="Sprint 1")]
-
-        sprints: list[SprintState] = []
-        for i, match in enumerate(headers):
-            number = int(match.group(1))
-            name = match.group(2).strip()
-
-            # Extract full block text including the header line
-            start = match.start()
-            end = headers[i + 1].start() if i + 1 < len(headers) else len(plan_text)
-            block = plan_text[start:end]
-
-            # Parse integration fields from the block body
-            block_body = plan_text[match.end():end]
-            integration_services: list[str] = []
-            needs_match = needs_integration_re.search(block_body)
-            if needs_match and needs_match.group(1).lower() == "yes":
-                services_match = integration_services_re.search(block_body)
-                if services_match:
-                    raw_services = services_match.group(1).strip()
-                    integration_services = [
-                        s.strip().lower()
-                        for s in raw_services.split(",")
-                        if s.strip()
-                    ]
-
-            sprints.append(SprintState(
-                sprint_number=number,
-                name=name,
-                scope_text=block.strip(),
-                integration_services=integration_services,
-            ))
-
-        return sprints
+        return [
+            SprintState(
+                sprint_number=entry.sprint_number,
+                name=entry.name,
+                scope_text=entry.scope_text,
+                integration_services=[
+                    s.strip().lower() for s in entry.integration_services if s.strip()
+                ],
+            )
+            for entry in parsed.sprints
+        ]

@@ -10,7 +10,6 @@ from agentic_dev.orchestrator.sync import (
     SyncApplyResult,
     _collect_design_context,
     _compose_change_request,
-    _parse_drift_report,
     apply_sync_resolutions,
 )
 from agentic_dev.documents.store import DocumentStore
@@ -30,9 +29,39 @@ class TestSyncApplyResult:
 
 
 class TestParseDriftReport:
-    """Tests for parsing drift detector agent output."""
+    """Tests for parsing drift detector agent output via the LLM parser."""
 
-    def test_parses_basic_report(self):
+    @staticmethod
+    def _parsed(items, summary: str = ""):
+        from agentic_dev.state.parser_models import (
+            ParsedDriftItem,
+            ParsedDriftReport,
+        )
+        return ParsedDriftReport(
+            items=[ParsedDriftItem(**i) for i in items],
+            summary=summary,
+        )
+
+    async def _call(self, text: str, parsed=None, sanity_raises=False, tmp_path=None):
+        from agentic_dev.orchestrator import sync as sync_mod
+
+        claude = MagicMock()
+        claude.run = AsyncMock()
+
+        if sanity_raises:
+            async def _stub(*_, sanity_check, **__):
+                sanity_check(parsed)
+            with patch.object(sync_mod, "parse_with_llm", side_effect=_stub):
+                return await sync_mod._parse_drift_report(
+                    claude=claude, working_dir=tmp_path or Path("/tmp"), text=text,
+                )
+
+        with patch.object(sync_mod, "parse_with_llm", AsyncMock(return_value=parsed)):
+            return await sync_mod._parse_drift_report(
+                claude=claude, working_dir=tmp_path or Path("/tmp"), text=text,
+            )
+
+    async def test_parses_basic_report(self):
         text = """# Sync Report
 
 ## API Contract
@@ -49,7 +78,18 @@ class TestParseDriftReport:
 ## Summary
 4 drift items found
 """
-        report = _parse_drift_report(text)
+        parsed = self._parsed([
+            {"id": "[DRIFT-001]", "scope": "api", "category": "in_code_not_spec",
+             "description": "POST /api/webhooks", "source_file": "backend/routes/webhooks.py"},
+            {"id": "[DRIFT-002]", "scope": "api", "category": "in_code_not_spec",
+             "description": "GET /api/preferences", "source_file": "backend/routes/prefs.py"},
+            {"id": "[DRIFT-003]", "scope": "api", "category": "in_spec_not_code",
+             "description": "DELETE /api/users/:id", "spec_reference": "api_contract.md"},
+            {"id": "[DRIFT-004]", "scope": "api", "category": "difference",
+             "description": "POST /api/auth response shape differs"},
+        ], summary="4 drift items found")
+
+        report = await self._call(text, parsed)
         assert len(report.items) == 4
         assert report.items[0].id == "[DRIFT-001]"
         assert report.items[0].scope == "api"
@@ -59,60 +99,66 @@ class TestParseDriftReport:
         assert report.items[2].spec_reference == "api_contract.md"
         assert report.items[3].category == "difference"
 
-    def test_parses_frontend_section(self):
+    async def test_handles_found_in_inside_description_prose(self):
+        """Regression: descriptions that mention 'found in' mid-sentence
+        must not be split incorrectly. Under the LLM parser, the model is
+        instructed to only treat trailing 'found in <path>' as source_file."""
         text = """# Sync Report
 
-## Frontend
-### In code but not in spec
-- [DRIFT-001] SettingsPage component — found in src/pages/Settings.tsx
-
-## Summary
-1 drift item found
+## Backend
+### Differences
+- [DRIFT-001] Bug found in production logs but fixed differently in code
 """
-        report = _parse_drift_report(text)
+        parsed = self._parsed([
+            {"id": "[DRIFT-001]", "scope": "backend", "category": "difference",
+             "description": "Bug found in production logs but fixed differently in code",
+             "source_file": None},
+        ])
+        report = await self._call(text, parsed)
         assert len(report.items) == 1
-        assert report.items[0].scope == "frontend"
-        assert report.items[0].source_file == "src/pages/Settings.tsx"
+        assert "production logs" in report.items[0].description
+        assert report.items[0].source_file is None
 
-    def test_parses_figma_section(self):
-        text = """# Sync Report
-
-## Figma vs Spec
-### Design token drift
-- [DRIFT-001] Primary color: Figma #3B82F6, spec #2563EB
-
-## Summary
-1 drift item found
-"""
-        report = _parse_drift_report(text)
-        assert len(report.items) == 1
-        assert report.items[0].scope == "figma"
-        assert report.items[0].category == "design_drift"
-
-    def test_empty_report(self):
+    async def test_empty_report_short_circuits_without_calling_llm(self):
         text = """# Sync Report
 
 ## Summary
 0 drift items found
 """
-        report = _parse_drift_report(text)
+        from agentic_dev.orchestrator import sync as sync_mod
+
+        claude = MagicMock()
+        claude.run = AsyncMock()
+        mock_parse = AsyncMock()
+
+        with patch.object(sync_mod, "parse_with_llm", mock_parse):
+            report = await sync_mod._parse_drift_report(
+                claude=claude, working_dir=Path("/tmp"), text=text,
+            )
+
         assert len(report.items) == 0
-        assert "0" in report.summary
+        mock_parse.assert_not_called()
 
-    def test_summary_extracted(self):
-        text = """# Sync Report
+    async def test_count_mismatch_raises_value_error(self):
+        text = "## Backend\n### Differences\n- [DRIFT-001] First\n- [DRIFT-002] Second\n"
+        # Sanity check expects 2, LLM returns 1 -> sanity fails
+        parsed = self._parsed([
+            {"id": "[DRIFT-001]", "scope": "backend", "category": "difference",
+             "description": "First"},
+        ])
+        with pytest.raises(ValueError, match="count mismatch"):
+            await self._call(text, parsed, sanity_raises=True)
 
-## API Contract
-### In code but not in spec
-- [DRIFT-001] Something
+    async def test_summary_falls_back_when_blank(self):
+        text = "## Backend\n### Differences\n- [DRIFT-001] One\n"
+        parsed = self._parsed([
+            {"id": "[DRIFT-001]", "scope": "backend", "category": "difference",
+             "description": "One"},
+        ], summary="")
+        report = await self._call(text, parsed)
+        assert "1 drift item" in report.summary
 
-## Summary
-1 item found, 1 in API Contract
-"""
-        report = _parse_drift_report(text)
-        assert "1 item found" in report.summary
-
-    def test_all_items_have_no_resolution(self):
+    async def test_all_items_have_no_resolution(self):
         text = """# Sync Report
 
 ## Backend
@@ -120,7 +166,13 @@ class TestParseDriftReport:
 - [DRIFT-001] Model field mismatch
 - [DRIFT-002] Service return type changed
 """
-        report = _parse_drift_report(text)
+        parsed = self._parsed([
+            {"id": "[DRIFT-001]", "scope": "backend", "category": "difference",
+             "description": "Model field mismatch"},
+            {"id": "[DRIFT-002]", "scope": "backend", "category": "difference",
+             "description": "Service return type changed"},
+        ])
+        report = await self._call(text, parsed)
         for item in report.items:
             assert item.resolution is None
 

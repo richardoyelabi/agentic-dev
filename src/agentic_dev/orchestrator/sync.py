@@ -8,12 +8,14 @@ uses spec_updater for to_spec items and generates change requests for to_code it
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from agentic_dev.agents.registry import AgentRegistry
+from agentic_dev.claude.llm_parser import parse_with_llm
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.config import DirectoryMap
 from agentic_dev.documents.store import DocumentStore
@@ -23,10 +25,10 @@ from agentic_dev.logging.events import (
     SyncResolutionEvent,
     SyncStartEvent,
 )
-from agentic_dev.orchestrator.agent_bridge import to_run_config
 from agentic_dev.orchestrator.qa_cycle import run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.models import DriftItem, SyncReport
+from agentic_dev.state.parser_models import ParsedDriftReport
 
 _event_log = get_event_logger("sync")
 
@@ -303,90 +305,100 @@ async def _detect_drift(
         },
     )
 
-    return _parse_drift_report(result.output)
+    return await _parse_drift_report(
+        claude=claude,
+        working_dir=project_dir,
+        text=result.output,
+    )
 
 
-def _parse_drift_report(text: str) -> SyncReport:
-    """Parse drift detector output into a structured SyncReport."""
-    items: list[DriftItem] = []
-    current_scope: str = "api"
-    current_category: str = "difference"
+_DRIFT_ITEM_LINE_RE = re.compile(r"^\s*-\s*\[DRIFT-", re.MULTILINE)
 
-    scope_map = {
-        "api contract": "api",
-        "frontend": "frontend",
-        "backend": "backend",
-        "figma": "figma",
-    }
-    category_map = {
-        "in code but not in spec": "in_code_not_spec",
-        "in spec but not in code": "in_spec_not_code",
-        "differences": "difference",
-        "design token drift": "design_drift",
-    }
 
-    for line in text.splitlines():
-        stripped = line.strip()
+async def _parse_drift_report(
+    *,
+    claude: ClaudeRunner,
+    working_dir: Path,
+    text: str,
+) -> SyncReport:
+    """Parse drift detector output into a structured SyncReport via LLM parser.
 
-        # Detect scope headers (## API Contract, ## Frontend, etc.)
-        if stripped.startswith("## "):
-            header = stripped[3:].strip().lower()
-            for key, scope_val in scope_map.items():
-                if key in header:
-                    current_scope = scope_val
-                    break
+    The drift report is prose where each item's description can include
+    phrases like "found in" mid-sentence; line-based ``rsplit`` was unsafe.
+    The LLM parser handles that; a regex count of ``- [DRIFT-`` lines acts
+    as a sanity check on the LLM's item count.
 
-        # Detect category headers (### In code but not in spec, etc.)
-        if stripped.startswith("### "):
-            header = stripped[4:].strip().lower()
-            for key, cat_val in category_map.items():
-                if key in header:
-                    current_category = cat_val
-                    break
+    An empty drift report (no ``- [DRIFT-`` items) short-circuits to an
+    empty SyncReport without calling the LLM.
+    """
+    expected_count = len(_DRIFT_ITEM_LINE_RE.findall(text))
+    if expected_count == 0:
+        return SyncReport(
+            generated_at=datetime.now(timezone.utc),
+            items=[],
+            summary="0 drift item(s) found",
+        )
 
-        # Parse drift items (- [DRIFT-001] description)
-        if stripped.startswith("- [DRIFT-"):
-            bracket_end = stripped.find("]", 3)
-            if bracket_end == -1:
-                continue
-            drift_id = stripped[2:bracket_end + 1]
-            description = stripped[bracket_end + 1:].strip().lstrip("— ").lstrip("- ")
+    def sanity_check(parsed: ParsedDriftReport) -> None:
+        if len(parsed.items) != expected_count:
+            raise ValueError(
+                f"drift item count mismatch: input has {expected_count} "
+                f"'- [DRIFT-' lines, LLM returned {len(parsed.items)}",
+            )
 
-            source_file = None
-            spec_reference = None
-            if "found in " in description:
-                parts = description.rsplit("found in ", 1)
-                description = parts[0].rstrip(" —-")
-                source_file = parts[1].strip()
-            elif "specified in " in description:
-                parts = description.rsplit("specified in ", 1)
-                description = parts[0].rstrip(" —-")
-                spec_reference = parts[1].strip()
+    extraction_prompt = (
+        "Extract every drift item listed in the drift report below.\n\n"
+        "Each drift item is a list line of the form `- [DRIFT-NNN] "
+        "<description>`, possibly with a trailing source/spec reference. "
+        "For every such line, populate one item with:\n"
+        "- id: the bracketed identifier including the brackets, exactly as "
+        "  written (e.g. \"[DRIFT-001]\")\n"
+        "- scope: derived from the most recent `## ` heading above the item — "
+        "  one of \"api\" (when heading mentions API/contract), "
+        "  \"frontend\", \"backend\", or \"figma\"\n"
+        "- category: derived from the most recent `### ` heading above the "
+        "  item — one of \"in_code_not_spec\" (heading mentions \"in code "
+        "  but not in spec\"), \"in_spec_not_code\" (\"in spec but not in "
+        "  code\"), \"difference\" (\"differences\"), or \"design_drift\" "
+        "  (\"design token drift\")\n"
+        "- description: the natural-language description, with any trailing "
+        "  \"found in <path>\" / \"specified in <path>\" suffix removed\n"
+        "- source_file: the path after \"found in\" if present at the END "
+        "  of the line (not mid-sentence), else null\n"
+        "- spec_reference: the path after \"specified in\" if present at "
+        "  the END of the line, else null\n"
+        "\n"
+        "Also extract a single `summary` string from the `## Summary` "
+        "section if one exists; otherwise leave it empty. Do not invent "
+        "items that aren't in a `- [DRIFT-` list line."
+    )
 
-            items.append(DriftItem(
-                id=drift_id,
-                scope=current_scope,
-                category=current_category,
-                description=description,
-                source_file=source_file,
-                spec_reference=spec_reference,
-            ))
+    parsed = await parse_with_llm(
+        claude=claude,
+        text=text,
+        schema_model=ParsedDriftReport,
+        extraction_prompt=extraction_prompt,
+        working_dir=working_dir,
+        sanity_check=sanity_check,
+        agent_name="drift_report_parser",
+    )
 
-    summary_line = ""
-    for line in text.splitlines():
-        if line.strip().lower().startswith("## summary"):
-            idx = text.splitlines().index(line)
-            remaining = text.splitlines()[idx + 1:]
-            for sline in remaining:
-                if sline.strip() and not sline.strip().startswith("#"):
-                    summary_line = sline.strip()
-                    break
-            break
+    items = [
+        DriftItem(
+            id=entry.id,
+            scope=entry.scope,
+            category=entry.category,
+            description=entry.description,
+            source_file=entry.source_file,
+            spec_reference=entry.spec_reference,
+        )
+        for entry in parsed.items
+    ]
 
     return SyncReport(
         generated_at=datetime.now(timezone.utc),
         items=items,
-        summary=summary_line or f"{len(items)} drift item(s) found",
+        summary=parsed.summary or f"{len(items)} drift item(s) found",
     )
 
 

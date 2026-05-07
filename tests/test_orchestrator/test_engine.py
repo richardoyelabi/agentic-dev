@@ -861,8 +861,20 @@ class TestParseFrontendKind:
             _make_claude_result("APPROVED", cost=0.05),
         ]
 
+        from agentic_dev.state.parser_models import (
+            ParsedSprintEntry,
+            ParsedSprintPlan,
+        )
+        parsed_plan = ParsedSprintPlan(sprints=[
+            ParsedSprintEntry(sprint_number=1, name="UI", scope_text="## Sprint 1: UI"),
+        ])
+
         with patch.object(
             engine, "_advance_past_checkpoint", side_effect=AgentRunError("test", "stop")
+        ), patch(
+            "agentic_dev.orchestrator.engine.parse_with_llm",
+            new_callable=AsyncMock,
+            return_value=parsed_plan,
         ):
             with pytest.raises(AgentRunError):
                 await engine.run()
@@ -1449,68 +1461,159 @@ class TestCrashResilience:
         assert state.active_session_id is None
 
 
-class TestParseSprintPlan:
-    """Tests for PipelineEngine._parse_sprint_plan() integration field extraction."""
+def _make_engine_for_parser_tests(tmp_path, claude_runner):
+    """Construct a minimal PipelineEngine usable for _parse_sprint_plan tests."""
+    registry = MagicMock(spec=AgentRegistry)
+    registry.get = MagicMock(side_effect=lambda name: _make_agent(name))
+    doc_store = DocumentStore(tmp_path)
+    prompt_renderer = MagicMock(spec=PromptRenderer)
+    prompt_renderer.render_agent_prompt = MagicMock(return_value="prompt")
+    state_manager = MagicMock(spec=StateManager)
+    checkpoint = CheckpointConfig()
+    return PipelineEngine(
+        claude=claude_runner,
+        registry=registry,
+        prompt_renderer=prompt_renderer,
+        doc_store=doc_store,
+        state_manager=state_manager,
+        project_dir=tmp_path,
+        checkpoint_config=checkpoint,
+    )
 
-    def test_extracts_integration_services(self) -> None:
+
+class TestParseSprintPlan:
+    """Tests for PipelineEngine._parse_sprint_plan() with the LLM-parser backend."""
+
+    @staticmethod
+    def _parsed(sprints):
+        from agentic_dev.state.parser_models import (
+            ParsedSprintEntry,
+            ParsedSprintPlan,
+        )
+        return ParsedSprintPlan(
+            sprints=[ParsedSprintEntry(**s) for s in sprints],
+        )
+
+    @patch("agentic_dev.orchestrator.engine.parse_with_llm", new_callable=AsyncMock)
+    async def test_converts_parsed_entries_and_lowercases_services(
+        self, mock_parse, tmp_path, claude,
+    ) -> None:
+        mock_parse.return_value = self._parsed([
+            {
+                "sprint_number": 1,
+                "name": "Auth & Payments",
+                "scope_text": "## Sprint 1: Auth & Payments\n- ...",
+                "needs_integration": True,
+                "integration_services": ["Stripe", "GitHub"],
+            },
+        ])
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
+
         plan = (
             "## Sprint 1: Auth & Payments\n"
-            "- **Features:** [F001], [F002]\n"
             "- **Needs Integration:** yes\n"
             "- **Integration Services:** Stripe, GitHub\n"
         )
-        sprints = PipelineEngine._parse_sprint_plan(plan)
+        sprints = await engine._parse_sprint_plan(plan)
+
         assert len(sprints) == 1
-        assert "stripe" in sprints[0].integration_services
-        assert "github" in sprints[0].integration_services
+        assert sprints[0].sprint_number == 1
+        assert sprints[0].name == "Auth & Payments"
+        assert sprints[0].integration_services == ["stripe", "github"]
 
-    def test_no_integration_services_when_not_needed(self) -> None:
-        plan = (
-            "## Sprint 1: Core Models\n"
-            "- **Needs Integration:** no\n"
-        )
-        sprints = PipelineEngine._parse_sprint_plan(plan)
-        assert sprints[0].integration_services == []
+    @patch("agentic_dev.orchestrator.engine.parse_with_llm", new_callable=AsyncMock)
+    async def test_inline_sprint_keyword_does_not_inflate_header_count(
+        self, mock_parse, tmp_path, claude,
+    ) -> None:
+        """Regression: 'Sprint N:' inside a notes paragraph must not be parsed
+        as a sprint header. The header sanity-count comes from anchored
+        regex; the LLM is asked to ignore narrative references."""
+        mock_parse.return_value = self._parsed([
+            {"sprint_number": 1, "name": "First", "scope_text": "..."},
+            {"sprint_number": 2, "name": "Second", "scope_text": "..."},
+        ])
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
 
-    def test_multiple_sprints_with_mixed_integration(self) -> None:
         plan = (
-            "## Sprint 1: Core Models\n"
-            "- **Needs Integration:** no\n"
+            "## Sprint 1: First\n"
+            "- **Features:** [F001]\n"
             "\n"
-            "## Sprint 2: Payments\n"
-            "- **Needs Integration:** yes\n"
-            "- **Integration Services:** Stripe\n"
+            "## Sprint 2: Second\n"
+            "- **Features:** [F002]\n"
             "\n"
-            "## Sprint 3: Social Login\n"
-            "- **Needs Integration:** yes\n"
-            "- **Integration Services:** GitHub\n"
+            "**QA Notes:**\n"
+            "1. **Sprint 5 over-constrained dependency on Sprint 4:** "
+            "F003 (now Sprint 6) no longer depends on Sprint 5. It depends "
+            "only on Sprint 3 and Sprint 4. Sprints 5 and 6 can run in parallel.\n"
         )
-        sprints = PipelineEngine._parse_sprint_plan(plan)
-        assert len(sprints) == 3
-        assert sprints[0].integration_services == []
-        assert sprints[1].integration_services == ["stripe"]
-        assert sprints[2].integration_services == ["github"]
+        sprints = await engine._parse_sprint_plan(plan)
 
-    def test_integration_services_normalized_to_lowercase(self) -> None:
-        plan = (
-            "## Sprint 1: Integrations\n"
-            "- **Needs Integration:** yes\n"
-            "- **Integration Services:** STRIPE, Supabase\n"
-        )
-        sprints = PipelineEngine._parse_sprint_plan(plan)
-        assert "stripe" in sprints[0].integration_services
-        assert "supabase" in sprints[0].integration_services
+        assert len(sprints) == 2
+        assert {s.sprint_number for s in sprints} == {1, 2}
 
-    def test_missing_integration_fields_defaults_to_empty(self) -> None:
-        plan = "## Sprint 1: Basic setup\n- **Features:** [F001]\n"
-        sprints = PipelineEngine._parse_sprint_plan(plan)
-        assert sprints[0].integration_services == []
+    @patch("agentic_dev.orchestrator.engine.parse_with_llm", new_callable=AsyncMock)
+    async def test_count_mismatch_propagates_as_output_parse_error(
+        self, mock_parse, tmp_path, claude,
+    ) -> None:
+        from agentic_dev.exceptions import OutputParseError as _OPE
 
-    def test_fallback_single_sprint_has_empty_services(self) -> None:
+        async def _raise(*_, sanity_check, **__):
+            sanity_check(self._parsed([
+                {"sprint_number": 1, "name": "First", "scope_text": "..."},
+            ]))
+            raise _OPE(agent_name="sprint_plan_parser", message="should not reach")
+
+        mock_parse.side_effect = _raise
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
+
+        plan = "## Sprint 1: First\n## Sprint 2: Second\n"
+        with pytest.raises(ValueError, match="count mismatch"):
+            await engine._parse_sprint_plan(plan)
+
+    @patch("agentic_dev.orchestrator.engine.parse_with_llm", new_callable=AsyncMock)
+    async def test_duplicate_sprint_number_rejected_by_sanity_check(
+        self, mock_parse, tmp_path, claude,
+    ) -> None:
+        async def _invoke(*_, sanity_check, **__):
+            sanity_check(self._parsed([
+                {"sprint_number": 1, "name": "One", "scope_text": "..."},
+                {"sprint_number": 1, "name": "OneAgain", "scope_text": "..."},
+            ]))
+
+        mock_parse.side_effect = _invoke
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
+
+        plan = "## Sprint 1: First\n## Sprint 1: Second\n"
+        with pytest.raises(ValueError, match="duplicate sprint_number"):
+            await engine._parse_sprint_plan(plan)
+
+    async def test_raises_when_no_sprint_headers_present(
+        self, tmp_path, claude,
+    ) -> None:
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
         plan = "Just do everything in one sprint."
-        sprints = PipelineEngine._parse_sprint_plan(plan)
-        assert len(sprints) == 1
-        assert sprints[0].integration_services == []
+        with pytest.raises(OutputParseError, match="No '## Sprint N:' headers"):
+            await engine._parse_sprint_plan(plan)
+
+    @patch("agentic_dev.orchestrator.engine.parse_with_llm", new_callable=AsyncMock)
+    async def test_passes_plan_text_and_schema_to_helper(
+        self, mock_parse, tmp_path, claude,
+    ) -> None:
+        from agentic_dev.state.parser_models import ParsedSprintPlan
+
+        mock_parse.return_value = self._parsed([
+            {"sprint_number": 1, "name": "First", "scope_text": "..."},
+        ])
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
+
+        plan = "## Sprint 1: First\n- **Features:** [F001]\n"
+        await engine._parse_sprint_plan(plan)
+
+        kwargs = mock_parse.call_args.kwargs
+        assert kwargs["text"] == plan
+        assert kwargs["schema_model"] is ParsedSprintPlan
+        assert kwargs["claude"] is claude
+        assert callable(kwargs["sanity_check"])
 
 
 class TestPreSprintMCPValidation:
@@ -1841,46 +1944,62 @@ class TestUATExtraContext:
 
 
 class TestParseSprintPlanScopeText:
-    """Tests for scope_text capture in _parse_sprint_plan."""
+    """Tests for scope_text propagation through the LLM parser."""
 
-    def test_scope_text_contains_full_block(self) -> None:
-        plan = (
-            "## Sprint 1: Auth & Payments\n"
+    @staticmethod
+    def _parsed(sprints):
+        from agentic_dev.state.parser_models import (
+            ParsedSprintEntry,
+            ParsedSprintPlan,
+        )
+        return ParsedSprintPlan(
+            sprints=[ParsedSprintEntry(**s) for s in sprints],
+        )
+
+    @patch("agentic_dev.orchestrator.engine.parse_with_llm", new_callable=AsyncMock)
+    async def test_scope_text_from_llm_preserved_on_sprint_state(
+        self, mock_parse, tmp_path, claude,
+    ) -> None:
+        block = (
+            "Sprint 1: Auth & Payments\n"
             "- **Type:** new\n"
             "- **Features:** [F001], [F002]\n"
             "- **Needs Integration:** yes\n"
-            "- **Integration Services:** Stripe\n"
+            "- **Integration Services:** Stripe"
         )
-        sprints = PipelineEngine._parse_sprint_plan(plan)
+        mock_parse.return_value = self._parsed([
+            {
+                "sprint_number": 1,
+                "name": "Auth & Payments",
+                "scope_text": block,
+                "needs_integration": True,
+                "integration_services": ["Stripe"],
+            },
+        ])
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
+
+        plan = "## " + block + "\n"
+        sprints = await engine._parse_sprint_plan(plan)
+
         assert len(sprints) == 1
-        assert "Sprint 1: Auth & Payments" in sprints[0].scope_text
-        assert "[F001], [F002]" in sprints[0].scope_text
-        assert "**Type:** new" in sprints[0].scope_text
+        assert sprints[0].scope_text == block
 
-    def test_scope_text_includes_header_line(self) -> None:
-        plan = "## Sprint 1: Core Models\n- **Features:** [F001]\n"
-        sprints = PipelineEngine._parse_sprint_plan(plan)
-        assert sprints[0].scope_text.startswith("Sprint 1:")
+    @patch("agentic_dev.orchestrator.engine.parse_with_llm", new_callable=AsyncMock)
+    async def test_multiple_sprints_have_separate_scope_texts(
+        self, mock_parse, tmp_path, claude,
+    ) -> None:
+        mock_parse.return_value = self._parsed([
+            {"sprint_number": 1, "name": "Core", "scope_text": "Sprint 1 scope text"},
+            {"sprint_number": 2, "name": "Pay", "scope_text": "Sprint 2 scope text"},
+        ])
+        engine = _make_engine_for_parser_tests(tmp_path, claude)
 
-    def test_multiple_sprints_have_separate_scope_texts(self) -> None:
-        plan = (
-            "## Sprint 1: Core Models\n"
-            "- **Features:** [F001]\n"
-            "\n"
-            "## Sprint 2: Payments\n"
-            "- **Features:** [F002]\n"
-        )
-        sprints = PipelineEngine._parse_sprint_plan(plan)
+        plan = "## Sprint 1: Core\n## Sprint 2: Pay\n"
+        sprints = await engine._parse_sprint_plan(plan)
+
         assert len(sprints) == 2
-        assert "[F001]" in sprints[0].scope_text
-        assert "[F001]" not in sprints[1].scope_text
-        assert "[F002]" in sprints[1].scope_text
-
-    def test_fallback_sprint_has_empty_scope_text(self) -> None:
-        plan = "Just do everything."
-        sprints = PipelineEngine._parse_sprint_plan(plan)
-        assert len(sprints) == 1
-        assert sprints[0].scope_text == ""
+        assert sprints[0].scope_text == "Sprint 1 scope text"
+        assert sprints[1].scope_text == "Sprint 2 scope text"
 
 
 class TestValidateSprintFeatureConventions:
