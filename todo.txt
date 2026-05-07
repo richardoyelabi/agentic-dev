@@ -1,4 +1,5 @@
 - make products more production ready - convo already started with claude
+- does architect (and designer) have access to codebase? they should
 - replace markdown api contracts with something more standardized using dtos and open specifications
 - break sprints up even further for ralph loops, both for docs and code
 - retry transient claude api errors - claude plan already in place
