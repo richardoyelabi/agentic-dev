@@ -8,7 +8,7 @@ claude:
   max_turns: 10
   max_budget_usd: 2.00
 prompt_template: uat_qa.md.j2
-input_documents: [features, uat_report]
+input_documents: [features_request, uat_report]
 output_documents: [uat_qa_report]
 qa_agent: null
 constraints:

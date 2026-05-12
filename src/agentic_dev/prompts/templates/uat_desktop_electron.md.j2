@@ -13,15 +13,15 @@ Boot the Electron app in dev mode, attach Playwright via CDP, and drive the real
 
 {{ features_request }}
 
-{% if frontend_spec %}## Frontend Spec
+{% if frontend_spec is defined and frontend_spec %}## Frontend Spec
 
 {{ frontend_spec }}
 
-{% endif %}{% if backend_spec %}## Backend Spec
+{% endif %}{% if backend_spec is defined and backend_spec %}## Backend Spec
 
 {{ backend_spec }}
 
-{% endif %}{% if api_contract %}## API Contract
+{% endif %}{% if api_contract is defined and api_contract %}## API Contract
 
 {{ api_contract }}
 
@@ -29,7 +29,7 @@ Boot the Electron app in dev mode, attach Playwright via CDP, and drive the real
 
 {{ sprint_plan }}
 
-{% if uat_prereqs %}## Prereq Probe Results
+{% if uat_prereqs is defined and uat_prereqs %}## Prereq Probe Results
 
 {{ uat_prereqs }}
 

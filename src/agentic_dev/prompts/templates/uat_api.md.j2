@@ -13,11 +13,11 @@ Start the backend, hit every endpoint the acceptance criteria reference, and rec
 
 {{ features_request }}
 
-{% if backend_spec %}## Backend Spec
+{% if backend_spec is defined and backend_spec %}## Backend Spec
 
 {{ backend_spec }}
 
-{% endif %}{% if api_contract %}## API Contract
+{% endif %}{% if api_contract is defined and api_contract %}## API Contract
 
 {{ api_contract }}
 
@@ -25,7 +25,7 @@ Start the backend, hit every endpoint the acceptance criteria reference, and rec
 
 {{ sprint_plan }}
 
-{% if uat_prereqs %}## Prereq Probe Results
+{% if uat_prereqs is defined and uat_prereqs %}## Prereq Probe Results
 
 {{ uat_prereqs }}
 
