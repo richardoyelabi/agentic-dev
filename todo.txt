@@ -20,3 +20,4 @@
 - Visual regression in web/desktop UAT
 - Device farm / real-device mobile UAT
 - automatically create new branches for each cycle (this is needed for real world teams)
+- e2e test for electron/tauri/flutter/rn_expo
