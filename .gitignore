@@ -17,3 +17,4 @@ venv/
 .worktrees/
 .omc/
 docs/superpowers/
+tests/e2e/fixtures/*_run/
