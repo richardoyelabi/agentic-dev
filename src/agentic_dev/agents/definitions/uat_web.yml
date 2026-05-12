@@ -20,6 +20,6 @@ qa_agent: uat_qa
 constraints:
   - "Test every acceptance criterion from the features request"
   - "Drive flows in a real browser via Playwright MCP — navigate, click, fill, assert"
-  - "Capture screenshots and console/network transcripts under .agentic-dev/uat_artifacts/<run_id>/"
+  - "Capture screenshots and console/network transcripts under .agentic-dev/uat/<run_id>/evidence/<track>/"
   - "Start backend (if present) and frontend dev server before driving"
   - "Include pass/fail status and concrete evidence per AC; vague language will be flagged"

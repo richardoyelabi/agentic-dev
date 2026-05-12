@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
-from agentic_dev.state.models import FrontendKind
+from agentic_dev.tracks import Track, default_tracks
 
 
 DEFAULT_PROJECTS_DIR = Path.home() / "projects"
@@ -32,9 +32,6 @@ SESSIONS_DIR = "sessions"
 STATE_LOCK_FILE = ".state.lock"
 DOCS_LOCK_FILE = ".docs.lock"
 SESSIONS_LOCK_FILE = ".sessions.lock"
-
-DOCS_DIR = "docs"
-QA_REPORTS_DIR = "qa_reports"
 
 DEFAULT_MAX_TURNS = 50
 
@@ -71,14 +68,6 @@ REGISTRY_FILE = GLOBAL_REGISTRY_DIR / "registry.json"
 # ---------------------------------------------------------------------------
 
 
-class DirectoryMap(BaseModel):
-    """Maps logical directory roles to actual relative paths within a project."""
-
-    frontend: str | None = None
-    backend: str | None = None
-    root: str = "."
-
-
 class ExternalSource(BaseModel):
     """A tracked external source (codebase path or Figma URL) with annotation."""
 
@@ -90,11 +79,9 @@ class ProjectConfig(BaseModel):
     """Full project configuration stored in .agentic-dev/config.json."""
 
     app_name: str
-    directory_map: DirectoryMap = Field(default_factory=DirectoryMap)
+    tracks: list[Track] = Field(default_factory=default_tracks)
     sources: dict[str, list[ExternalSource]] = Field(default_factory=dict)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
-    sync_ignores: list[str] = Field(default_factory=list)
-    frontend_kind: FrontendKind | None = None
     uat_mode: Literal["spec_only", "full"] = "full"
 
 
@@ -131,8 +118,9 @@ def load_project_config(project_dir: Path) -> ProjectConfig:
     if "app_name" not in data:
         data["app_name"] = project_dir.name
 
-    if "frontend_kind" not in data and data.get("directory_map", {}).get("frontend"):
-        data["frontend_kind"] = FrontendKind.WEB.value
+    # Drop any legacy fields that no longer belong on ProjectConfig.
+    for legacy in ("directory_map", "frontend_kind", "sync_ignores"):
+        data.pop(legacy, None)
 
     return ProjectConfig.model_validate(data)
 

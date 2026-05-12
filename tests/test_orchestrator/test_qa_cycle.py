@@ -9,7 +9,7 @@ from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError
-from agentic_dev.orchestrator.qa_cycle import run_qa_cycle, CorrectionRound
+from agentic_dev.orchestrator.qa_cycle import run_qa_cycle
 from agentic_dev.prompts.renderer import PromptRenderer
 
 
@@ -291,7 +291,7 @@ async def test_documents_saved_to_store_no_correction(
     )
 
     doc_store.write.assert_any_call("result.md", "the output")
-    doc_store.write.assert_any_call("qa_reports/result.md", "APPROVED")
+    doc_store.write.assert_any_call("qa/result.md", "APPROVED")
 
 
 @pytest.mark.asyncio
@@ -349,7 +349,7 @@ async def test_initial_qa_report_preserved_on_correction(
     )
 
     doc_store.write.assert_any_call(
-        "qa_reports/doc.md_initial", "ISSUES_FOUND: problems"
+        "qa/doc.md_initial", "ISSUES_FOUND: problems"
     )
 
 
@@ -357,7 +357,7 @@ async def test_initial_qa_report_preserved_on_correction(
 async def test_final_qa_report_saved_to_doc_store(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """The final QA report overwrites qa_reports/{name} in the doc store."""
+    """The final QA report overwrites qa/{name} in the doc store."""
     claude.run.side_effect = [
         _make_claude_result("v1", cost=0.10),
         _make_claude_result("ISSUES_FOUND: fix it", cost=0.05),
@@ -379,7 +379,7 @@ async def test_final_qa_report_saved_to_doc_store(
     qa_report_writes = [
         call
         for call in doc_store.write.call_args_list
-        if call[0][0] == "qa_reports/doc.md"
+        if call[0][0] == "qa/doc.md"
     ]
     # Initial write + final overwrite
     assert len(qa_report_writes) == 2
@@ -413,9 +413,9 @@ async def test_round_qa_reports_saved_to_doc_store(
     )
 
     doc_store.write.assert_any_call(
-        "qa_reports/doc.md_round_1", "ISSUES_FOUND: round2"
+        "qa/doc.md_round_1", "ISSUES_FOUND: round2"
     )
-    doc_store.write.assert_any_call("qa_reports/doc.md_round_2", "APPROVED")
+    doc_store.write.assert_any_call("qa/doc.md_round_2", "APPROVED")
 
 
 # ---------------------------------------------------------------------------
@@ -1145,7 +1145,7 @@ async def test_skip_to_correction_loads_existing_output_and_runs_correction(
     # doc_store already has the action output and QA report from prior run
     doc_store.read = MagicMock(side_effect=lambda name: {
         "out.md": "prior action output",
-        "qa_reports/out.md": "ISSUES_FOUND: fix the bug",
+        "qa/out.md": "ISSUES_FOUND: fix the bug",
     }[name])
     doc_store.exists = MagicMock(return_value=True)
 
@@ -1179,7 +1179,7 @@ async def test_skip_to_correction_no_issues_returns_existing(
     """When skip_to_correction=True but QA report has no issues, no correction runs."""
     doc_store.read = MagicMock(side_effect=lambda name: {
         "out.md": "prior action output",
-        "qa_reports/out.md": "APPROVED: all good",
+        "qa/out.md": "APPROVED: all good",
     }[name])
     doc_store.exists = MagicMock(return_value=True)
 

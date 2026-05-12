@@ -242,7 +242,7 @@ async def run_qa_cycle(
     ))
 
     qa_key = qa_output_key or output_doc_name
-    qa_report_name = f"qa_reports/{output_doc_name}"
+    qa_report_name = f"qa/{output_doc_name}"
 
     action_config = to_run_config(action_agent, mcp_config=mcp_config)
     qa_config = to_run_config(qa_agent)
@@ -360,7 +360,7 @@ async def run_qa_cycle(
         # Preserve the initial QA report before overwrites
         if round_num == 1:
             doc_store.write(
-                f"qa_reports/{output_doc_name}_initial", initial_qa_report
+                f"qa/{output_doc_name}_initial", initial_qa_report
             )
 
         # Correction: prefer session continuation when we have a session ID
@@ -444,7 +444,7 @@ async def run_qa_cycle(
         ))
 
         doc_store.write(
-            f"qa_reports/{output_doc_name}_round_{round_num}", re_review_report
+            f"qa/{output_doc_name}_round_{round_num}", re_review_report
         )
         doc_store.write(qa_report_name, re_review_report)
 

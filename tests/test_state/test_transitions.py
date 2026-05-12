@@ -39,7 +39,6 @@ class TestValidateTransition:
             PipelinePhase.INPUT_PROCESSING,
             PipelinePhase.FEATURE_ANALYSIS,
             PipelinePhase.ARCHITECTURE,
-            PipelinePhase.SYNCING,
         }
         for phase in PipelinePhase:
             if phase in allowed:
@@ -87,21 +86,6 @@ class TestResetForUpdate:
         result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
 
         assert result.phase == PipelinePhase.INPUT_PROCESSING
-        assert result.mode == "update"
-        assert result.sprints == []
-        assert result.agent_runs == []
-        assert result.error is None
-        assert result.current_sprint is None
-
-    def test_reset_for_update_from_adopted(self) -> None:
-        state = PipelineState(
-            project_name="test",
-            phase=PipelinePhase.ADOPTED,
-            total_cost_usd=3.0,
-        )
-        result = reset_for_update(state, PipelinePhase.FEATURE_ANALYSIS, "update")
-
-        assert result.phase == PipelinePhase.FEATURE_ANALYSIS
         assert result.mode == "update"
         assert result.sprints == []
         assert result.agent_runs == []
@@ -204,7 +188,7 @@ class TestResumeFromFailure:
             sprint_number=2,
             name="Invoice Ingestion",
             status=SprintStatus.FAILED,
-            failed_at_step=SprintStatus.FRONTEND_DEV,
+            failed_at_step=SprintStatus.IN_PROGRESS,
             completed_at=datetime(2026, 4, 4, 12, 0, 0, tzinfo=timezone.utc),
         )
         state = PipelineState(
@@ -215,7 +199,7 @@ class TestResumeFromFailure:
         )
         resumed = resume_from_failure(state)
 
-        assert resumed.sprints[0].status == SprintStatus.FRONTEND_DEV
+        assert resumed.sprints[0].status == SprintStatus.IN_PROGRESS
         assert resumed.sprints[0].failed_at_step is None
         assert resumed.sprints[0].completed_at is None
 
@@ -250,7 +234,7 @@ class TestResumeFromFailure:
             sprint_number=2,
             name="Invoice Ingestion",
             status=SprintStatus.FAILED,
-            failed_at_step=SprintStatus.FRONTEND_DEV,
+            failed_at_step=SprintStatus.IN_PROGRESS,
             completed_at=datetime(2026, 4, 4, 12, 0, 0, tzinfo=timezone.utc),
         )
         state = PipelineState(
@@ -263,6 +247,6 @@ class TestResumeFromFailure:
 
         assert resumed.sprints[0].status == SprintStatus.COMPLETE
         assert resumed.sprints[0].completed_at is not None
-        assert resumed.sprints[1].status == SprintStatus.FRONTEND_DEV
+        assert resumed.sprints[1].status == SprintStatus.IN_PROGRESS
         assert resumed.sprints[1].completed_at is None
         assert resumed.sprints[1].failed_at_step is None

@@ -6,28 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
-class ProjectType(StrEnum):
-    """Type of project being developed."""
-
-    FULLSTACK = "fullstack"
-    FRONTEND_ONLY = "frontend_only"
-    BACKEND_ONLY = "backend_only"
-
-
-class FrontendKind(StrEnum):
-    """Kind of user-facing surface the project delivers.
-
-    Orthogonal to ProjectType: a CLI-only app is frontend_only+cli; a
-    mobile app with an HTTP backend is fullstack+mobile. NONE is valid
-    only when ProjectType == BACKEND_ONLY.
-    """
-
-    WEB = "web"
-    CLI = "cli"
-    DESKTOP = "desktop"
-    MOBILE = "mobile"
-    NONE = "none"
+from agentic_dev.tracks import Track, TrackProgress
 
 
 class PipelinePhase(StrEnum):
@@ -48,21 +27,13 @@ class PipelinePhase(StrEnum):
     UAT_QA = "UAT_QA"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
-    ADOPTING = "ADOPTING"
-    SYNCING = "SYNCING"
-    ADOPTED = "ADOPTED"
 
 
 class SprintStatus(StrEnum):
-    """Status values for an individual sprint."""
+    """Sprint-wide status, orthogonal to per-track ``TrackProgress``."""
 
     PENDING = "pending"
-    BACKEND_DEV = "backend_dev"
-    BACKEND_QA = "backend_qa"
-    BACKEND_CORRECTION = "backend_correction"
-    FRONTEND_DEV = "frontend_dev"
-    FRONTEND_QA = "frontend_qa"
-    FRONTEND_CORRECTION = "frontend_correction"
+    IN_PROGRESS = "in_progress"
     INTEGRATION = "integration"
     INTEGRATION_QA = "integration_qa"
     INTEGRATION_CORRECTION = "integration_correction"
@@ -77,10 +48,10 @@ class SprintState(BaseModel):
     name: str
     scope_text: str = ""
     status: SprintStatus = SprintStatus.PENDING
-    backend_session_id: str | None = None
-    frontend_session_id: str | None = None
     integration_session_id: str | None = None
     integration_services: list[str] = Field(default_factory=list)
+    tracks_in_scope: list[str] = Field(default_factory=list)
+    track_progress: dict[str, TrackProgress] = Field(default_factory=dict)
     failed_at_step: SprintStatus | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -103,10 +74,8 @@ class PipelineState(BaseModel):
     """Top-level pipeline state persisted to disk."""
 
     project_name: str
-    project_type: ProjectType | None = None
-    frontend_kind: FrontendKind | None = None
     phase: PipelinePhase = PipelinePhase.IDLE
-    mode: Literal["new", "update", "remediate", "adopt"] = "new"
+    mode: Literal["new", "update", "remediate"] = "new"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     sprints: list[SprintState] = Field(default_factory=list)
@@ -118,51 +87,4 @@ class PipelineState(BaseModel):
     remediation_cycle: int = 0
     agent_runs: list[AgentRunRecord] = Field(default_factory=list)
     active_session_id: str | None = None
-    origin: Literal["created", "adopted"] = "created"
-    last_sync_at: datetime | None = None
-
-    @property
-    def has_frontend(self) -> bool:
-        """Whether this project includes a frontend."""
-        return self.project_type in (
-            None, ProjectType.FULLSTACK, ProjectType.FRONTEND_ONLY
-        )
-
-    @property
-    def has_backend(self) -> bool:
-        """Whether this project includes a backend."""
-        return self.project_type in (
-            None, ProjectType.FULLSTACK, ProjectType.BACKEND_ONLY
-        )
-
-    @property
-    def expected_architecture_docs(self) -> list[str]:
-        """Architecture documents expected based on project type."""
-        if self.project_type == ProjectType.FRONTEND_ONLY:
-            return ["frontend_spec"]
-        if self.project_type == ProjectType.BACKEND_ONLY:
-            return ["backend_spec", "api_contract"]
-        return ["frontend_spec", "backend_spec", "api_contract"]
-
-
-class DriftItem(BaseModel):
-    """A single item of drift detected between code, specs, and/or Figma designs."""
-
-    id: str
-    scope: Literal["api", "frontend", "backend", "figma"]
-    category: Literal[
-        "in_code_not_spec", "in_spec_not_code", "difference", "design_drift"
-    ]
-    description: str
-    source_file: str | None = None
-    spec_reference: str | None = None
-    resolution: Literal["to_spec", "to_code", "ignore", "defer"] | None = None
-
-
-class SyncReport(BaseModel):
-    """Structured report of drift between code, specs, and Figma designs."""
-
-    generated_at: datetime
-    scope: Literal["all", "api", "frontend", "backend"] = "all"
-    items: list[DriftItem] = Field(default_factory=list)
-    summary: str = ""
+    tracks: list[Track] = Field(default_factory=list)

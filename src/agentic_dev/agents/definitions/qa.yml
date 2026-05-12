@@ -1,0 +1,21 @@
+name: qa
+description: "Reviews code on one track against the spec, tests, and security"
+team: development
+claude:
+  model: opus
+  permission_mode: bypassPermissions
+  allowed_tools: [Read, Glob, Grep, Bash]
+  max_budget_usd: 2.00
+  max_turns: 25
+prompt_template: qa.md.j2
+input_documents: []
+output_documents: [qa_report]
+working_directory: "."
+qa_agent: null
+constraints:
+  - "Review code against the track spec requirements"
+  - "Verify tests exist and are meaningful"
+  - "Check for security vulnerabilities relevant to this track's kind"
+  - "Check for obvious scaling or reliability issues"
+  - "Verify CI/CD pipeline is maintained if present"
+  - "Verify project documentation (README.md, ARCHITECTURE.md) is present, accurate, and reflects this sprint's changes"

@@ -40,7 +40,7 @@ For each acceptance criterion, run the CLI as an end user would and record what 
 {% endif %}# Runtime Verification
 
 1. **Invoke the CLI.** For each acceptance criterion, construct a concrete invocation (command + flags + arguments + stdin if any) and run it via `Bash`. Run in non-interactive mode — no TTY prompts.
-2. **Record actual output.** Capture `stdout`, `stderr`, and `exit_code`. Save transcripts under `.agentic-dev/uat_artifacts/<run_id>/ac_NNN_stdout.txt` / `_stderr.txt`.
+2. **Record actual output.** Capture `stdout`, `stderr`, and `exit_code`. Save transcripts under `.agentic-dev/uat/<run_id>/evidence/<track>/ac_NNN_stdout.txt` / `_stderr.txt`.
 3. **Check side effects.** If the criterion involves file/state changes, verify them with `Read`/`Glob` and include the observed state as evidence.
 4. **Do not substitute unit-test results for runtime verification.** Existing tests give regression context, not AC coverage.
 

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from agentic_dev.claude.runner import ClaudeRunner
 
 
 class DiffResult(BaseModel):

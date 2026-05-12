@@ -63,14 +63,14 @@ class TestOnboardingCLI:
         assert result.exit_code == 0, result.output
         mock_analyze_codebase.assert_called_once()
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Build a dashboard" in content
         assert "Codebase Analysis" in content
         # Figma URL should not be concatenated into user_input
         assert "figma.com/file/abc" not in content
 
-        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
         assert figma_sources_path.exists()
         assert "https://figma.com/file/abc" in figma_sources_path.read_text(encoding="utf-8")
 
@@ -92,13 +92,13 @@ class TestOnboardingCLI:
 
         assert result.exit_code == 0, result.output
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Build a landing page" in content
         # Figma URL should not be concatenated into user_input
         assert "figma.com/file/xyz" not in content
 
-        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
         assert figma_sources_path.exists()
         assert "https://figma.com/file/xyz" in figma_sources_path.read_text(encoding="utf-8")
 
@@ -125,7 +125,7 @@ class TestOnboardingCLI:
         )
 
         assert result.exit_code == 0, result.output
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content
 
@@ -200,13 +200,13 @@ class TestOnboardingCLI:
         assert result.exit_code == 0, result.output
         mock_run_pipeline.assert_called_once()
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content
         # Figma URL should not be concatenated into user_input
         assert "figma.com/file/abc" not in content
 
-        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
         assert figma_sources_path.exists()
 
 
@@ -238,7 +238,7 @@ class TestMultiSourceOnboarding:
         assert result.exit_code == 0, result.output
         assert mock_analyze_codebase.call_count == 2
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Frontend: React" in content
         assert "Backend: Django" in content
@@ -262,7 +262,7 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
 
-        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
         assert figma_sources_path.exists()
         figma_sources_content = figma_sources_path.read_text(encoding="utf-8")
         assert "https://figma.com/file/a" in figma_sources_content
@@ -292,7 +292,7 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Source: Codebase - Frontend React app" in content
         assert "/path/frontend" in content
@@ -320,7 +320,7 @@ class TestMultiSourceOnboarding:
 
         assert result.exit_code == 0, result.output
 
-        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
         assert figma_sources_path.exists()
         figma_sources_content = figma_sources_path.read_text(encoding="utf-8")
         assert "https://figma.com/file/abc" in figma_sources_content
@@ -355,14 +355,14 @@ class TestMultiSourceOnboarding:
         assert result.exit_code == 0, result.output
         assert mock_analyze_codebase.call_count == 2
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Source: Codebase - Frontend" in content
         assert "Source: Codebase - Backend API" in content
         # Figma URLs should not be concatenated into user_input
         assert "figma.com/file/a" not in content
 
-        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
         assert figma_sources_path.exists()
 
     @patch("agentic_dev.cli._run_pipeline")
@@ -383,7 +383,7 @@ class TestMultiSourceOnboarding:
         )
 
         assert result.exit_code == 0, result.output
-        figma_sources_path = tmp_path / "my-app" / "docs" / "figma_sources.md"
+        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
         assert figma_sources_path.exists()
         content = figma_sources_path.read_text(encoding="utf-8")
         assert "https://figma.com/file/a" in content
@@ -416,6 +416,6 @@ class TestMultiSourceOnboarding:
         assert result.exit_code == 0, result.output
         mock_analyze_codebase.assert_called_once()
 
-        user_input_path = tmp_path / "my-app" / "docs" / "user_input.md"
+        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
         content = user_input_path.read_text(encoding="utf-8")
         assert "Codebase Analysis" in content

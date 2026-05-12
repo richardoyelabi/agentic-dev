@@ -15,5 +15,5 @@ constraints:
   - "Test every acceptance criterion from the features request"
   - "Drive via Maestro when available; fall back to project's integration_test (Flutter) or detox/Expo runner"
   - "Require a running emulator/simulator; do not fabricate device interactions"
-  - "Capture Maestro run outputs and screenshots under .agentic-dev/uat_artifacts/<run_id>/"
+  - "Capture Maestro run outputs and screenshots under .agentic-dev/uat/<run_id>/evidence/<track>/"
   - "Include pass/fail status and concrete evidence per AC; vague language will be flagged"

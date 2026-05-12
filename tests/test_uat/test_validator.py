@@ -1,6 +1,5 @@
 """Tests for the UAT report validator (false-PASS structural gate)."""
 
-import textwrap
 
 from agentic_dev.uat.validator import validate_uat_report
 

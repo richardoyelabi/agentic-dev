@@ -168,18 +168,30 @@ AGENT_TEMPLATES = {
         "structured_input": "# Structured Input\n- [F001] Auth",
         "constraints": ["Minimalism first"],
         "correction_mode": False,
-        "project_type": "fullstack",
+        "tracks": [
+            {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+        ],
     },
     "architect_qa.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
         "structured_input": "# Structured Input\n- [F001] Auth",
-        "architecture": "# Frontend Spec\n## Pages\n# Backend Spec\n## Models\n# API Contract\n## Endpoints",
-        "project_type": "fullstack",
+        "architecture": "# Web Spec\n## Pages\n# API Spec\n## Models\n# API Contract\n## Endpoints",
+        "tracks": [
+            {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+        ],
     },
     "sprint_planner.md.j2": {
         "features": "# Features Request\n## Feature: [F001] Auth",
-        "frontend_spec": "# Frontend Spec",
-        "backend_spec": "# Backend Spec",
+        "tracks": [
+            {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+        ],
+        "track_specs": {
+            "web_spec": "# Web Spec",
+            "api_spec": "# API Spec",
+        },
         "api_contract": "# API Contract",
         "constraints": ["Order by dependency"],
         "correction_mode": False,
@@ -188,29 +200,23 @@ AGENT_TEMPLATES = {
         "features": "# Features Request",
         "sprint_plan": "# Sprint Plan\n## Sprint 1: Auth",
     },
-    "frontend_developer.md.j2": {
-        "frontend_spec": "# Frontend Spec\n## Pages",
+    "developer.md.j2": {
+        "track_name": "web",
+        "track_kind": "web",
+        "track_spec": "# Track Spec\n## Pages",
         "api_contract": "# API Contract\n## Endpoints",
         "sprint_scope": "Sprint 1: Authentication",
         "constraints": ["Use TDD"],
         "correction_mode": False,
     },
-    "frontend_qa.md.j2": {
-        "frontend_spec": "# Frontend Spec",
+    "qa.md.j2": {
+        "track_name": "web",
+        "track_kind": "web",
+        "track_spec": "# Track Spec",
         "api_contract": "# API Contract",
         "sprint_scope": "# Sprint Scope",
-    },
-    "backend_developer.md.j2": {
-        "backend_spec": "# Backend Spec\n## Models",
-        "api_contract": "# API Contract\n## Endpoints",
-        "sprint_scope": "Sprint 1: Authentication",
-        "constraints": ["Use TDD"],
+        "constraints": ["Check for security issues"],
         "correction_mode": False,
-    },
-    "backend_qa.md.j2": {
-        "backend_spec": "# Backend Spec",
-        "api_contract": "# API Contract",
-        "sprint_scope": "# Sprint Scope",
     },
     "integration.md.j2": {
         "api_contract": "# API Contract",
@@ -222,40 +228,6 @@ AGENT_TEMPLATES = {
         "api_contract": "# API Contract",
         "sprint_scope": "# Sprint Scope",
         "integration_guide": "# Integration Guide\n## Service: Stripe",
-    },
-    "structure_detector.md.j2": {},
-    "spec_reverse_engineer.md.j2": {
-        "target_spec_type": "frontend_spec",
-        "existing_specs": "",
-        "constraints": ["Follow ID conventions"],
-        "correction_mode": False,
-    },
-    "spec_reverse_engineer_qa.md.j2": {
-        "spec_output": "# Frontend Spec\n## Tech Stack\n- Framework: React 18",
-        "target_spec_type": "frontend_spec",
-    },
-    "feature_extractor.md.j2": {
-        "specs": "# Frontend Spec\n## Pages\n### [P001] Home",
-        "constraints": ["Use EXISTING-F prefix"],
-        "correction_mode": False,
-    },
-    "feature_extractor_qa.md.j2": {
-        "features_output": "# Features Request\n## Feature: [EXISTING-F001] Auth",
-    },
-    "code_analyzer.md.j2": {
-        "analysis_scope": "backend",
-    },
-    "drift_detector.md.j2": {
-        "code_snapshots": "# Code Snapshot: Backend\n## Endpoints\n- GET /api/users",
-        "spec_documents": "# API Contract\n## Endpoints\n### [E001] GET /api/users",
-        "figma_analysis": "",
-        "figma_sources": "",
-        "sync_ignores": [],
-    },
-    "spec_updater.md.j2": {
-        "spec_document": "# API Contract\n## Endpoints\n### [E001] GET /api/users",
-        "resolved_items": [{"id": "DRIFT-001", "category": "in_code_not_spec", "description": "POST /api/webhooks"}],
-        "constraints": ["Maintain ID sequences"],
     },
     "input_updater.md.j2": {
         "structured_input": "# Structured Input\n## Feature Requirements\n- [F001] Auth\n- [F002] Dashboard",
@@ -329,43 +301,24 @@ AGENT_TEMPLATES = {
 
 
 class TestDocumentationRequirements:
-    """Verify developer templates include documentation requirements and QA templates include documentation criterion."""
+    """Verify the developer template includes documentation requirements and the QA template includes documentation criterion."""
 
-    def test_frontend_developer_includes_documentation_section(self, real_renderer):
+    def test_developer_includes_documentation_section(self, real_renderer):
         result = real_renderer.render(
-            "frontend_developer.md.j2",
-            AGENT_TEMPLATES["frontend_developer.md.j2"],
+            "developer.md.j2",
+            AGENT_TEMPLATES["developer.md.j2"],
         )
         assert "Documentation Requirements" in result
         assert "README.md" in result
         assert "ARCHITECTURE.md" in result
         assert "CLAUDE.md" in result
 
-    def test_backend_developer_includes_documentation_section(self, real_renderer):
+    def test_qa_includes_documentation_criterion(self, real_renderer):
         result = real_renderer.render(
-            "backend_developer.md.j2",
-            AGENT_TEMPLATES["backend_developer.md.j2"],
+            "qa.md.j2",
+            AGENT_TEMPLATES["qa.md.j2"],
         )
-        assert "Documentation Requirements" in result
-        assert "README.md" in result
-        assert "ARCHITECTURE.md" in result
-        assert "CLAUDE.md" in result
-
-    def test_frontend_qa_includes_documentation_criterion(self, real_renderer):
-        result = real_renderer.render(
-            "frontend_qa.md.j2",
-            AGENT_TEMPLATES["frontend_qa.md.j2"],
-        )
-        assert "Is it documented?" in result
-        assert "### Documentation" in result
-
-    def test_backend_qa_includes_documentation_criterion(self, real_renderer):
-        result = real_renderer.render(
-            "backend_qa.md.j2",
-            AGENT_TEMPLATES["backend_qa.md.j2"],
-        )
-        assert "Is it documented?" in result
-        assert "### Documentation" in result
+        assert "Documentation" in result
 
 
 class TestAgentTemplatesSmokeTest:
@@ -401,7 +354,10 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "structured_input": "structured input content",
             "constraints": [],
             "correction_mode": False,
-            "project_type": "fullstack",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
         })
         assert self.MARKER in result, (
             "architect.md.j2 did not render 'features' variable — "
@@ -414,7 +370,10 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "features": f"Features: {self.MARKER}",
             "structured_input": "structured input",
             "architecture": f"Architecture: {self.MARKER}",
-            "project_type": "fullstack",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
         })
         assert self.MARKER in result, (
             "architect_qa.md.j2 did not render 'features' or 'architecture' — "
@@ -436,8 +395,11 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         """engine.py passes 'features' key, not 'features_request'."""
         result = real_renderer.render("sprint_planner.md.j2", {
             "features": f"Features: {self.MARKER}",
-            "frontend_spec": "frontend spec",
-            "backend_spec": "backend spec",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
+            "track_specs": {"web_spec": "web spec", "api_spec": "api spec"},
             "api_contract": "api contract",
             "constraints": [],
             "correction_mode": False,
@@ -458,27 +420,19 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "likely still using 'features_request'"
         )
 
-    def test_backend_qa_receives_sprint_scope(self, real_renderer):
+    def test_qa_receives_sprint_scope(self, real_renderer):
         """sprint_runner.py passes 'sprint_scope', not 'sprint_plan'."""
-        result = real_renderer.render("backend_qa.md.j2", {
-            "backend_spec": "backend spec",
+        result = real_renderer.render("qa.md.j2", {
+            "track_name": "web",
+            "track_kind": "web",
+            "track_spec": "track spec",
             "api_contract": "api contract",
             "sprint_scope": f"Sprint scope: {self.MARKER}",
+            "constraints": [],
+            "correction_mode": False,
         })
         assert self.MARKER in result, (
-            "backend_qa.md.j2 did not render 'sprint_scope' — "
-            "likely still using 'sprint_plan'"
-        )
-
-    def test_frontend_qa_receives_sprint_scope(self, real_renderer):
-        """sprint_runner.py passes 'sprint_scope', not 'sprint_plan'."""
-        result = real_renderer.render("frontend_qa.md.j2", {
-            "frontend_spec": "frontend spec",
-            "api_contract": "api contract",
-            "sprint_scope": f"Sprint scope: {self.MARKER}",
-        })
-        assert self.MARKER in result, (
-            "frontend_qa.md.j2 did not render 'sprint_scope' — "
+            "qa.md.j2 did not render 'sprint_scope' — "
             "likely still using 'sprint_plan'"
         )
 
@@ -516,7 +470,10 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "figma_mcp_available": "true",
             "constraints": [],
             "correction_mode": False,
-            "project_type": "fullstack",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
         })
         assert "Figma Design Reference" in result
         assert "figma.com/file/abc" in result
@@ -528,7 +485,10 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "structured_input": "# Structured Input\n- [F001] Auth",
             "constraints": [],
             "correction_mode": False,
-            "project_type": "fullstack",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
         })
         assert "Figma Design Reference" not in result
 
@@ -540,7 +500,10 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/xyz",
             "figma_mcp_available": "true",
             "architecture": "# Frontend Spec\n## Pages",
-            "project_type": "fullstack",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
         })
         assert "Figma Design Reference" in result
         assert "figma.com/file/xyz" in result
@@ -551,7 +514,10 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "features": "# Features Request",
             "structured_input": "# Structured Input",
             "architecture": "# Frontend Spec\n## Pages",
-            "project_type": "fullstack",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
         })
         assert "Figma Design Reference" not in result
 
@@ -622,55 +588,36 @@ class TestFigmaPromptSections:
 
     def test_frontend_developer_includes_figma_section_when_available(self, real_renderer):
         context = {
-            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+            **AGENT_TEMPLATES["developer.md.j2"],
             "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
             "figma_mcp_available": "true",
         }
-        result = real_renderer.render("frontend_developer.md.j2", context)
+        result = real_renderer.render("developer.md.j2", context)
         assert "Figma Design Reference" in result
         assert "visual source of truth" in result.lower()
         assert "figma.com/file/abc" in result
 
     def test_frontend_developer_excludes_figma_section_without_sources(self, real_renderer):
         result = real_renderer.render(
-            "frontend_developer.md.j2",
-            AGENT_TEMPLATES["frontend_developer.md.j2"],
+            "developer.md.j2",
+            AGENT_TEMPLATES["developer.md.j2"],
         )
         assert "Figma Design Reference" not in result
 
     def test_frontend_developer_figma_mcp_unavailable_fallback(self, real_renderer):
         context = {
-            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+            **AGENT_TEMPLATES["developer.md.j2"],
             "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
             "figma_mcp_available": "false",
         }
-        result = real_renderer.render("frontend_developer.md.j2", context)
+        result = real_renderer.render("developer.md.j2", context)
         assert "Figma Design Reference" in result
         assert "not available" in result.lower()
 
-    def test_frontend_qa_includes_figma_section_when_available(self, real_renderer):
-        context = {
-            **AGENT_TEMPLATES["frontend_qa.md.j2"],
-            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
-            "figma_mcp_available": "true",
-        }
-        result = real_renderer.render("frontend_qa.md.j2", context)
-        assert "Figma Design Reference" in result
-        assert "figma.com/file/abc" in result
-
-    def test_frontend_qa_includes_design_fidelity_criterion(self, real_renderer):
-        context = {
-            **AGENT_TEMPLATES["frontend_qa.md.j2"],
-            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
-            "figma_mcp_available": "true",
-        }
-        result = real_renderer.render("frontend_qa.md.j2", context)
-        assert "match the design" in result.lower()
-
     def test_frontend_qa_excludes_figma_section_without_sources(self, real_renderer):
         result = real_renderer.render(
-            "frontend_qa.md.j2",
-            AGENT_TEMPLATES["frontend_qa.md.j2"],
+            "qa.md.j2",
+            AGENT_TEMPLATES["qa.md.j2"],
         )
         assert "Figma Design Reference" not in result
 
@@ -678,32 +625,12 @@ class TestFigmaPromptSections:
 class TestUpdateContextInTemplates:
     """Verify update context flows correctly through templates."""
 
-    def test_backend_qa_includes_update_context_when_change_request_present(self, real_renderer):
-        result = real_renderer.render("backend_qa.md.j2", {
-            **AGENT_TEMPLATES["backend_qa.md.j2"],
-            "change_request": "Change payment endpoint to /api/v2/payments",
-        })
-        assert "Update Context" in result
-        assert "Change payment endpoint" in result
-        assert "Additional review criteria for updates" in result
-
-    def test_backend_qa_omits_update_context_without_change_request(self, real_renderer):
+    def test_qa_omits_update_context_without_change_request(self, real_renderer):
         result = real_renderer.render(
-            "backend_qa.md.j2",
-            AGENT_TEMPLATES["backend_qa.md.j2"],
+            "qa.md.j2",
+            AGENT_TEMPLATES["qa.md.j2"],
         )
         assert "Additional review criteria for updates" not in result
-
-    def test_frontend_qa_includes_update_context_when_change_request_present(self, real_renderer):
-        result = real_renderer.render("frontend_qa.md.j2", {
-            **AGENT_TEMPLATES["frontend_qa.md.j2"],
-            "change_request": "Add dark mode toggle",
-            "design_changes": "## Components\n- Button: color changed",
-        })
-        assert "Update Context" in result
-        assert "Add dark mode toggle" in result
-        assert "Design Changes" in result
-        assert "Button: color changed" in result
 
     def test_integration_qa_includes_update_context_when_change_request_present(self, real_renderer):
         result = real_renderer.render("integration_qa.md.j2", {
@@ -734,23 +661,23 @@ class TestDeveloperTemplateReordering:
     """Verify update context appears before specs in developer templates."""
 
     def test_backend_developer_update_context_before_spec(self, real_renderer):
-        result = real_renderer.render("backend_developer.md.j2", {
-            **AGENT_TEMPLATES["backend_developer.md.j2"],
+        result = real_renderer.render("developer.md.j2", {
+            **AGENT_TEMPLATES["developer.md.j2"],
             "change_request": "CHANGE_MARKER_HERE",
         })
         update_pos = result.index("CHANGE_MARKER_HERE")
-        spec_pos = result.index("# Input: Backend Spec")
+        spec_pos = result.index("# Input: Track Spec")
         assert update_pos < spec_pos, (
             "Update context should appear before the backend spec input section"
         )
 
     def test_frontend_developer_update_context_before_spec(self, real_renderer):
-        result = real_renderer.render("frontend_developer.md.j2", {
-            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+        result = real_renderer.render("developer.md.j2", {
+            **AGENT_TEMPLATES["developer.md.j2"],
             "change_request": "CHANGE_MARKER_HERE",
         })
         update_pos = result.index("CHANGE_MARKER_HERE")
-        spec_pos = result.index("# Input: Frontend Spec")
+        spec_pos = result.index("# Input: Track Spec")
         assert update_pos < spec_pos, (
             "Update context should appear before the frontend spec input section"
         )
@@ -760,8 +687,8 @@ class TestCodeCorrectionInstructions:
     """Verify developer templates use code-specific correction instructions."""
 
     def test_backend_developer_uses_code_correction_partial(self, real_renderer):
-        result = real_renderer.render("backend_developer.md.j2", {
-            **AGENT_TEMPLATES["backend_developer.md.j2"],
+        result = real_renderer.render("developer.md.j2", {
+            **AGENT_TEMPLATES["developer.md.j2"],
             "correction_mode": True,
             "previous_output": "Previous summary",
             "qa_feedback": "Fix the auth middleware",
@@ -771,8 +698,8 @@ class TestCodeCorrectionInstructions:
         assert "produce a corrected version" not in result
 
     def test_frontend_developer_uses_code_correction_partial(self, real_renderer):
-        result = real_renderer.render("frontend_developer.md.j2", {
-            **AGENT_TEMPLATES["frontend_developer.md.j2"],
+        result = real_renderer.render("developer.md.j2", {
+            **AGENT_TEMPLATES["developer.md.j2"],
             "correction_mode": True,
             "previous_output": "Previous summary",
             "qa_feedback": "Fix the component styling",
@@ -811,17 +738,20 @@ class TestDeletedFeatureHandling:
         assert "cleanup" in result.lower()
 
     def test_update_context_mentions_deleted_features(self, real_renderer):
-        result = real_renderer.render("backend_developer.md.j2", {
-            **AGENT_TEMPLATES["backend_developer.md.j2"],
+        result = real_renderer.render("developer.md.j2", {
+            **AGENT_TEMPLATES["developer.md.j2"],
             "change_request": "Remove the payment feature",
         })
         assert "DELETED-F" in result
 
     def test_update_qa_context_mentions_deleted_features(self, real_renderer):
-        result = real_renderer.render("backend_qa.md.j2", {
-            **AGENT_TEMPLATES["backend_qa.md.j2"],
-            "change_request": "Remove the payment feature",
-        })
+        result = real_renderer.render(
+            "_partials/update_qa_context.md.j2",
+            {
+                "change_request": "Remove the payment feature",
+                "design_changes": "",
+            },
+        )
         assert "DELETED-F" in result
         assert "dangling references" in result
 
@@ -870,8 +800,8 @@ class TestPriorSprintSummaries:
     """Verify developer templates render prior sprint summaries."""
 
     def test_backend_developer_renders_prior_summaries(self, real_renderer):
-        result = real_renderer.render("backend_developer.md.j2", {
-            **AGENT_TEMPLATES["backend_developer.md.j2"],
+        result = real_renderer.render("developer.md.j2", {
+            **AGENT_TEMPLATES["developer.md.j2"],
             "prior_sprint_summaries": "### Sprint 1 (backend)\n- Created User model\n- 5 tests passing",
         })
         assert "Prior Sprint Context" in result
@@ -879,8 +809,8 @@ class TestPriorSprintSummaries:
 
     def test_backend_developer_omits_prior_summaries_when_absent(self, real_renderer):
         result = real_renderer.render(
-            "backend_developer.md.j2",
-            AGENT_TEMPLATES["backend_developer.md.j2"],
+            "developer.md.j2",
+            AGENT_TEMPLATES["developer.md.j2"],
         )
         assert "Prior Sprint Context" not in result
 
@@ -894,9 +824,11 @@ class TestPromptSizeWarning:
         large_spec = " ".join(["word"] * 100_000)
         with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
             real_renderer.render_agent_prompt(
-                template_name="backend_developer.md.j2",
+                template_name="developer.md.j2",
                 input_documents={
-                    "backend_spec": large_spec,
+                    "track_name": "web",
+                    "track_kind": "web",
+                    "track_spec": large_spec,
                     "api_contract": "# API Contract",
                     "sprint_scope": "Sprint 1",
                 },
@@ -914,9 +846,11 @@ class TestPromptSizeWarning:
         """A normal-sized prompt should not emit a warning."""
         with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
             real_renderer.render_agent_prompt(
-                template_name="backend_developer.md.j2",
+                template_name="developer.md.j2",
                 input_documents={
-                    "backend_spec": "# Backend Spec\n## Models\n- User",
+                    "track_name": "web",
+                    "track_kind": "web",
+                    "track_spec": "# Backend Spec\n## Models\n- User",
                     "api_contract": "# API Contract",
                     "sprint_scope": "Sprint 1",
                 },
@@ -938,9 +872,11 @@ class TestPromptSizeWarning:
         single_long_word = "x" * 600_000
         with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
             real_renderer.render_agent_prompt(
-                template_name="backend_developer.md.j2",
+                template_name="developer.md.j2",
                 input_documents={
-                    "backend_spec": single_long_word,
+                    "track_name": "web",
+                    "track_kind": "web",
+                    "track_spec": single_long_word,
                     "api_contract": "# API",
                     "sprint_scope": "Sprint 1",
                 },
@@ -958,9 +894,11 @@ class TestPromptSizeWarning:
         large_spec = " ".join(["word"] * 100_000)
         with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
             real_renderer.render_agent_prompt(
-                template_name="backend_developer.md.j2",
+                template_name="developer.md.j2",
                 input_documents={
-                    "backend_spec": large_spec,
+                    "track_name": "web",
+                    "track_kind": "web",
+                    "track_spec": large_spec,
                     "api_contract": "# API",
                     "sprint_scope": "Sprint 1",
                 },
@@ -979,9 +917,11 @@ class TestPromptSizeWarning:
         """A PromptRenderedEvent should be emitted for every render."""
         with patch("agentic_dev.prompts.renderer.emit") as mock_emit:
             real_renderer.render_agent_prompt(
-                template_name="backend_developer.md.j2",
+                template_name="developer.md.j2",
                 input_documents={
-                    "backend_spec": "# Spec",
+                    "track_name": "web",
+                    "track_kind": "web",
+                    "track_spec": "# Spec",
                     "api_contract": "# API",
                     "sprint_scope": "Sprint 1",
                 },
@@ -994,5 +934,5 @@ class TestPromptSizeWarning:
             ]
             assert len(rendered_events) >= 1
             event = rendered_events[0][0][1]
-            assert event.template_name == "backend_developer.md.j2"
+            assert event.template_name == "developer.md.j2"
             assert event.output_length > 0

@@ -17,4 +17,4 @@ constraints:
   - "Flag false-PASS sentinels: runtime mode without artifacts; Driver=none with overall PASS in uat_mode: full"
   - "Check for missing acceptance criteria not covered by the report"
   - "Check that cross-feature interactions were tested"
-  - "Spot-check artifact paths actually exist under .agentic-dev/uat_artifacts/<run_id>/"
+  - "Spot-check artifact paths actually exist under .agentic-dev/uat/<run_id>/evidence/<track>/"

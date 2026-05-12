@@ -22,15 +22,16 @@ class TestCreateProject:
         assert (project_root / ".agentic-dev" / "history").is_dir()
         assert (project_root / ".agentic-dev" / "logs").is_dir()
         assert (project_root / ".agentic-dev" / "sessions").is_dir()
-        assert (project_root / "docs").is_dir()
-        assert (project_root / "docs" / "qa_reports").is_dir()
+        assert (project_root / ".agentic-dev" / "artifacts").is_dir()
+        assert (project_root / ".agentic-dev" / "artifacts" / "qa").is_dir()
+        assert not (project_root / "docs").exists()
         assert not (project_root / "frontend").exists()
         assert not (project_root / "backend").exists()
 
-    def test_initializes_docs_git_repo(self, workspace: WorkspaceManager) -> None:
+    def test_initializes_artifacts_git_repo(self, workspace: WorkspaceManager) -> None:
         project_root = workspace.create_project("my-app")
 
-        assert (project_root / "docs" / ".git").is_dir()
+        assert (project_root / ".agentic-dev" / "artifacts" / ".git").is_dir()
 
     def test_returns_project_root_path(self, workspace: WorkspaceManager) -> None:
         project_root = workspace.create_project("my-app")
@@ -46,31 +47,32 @@ class TestCreateProject:
             workspace.create_project("my-app")
 
 
-class TestCreateCodeDirs:
-    def test_fullstack_creates_both_dirs(self, workspace: WorkspaceManager) -> None:
+class TestCreateTrackDirs:
+    def test_creates_each_track_dir(self, workspace: WorkspaceManager) -> None:
+        from agentic_dev.tracks import Track
+
         project_root = workspace.create_project("my-app")
-        workspace.create_code_dirs("my-app", "fullstack")
+        workspace.create_track_dirs("my-app", [
+            Track(name="web", path="web", kind="web", uat_kind="web"),
+            Track(name="api", path="api", kind="api", uat_kind="api"),
+        ])
+        assert (project_root / "web").is_dir()
+        assert (project_root / "api").is_dir()
 
-        assert (project_root / "frontend").is_dir()
-        assert (project_root / "backend").is_dir()
+    def test_nested_path_supported(self, workspace: WorkspaceManager) -> None:
+        from agentic_dev.tracks import Track
 
-    def test_frontend_only_creates_frontend_dir(self, workspace: WorkspaceManager) -> None:
         project_root = workspace.create_project("my-app")
-        workspace.create_code_dirs("my-app", "frontend_only")
-
-        assert (project_root / "frontend").is_dir()
-        assert not (project_root / "backend").exists()
-
-    def test_backend_only_creates_backend_dir(self, workspace: WorkspaceManager) -> None:
-        project_root = workspace.create_project("my-app")
-        workspace.create_code_dirs("my-app", "backend_only")
-
-        assert not (project_root / "frontend").exists()
-        assert (project_root / "backend").is_dir()
+        workspace.create_track_dirs("my-app", [
+            Track(name="worker", path="workers/jobs", kind="worker"),
+        ])
+        assert (project_root / "workers" / "jobs").is_dir()
 
     def test_raises_for_missing_project(self, workspace: WorkspaceManager) -> None:
+        from agentic_dev.tracks import Track
+
         with pytest.raises(WorkspaceError, match="does not exist"):
-            workspace.create_code_dirs("nonexistent", "fullstack")
+            workspace.create_track_dirs("nonexistent", [Track(name="app")])
 
 
 class TestGetProjectDir:
@@ -115,24 +117,3 @@ class TestListProjects:
         assert manager.list_projects() == []
 
 
-class TestAdoptProject:
-    def test_initializes_docs_git_repo(self, tmp_path: Path) -> None:
-        project_path = tmp_path / "existing-app"
-        project_path.mkdir()
-        workspace = WorkspaceManager(base_dir=tmp_path)
-
-        workspace.adopt_project(project_path, "existing-app")
-
-        assert (project_path / "docs" / ".git").is_dir()
-
-    def test_existing_docs_initializes_subdir_git_repo(
-        self, tmp_path: Path
-    ) -> None:
-        project_path = tmp_path / "has-docs"
-        project_path.mkdir()
-        (project_path / "docs").mkdir()
-        workspace = WorkspaceManager(base_dir=tmp_path)
-
-        workspace.adopt_project(project_path, "has-docs")
-
-        assert (project_path / "docs" / "agentic-dev" / ".git").is_dir()

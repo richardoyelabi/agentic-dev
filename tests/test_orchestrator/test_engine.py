@@ -22,13 +22,12 @@ from agentic_dev.orchestrator.engine import PipelineEngine
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import (
-    FrontendKind,
     PipelinePhase,
     PipelineState,
-    ProjectType,
     SprintState,
     SprintStatus,
 )
+from agentic_dev.tracks import Track
 
 
 def _make_agent(name: str, template: str = "tpl.md.j2") -> AgentDefinition:
@@ -56,7 +55,35 @@ def _make_claude_result(text: str, cost: float = 0.10) -> ClaudeResult:
     )
 
 
+_LEGACY_PROJECT_TYPE_TRACKS = {
+    "fullstack": [
+        Track(name="frontend", path="frontend", kind="web", uat_kind="web"),
+        Track(name="backend", path="backend", kind="api", uat_kind="api"),
+    ],
+    "frontend_only": [
+        Track(name="frontend", path="frontend", kind="web", uat_kind="web"),
+    ],
+    "backend_only": [
+        Track(name="backend", path="backend", kind="api", uat_kind="api"),
+    ],
+}
+
+
 def _make_state(phase: PipelinePhase = PipelinePhase.IDLE, **kwargs) -> PipelineState:
+    """Helper that accepts legacy ``project_type``/``frontend_kind`` kwargs.
+
+    Legacy ``project_type`` is translated to a default tracks list; legacy
+    ``frontend_kind`` is silently dropped. When neither ``project_type`` nor
+    ``tracks`` is supplied, a fullstack default (frontend + backend) is used
+    to preserve the legacy implicit-fullstack semantics that older tests rely on.
+    """
+    legacy_project_type = kwargs.pop("project_type", None)
+    kwargs.pop("frontend_kind", None)
+    if "tracks" not in kwargs:
+        key = "fullstack"
+        if legacy_project_type is not None:
+            key = getattr(legacy_project_type, "value", legacy_project_type)
+        kwargs["tracks"] = list(_LEGACY_PROJECT_TYPE_TRACKS.get(key, []))
     return PipelineState(project_name="test-project", phase=phase, **kwargs)
 
 
@@ -209,7 +236,9 @@ class TestCheckpointPause:
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
-            _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("uat backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
         ]
 
@@ -492,8 +521,10 @@ class TestSprintPhase:
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("s2 frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
-            # UAT + QA
-            _make_claude_result("uat report", cost=0.10),
+            # UAT + QA (two UAT-capable tracks for fullstack: backend api + frontend web)
+            _make_claude_result("uat backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
         ]
 
@@ -517,20 +548,24 @@ class TestUATPhase:
 
     @pytest.mark.asyncio
     async def test_uat_runs_qa_cycle(self, engine, state_manager, claude, doc_store):
-        """UAT runs with QA cycle and saves report."""
+        """UAT runs once per UAT-capable track and aggregates the report."""
         state = _make_state(PipelinePhase.UAT)
         state_manager.load = MagicMock(return_value=state)
         doc_store.exists = MagicMock(return_value=True)
         doc_store.read = MagicMock(return_value="spec content")
         claude.run.side_effect = [
-            _make_claude_result("uat passed", cost=0.20),
+            _make_claude_result("uat backend\n## Overall Result: PASS", cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+            _make_claude_result("uat frontend\n## Overall Result: PASS", cost=0.20),
             _make_claude_result("APPROVED", cost=0.10),
         ]
 
         await engine.run()
 
         assert state.phase == PipelinePhase.COMPLETE
-        doc_store.write.assert_any_call("uat_report", "uat passed")
+        # Aggregated report references each track
+        write_calls = [c.args[0] for c in doc_store.write.call_args_list]
+        assert "uat_report" in write_calls
 
 
 class TestQACycleRetry:
@@ -546,16 +581,18 @@ class TestQACycleRetry:
         doc_store.exists = MagicMock(return_value=True)
         doc_store.read = MagicMock(return_value="spec content")
         claude.run.side_effect = [
-            _make_claude_result("", cost=0.01),       # empty — triggers retry
-            _make_claude_result("uat passed", cost=0.20),  # retry succeeds
-            _make_claude_result("APPROVED", cost=0.10),  # QA review
+            _make_claude_result("", cost=0.01),       # backend UAT: empty — triggers retry
+            _make_claude_result("uat passed\n## Overall Result: PASS", cost=0.20),  # retry succeeds
+            _make_claude_result("APPROVED", cost=0.10),  # backend UAT QA
+            _make_claude_result("uat passed\n## Overall Result: PASS", cost=0.20),  # frontend UAT action
+            _make_claude_result("APPROVED", cost=0.10),  # frontend UAT QA
         ]
 
         with patch("agentic_dev.orchestrator.qa_cycle.asyncio.sleep"):
             await engine.run()
 
         assert state.phase == PipelinePhase.COMPLETE
-        assert claude.run.call_count == 3
+        assert claude.run.call_count == 5
 
     @pytest.mark.asyncio
     async def test_qa_cycle_raises_after_retry_exhausted(
@@ -578,323 +615,6 @@ class TestQACycleRetry:
         assert claude.run.call_count == 2
 
 
-class TestProjectTypeDetection:
-    """Test that the engine parses project type from structured_input."""
-
-    @pytest.mark.asyncio
-    async def test_input_processing_parses_project_type(
-        self, engine, state_manager, claude, doc_store
-    ):
-        """Project type is parsed from structured_input after input processing."""
-        state = _make_state(PipelinePhase.INPUT_PROCESSING)
-        state_manager.load = MagicMock(return_value=state)
-
-        structured_output = (
-            "# Structured Input\n"
-            "## Project Type\nfrontend_only\n"
-            "## Feature Requirements\n- Build a React app"
-        )
-        claude.run.side_effect = [
-            _make_claude_result(structured_output, cost=0.05),
-            _make_claude_result("APPROVED", cost=0.03),
-        ]
-
-        with patch.object(
-            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
-        ):
-            with pytest.raises(AgentRunError):
-                await engine.run()
-
-        assert state.project_type == ProjectType.FRONTEND_ONLY
-
-    @pytest.mark.asyncio
-    async def test_input_processing_defaults_to_fullstack(
-        self, engine, state_manager, claude, doc_store
-    ):
-        """When no project type is found in structured_input, default to fullstack."""
-        state = _make_state(PipelinePhase.INPUT_PROCESSING)
-        state_manager.load = MagicMock(return_value=state)
-
-        structured_output = "# Structured Input\n## Feature Requirements\n- Build an app"
-        claude.run.side_effect = [
-            _make_claude_result(structured_output, cost=0.05),
-            _make_claude_result("APPROVED", cost=0.03),
-        ]
-
-        with patch.object(
-            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
-        ):
-            with pytest.raises(AgentRunError):
-                await engine.run()
-
-        assert state.project_type == ProjectType.FULLSTACK
-
-
-class TestParseFrontendKind:
-    """Static tests for PipelineEngine._parse_frontend_kind."""
-
-    @pytest.mark.parametrize(
-        "block_value,expected",
-        [
-            ("web", FrontendKind.WEB),
-            ("cli", FrontendKind.CLI),
-            ("desktop", FrontendKind.DESKTOP),
-            ("mobile", FrontendKind.MOBILE),
-            ("none", FrontendKind.NONE),
-        ],
-    )
-    def test_parses_explicit_block(self, block_value, expected):
-        text = (
-            "# Structured Input\n"
-            "## Project Type\nfullstack\n"
-            f"## Frontend Kind\n{block_value}\n"
-            "## Feature Requirements\n- x"
-        )
-        assert PipelineEngine._parse_frontend_kind(text, has_frontend=True) == expected
-
-    def test_missing_block_defaults_to_web_when_has_frontend(self):
-        text = "# Structured Input\n## Project Type\nfullstack"
-        assert (
-            PipelineEngine._parse_frontend_kind(text, has_frontend=True)
-            == FrontendKind.WEB
-        )
-
-    def test_missing_block_defaults_to_none_when_no_frontend(self):
-        text = "# Structured Input\n## Project Type\nbackend_only"
-        assert (
-            PipelineEngine._parse_frontend_kind(text, has_frontend=False)
-            == FrontendKind.NONE
-        )
-
-    def test_case_insensitive_header_and_value(self):
-        text = "## frontend kind\nCLI\n"
-        assert (
-            PipelineEngine._parse_frontend_kind(text, has_frontend=True)
-            == FrontendKind.CLI
-        )
-
-    def test_unknown_value_falls_back_to_default(self):
-        text = "## Frontend Kind\nunknown_value\n"
-        assert (
-            PipelineEngine._parse_frontend_kind(text, has_frontend=True)
-            == FrontendKind.WEB
-        )
-
-    @pytest.mark.asyncio
-    async def test_input_processing_stores_frontend_kind_on_state(
-        self, engine, state_manager, claude, doc_store
-    ):
-        """_run_input_processing should populate state.frontend_kind."""
-        state = _make_state(PipelinePhase.INPUT_PROCESSING)
-        state_manager.load = MagicMock(return_value=state)
-
-        structured_output = (
-            "# Structured Input\n"
-            "## Project Type\nfrontend_only\n"
-            "## Frontend Kind\nmobile\n"
-            "## Feature Requirements\n- Build a mobile app"
-        )
-        claude.run.side_effect = [
-            _make_claude_result(structured_output, cost=0.05),
-            _make_claude_result("APPROVED", cost=0.03),
-        ]
-
-        with patch.object(
-            engine, "_run_feature_analysis", side_effect=AgentRunError("test", "stop")
-        ):
-            with pytest.raises(AgentRunError):
-                await engine.run()
-
-        assert state.frontend_kind == FrontendKind.MOBILE
-
-    @pytest.mark.asyncio
-    async def test_architecture_uses_expected_docs_for_frontend_only(
-        self, engine, state_manager, claude, doc_store
-    ):
-        """Architecture phase uses state.expected_architecture_docs for splitting."""
-        state = _make_state(
-            PipelinePhase.ARCHITECTURE,
-            project_type=ProjectType.FRONTEND_ONLY,
-        )
-        state_manager.load = MagicMock(return_value=state)
-
-        arch_output = "<!-- DOCUMENT: frontend_spec -->\n# Frontend Spec\nContent here"
-        claude.run.side_effect = [
-            _make_claude_result(arch_output, cost=0.20),
-            _make_claude_result("APPROVED", cost=0.10),
-        ]
-
-        # Should succeed with just frontend_spec (not expecting 3 docs)
-        with patch.object(
-            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
-        ):
-            # It will advance through ARCHITECTURE_QA to SPRINT_PLANNING, then fail
-            with pytest.raises(AgentRunError):
-                await engine.run()
-
-        doc_store.write.assert_any_call("frontend_spec", "# Frontend Spec\nContent here")
-
-    @pytest.mark.asyncio
-    async def test_architecture_passes_project_type_as_extra_context(
-        self, engine, state_manager, claude, doc_store, prompt_renderer
-    ):
-        """Architecture QA cycle receives project_type via extra_context."""
-        state = _make_state(
-            PipelinePhase.ARCHITECTURE,
-            project_type=ProjectType.BACKEND_ONLY,
-        )
-        state_manager.load = MagicMock(return_value=state)
-
-        arch_output = (
-            "<!-- DOCUMENT: backend_spec -->\n# Backend Spec\nModels\n"
-            "<!-- DOCUMENT: api_contract -->\n# API Contract\nEndpoints"
-        )
-        claude.run.side_effect = [
-            _make_claude_result(arch_output, cost=0.20),
-            _make_claude_result("APPROVED", cost=0.10),
-        ]
-
-        with patch.object(
-            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
-        ):
-            with pytest.raises(AgentRunError):
-                await engine.run()
-
-        # Verify extra_context was passed to run_qa_cycle
-        render_calls = prompt_renderer.render_agent_prompt.call_args_list
-        any_has_project_type = any(
-            call.kwargs.get("extra_context", {}).get("project_type") == "backend_only"
-            for call in render_calls
-        )
-        assert any_has_project_type
-
-    @pytest.mark.asyncio
-    async def test_architecture_passes_figma_sources_when_exists(
-        self, engine, state_manager, claude, doc_store, prompt_renderer
-    ):
-        """When figma_sources exists, it is included in architect input_docs."""
-        state = _make_state(PipelinePhase.ARCHITECTURE)
-        state_manager.load = MagicMock(return_value=state)
-
-        def exists_side_effect(name):
-            return name == "figma_sources"
-
-        doc_store.exists = MagicMock(side_effect=exists_side_effect)
-
-        def read_side_effect(name):
-            if name == "figma_sources":
-                return "# Figma Sources\n- URL: https://figma.com/file/abc"
-            return "document content"
-
-        doc_store.read = MagicMock(side_effect=read_side_effect)
-
-        arch_output = (
-            "<!-- DOCUMENT: frontend_spec -->\n# Frontend Spec\nContent\n"
-            "<!-- DOCUMENT: backend_spec -->\n# Backend Spec\nContent\n"
-            "<!-- DOCUMENT: api_contract -->\n# API Contract\nContent"
-        )
-        claude.run.side_effect = [
-            _make_claude_result(arch_output, cost=0.20),
-            _make_claude_result("APPROVED", cost=0.10),
-        ]
-
-        with patch("agentic_dev.onboarding.figma.check_figma_mcp_available"):
-            with patch.object(
-                engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
-            ):
-                with pytest.raises(AgentRunError):
-                    await engine.run()
-
-        render_calls = prompt_renderer.render_agent_prompt.call_args_list
-        arch_call = render_calls[0]
-        input_docs = arch_call.kwargs["input_documents"]
-        assert "figma_sources" in input_docs
-        assert "figma.com/file/abc" in input_docs["figma_sources"]
-        assert "figma_mcp_available" in input_docs
-        assert input_docs["figma_mcp_available"] == "true"
-
-    @pytest.mark.asyncio
-    async def test_architecture_passes_empty_figma_sources_when_absent(
-        self, engine, state_manager, claude, doc_store, prompt_renderer
-    ):
-        """When figma_sources does not exist, empty string and false are passed."""
-        state = _make_state(PipelinePhase.ARCHITECTURE)
-        state_manager.load = MagicMock(return_value=state)
-
-        doc_store.exists = MagicMock(return_value=False)
-
-        arch_output = (
-            "<!-- DOCUMENT: frontend_spec -->\n# Frontend Spec\nContent\n"
-            "<!-- DOCUMENT: backend_spec -->\n# Backend Spec\nContent\n"
-            "<!-- DOCUMENT: api_contract -->\n# API Contract\nContent"
-        )
-        claude.run.side_effect = [
-            _make_claude_result(arch_output, cost=0.20),
-            _make_claude_result("APPROVED", cost=0.10),
-        ]
-
-        with patch.object(
-            engine, "_run_sprint_planning", side_effect=AgentRunError("test", "stop")
-        ):
-            with pytest.raises(AgentRunError):
-                await engine.run()
-
-        render_calls = prompt_renderer.render_agent_prompt.call_args_list
-        arch_call = render_calls[0]
-        input_docs = arch_call.kwargs["input_documents"]
-        assert "figma_sources" in input_docs
-        assert input_docs["figma_sources"] == ""
-        assert "figma_mcp_available" in input_docs
-        assert input_docs["figma_mcp_available"] == "false"
-
-    @pytest.mark.asyncio
-    async def test_sprint_planning_reads_only_available_docs(
-        self, engine, state_manager, claude, doc_store
-    ):
-        """For frontend_only, sprint planning reads frontend_spec but not backend_spec."""
-        state = _make_state(
-            PipelinePhase.SPRINT_PLANNING,
-            project_type=ProjectType.FRONTEND_ONLY,
-        )
-        state_manager.load = MagicMock(return_value=state)
-
-        # Track which doc names are read
-        read_docs = []
-
-        def mock_read(name):
-            read_docs.append(name)
-            return f"content of {name}"
-
-        doc_store.read = MagicMock(side_effect=mock_read)
-
-        claude.run.side_effect = [
-            _make_claude_result("# Sprint Plan\n## Sprint 1: UI", cost=0.10),
-            _make_claude_result("APPROVED", cost=0.05),
-        ]
-
-        from agentic_dev.state.parser_models import (
-            ParsedSprintEntry,
-            ParsedSprintPlan,
-        )
-        parsed_plan = ParsedSprintPlan(sprints=[
-            ParsedSprintEntry(sprint_number=1, name="UI", scope_text="## Sprint 1: UI"),
-        ])
-
-        with patch.object(
-            engine, "_advance_past_checkpoint", side_effect=AgentRunError("test", "stop")
-        ), patch(
-            "agentic_dev.orchestrator.engine.parse_with_llm",
-            new_callable=AsyncMock,
-            return_value=parsed_plan,
-        ):
-            with pytest.raises(AgentRunError):
-                await engine.run()
-
-        assert "frontend_spec" in read_docs
-        assert "backend_spec" not in read_docs
-        assert "api_contract" not in read_docs
-
-
 class TestWorkspaceSetup:
     """Test that _advance_past_checkpoint sets up git repos and CLAUDE.md."""
 
@@ -907,7 +627,7 @@ class TestWorkspaceSetup:
         (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.FULLSTACK,
+            project_type="fullstack",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
         state_manager.load = MagicMock(return_value=state)
@@ -935,7 +655,7 @@ class TestWorkspaceSetup:
         (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.FULLSTACK,
+            project_type="fullstack",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
         state_manager.load = MagicMock(return_value=state)
@@ -968,7 +688,7 @@ class TestWorkspaceSetup:
         (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.FULLSTACK,
+            project_type="fullstack",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
         state_manager.load = MagicMock(return_value=state)
@@ -999,7 +719,7 @@ class TestWorkspaceSetup:
         (project_dir / "frontend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.FRONTEND_ONLY,
+            project_type="frontend_only",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
         state_manager.load = MagicMock(return_value=state)
@@ -1028,7 +748,7 @@ class TestWorkspaceSetup:
         (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.BACKEND_ONLY,
+            project_type="backend_only",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
         state_manager.load = MagicMock(return_value=state)
@@ -1057,7 +777,7 @@ class TestWorkspaceSetup:
         (project_dir / "frontend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.FRONTEND_ONLY,
+            project_type="frontend_only",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
         state_manager.load = MagicMock(return_value=state)
@@ -1088,7 +808,7 @@ class TestWorkspaceSetup:
         (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.FULLSTACK,
+            project_type="fullstack",
             mode="update",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
@@ -1119,7 +839,7 @@ class TestWorkspaceSetup:
         (project_dir / "backend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.DESIGN_CHECKPOINT,
-            project_type=ProjectType.FULLSTACK,
+            project_type="fullstack",
             mode="remediate",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
         )
@@ -1167,7 +887,9 @@ class TestPostSprintCommits:
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
-            _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("uat backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
         ]
 
@@ -1206,7 +928,9 @@ class TestPostSprintCommits:
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
-            _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("uat backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
         ]
 
@@ -1274,7 +998,9 @@ class TestPostSprintCommits:
             _make_claude_result("APPROVED", cost=0.05),
             _make_claude_result("frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
-            _make_claude_result("uat report", cost=0.10),
+            _make_claude_result("uat backend", cost=0.10),
+            _make_claude_result("APPROVED", cost=0.05),
+            _make_claude_result("uat frontend", cost=0.10),
             _make_claude_result("APPROVED", cost=0.05),
         ]
 
@@ -1297,7 +1023,7 @@ class TestPostSprintCommits:
         (project_dir / "frontend").mkdir(parents=True)
         state = _make_state(
             PipelinePhase.SPRINTING,
-            project_type=ProjectType.FRONTEND_ONLY,
+            project_type="frontend_only",
             sprints=[SprintState(sprint_number=1, name="Sprint 1")],
             current_sprint=1,
         )
@@ -1329,84 +1055,6 @@ class TestPostSprintCommits:
 
 class TestCrashResilience:
     """Tests for crash resilience: conditional status, failed_at_step, shutdown."""
-
-    @pytest.mark.asyncio
-    async def test_conditional_status_only_sets_backend_dev_when_pending(
-        self, engine, state_manager, claude, project_dir
-    ):
-        """_run_sprints only sets BACKEND_DEV when sprint status is PENDING."""
-        (project_dir / "frontend").mkdir(parents=True)
-        (project_dir / "backend").mkdir(parents=True)
-        sprint = SprintState(
-            sprint_number=1, name="Sprint 1",
-            status=SprintStatus.FRONTEND_DEV,
-        )
-        state = _make_state(
-            PipelinePhase.SPRINTING,
-            sprints=[sprint],
-            current_sprint=1,
-        )
-        state_manager.load = MagicMock(return_value=state)
-        doc_store = engine._doc_store
-        doc_store.exists = MagicMock(return_value=False)
-        doc_store.read = MagicMock(return_value="content")
-
-        # Only frontend + QA + UAT + QA needed (backend skipped)
-        claude.run.side_effect = [
-            _make_claude_result("frontend code", cost=0.25),
-            _make_claude_result("APPROVED", cost=0.10),
-            _make_claude_result("uat report", cost=0.10),
-            _make_claude_result("APPROVED", cost=0.05),
-        ]
-
-        with patch(
-            "agentic_dev.orchestrator.engine.has_changes",
-            new_callable=AsyncMock,
-            return_value=False,
-        ), patch(
-            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
-        ):
-            await engine.run()
-
-        assert state.phase == PipelinePhase.COMPLETE
-        assert sprint.status == SprintStatus.COMPLETE
-
-    @pytest.mark.asyncio
-    async def test_failed_sprint_captures_failed_at_step(
-        self, engine, state_manager, claude, project_dir
-    ):
-        """When a sprint fails, failed_at_step records the sub-step."""
-        (project_dir / "frontend").mkdir(parents=True)
-        (project_dir / "backend").mkdir(parents=True)
-        sprint = SprintState(sprint_number=1, name="Sprint 1")
-        state = _make_state(
-            PipelinePhase.SPRINTING,
-            sprints=[sprint],
-            current_sprint=1,
-        )
-        state_manager.load = MagicMock(return_value=state)
-        doc_store = engine._doc_store
-        doc_store.exists = MagicMock(return_value=False)
-        doc_store.read = MagicMock(return_value="content")
-
-        # Backend succeeds, frontend fails
-        claude.run.side_effect = [
-            _make_claude_result("backend code", cost=0.20),
-            _make_claude_result("APPROVED", cost=0.10),
-            AgentRunError("frontend_developer", "crashed"),
-        ]
-
-        with patch(
-            "agentic_dev.orchestrator.engine.has_changes",
-            new_callable=AsyncMock,
-        ), patch(
-            "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock
-        ):
-            await engine.run()
-
-        assert state.phase == PipelinePhase.FAILED
-        assert sprint.status == SprintStatus.FAILED
-        assert sprint.failed_at_step == SprintStatus.FRONTEND_DEV
 
     @pytest.mark.asyncio
     async def test_shutdown_event_saves_state_and_raises(

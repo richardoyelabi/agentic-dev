@@ -32,16 +32,16 @@ class TestWriteAndRead:
 
     def test_write_to_qa_reports_subdirectory(self, store):
         content = "# QA Report\n\nAll good."
-        path = store.write("qa_reports/architect_qa_sprint1.md", content)
+        path = store.write("qa/architect_qa_sprint1.md", content)
 
         assert path.exists()
-        assert "qa_reports" in str(path)
-        assert store.read("qa_reports/architect_qa_sprint1.md") == content
+        assert "qa" in str(path)
+        assert store.read("qa/architect_qa_sprint1.md") == content
 
     def test_write_creates_qa_reports_directory(self, store):
-        qa_dir = store.docs_dir / "qa_reports"
+        qa_dir = store.docs_dir / "qa"
         assert not qa_dir.exists()
-        store.write("qa_reports/report.md", "content")
+        store.write("qa/report.md", "content")
         assert qa_dir.exists()
 
 
@@ -73,7 +73,7 @@ class TestListDocuments:
 
     def test_list_documents_excludes_subdirectory_files(self, store):
         store.write("top_level.md", "content")
-        store.write("qa_reports/nested.md", "content")
+        store.write("qa/nested.md", "content")
 
         result = store.list_documents()
         assert result == ["top_level.md"]
@@ -81,8 +81,8 @@ class TestListDocuments:
 
 class TestListQaReports:
     def test_list_qa_reports(self, store):
-        store.write("qa_reports/report_a.md", "a")
-        store.write("qa_reports/report_b.md", "b")
+        store.write("qa/report_a.md", "a")
+        store.write("qa/report_b.md", "b")
 
         result = store.list_qa_reports()
         assert result == ["report_a.md", "report_b.md"]
@@ -150,8 +150,8 @@ class TestAutoMdExtension:
         assert "features.md" in result
 
     def test_qa_reports_auto_extended(self, store):
-        store.write("qa_reports/sprint_1_backend", "report")
-        assert store.read("qa_reports/sprint_1_backend") == "report"
+        store.write("qa/sprint_1_backend", "report")
+        assert store.read("qa/sprint_1_backend") == "report"
         result = store.list_qa_reports()
         assert "sprint_1_backend.md" in result
 

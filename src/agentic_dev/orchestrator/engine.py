@@ -7,10 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agentic_dev.agents.registry import AgentRegistry
-from agentic_dev.config import (
-    DirectoryMap,
-    RATE_LIMIT_PAUSE_MAX_SECONDS,
-)
+from agentic_dev.config import RATE_LIMIT_PAUSE_MAX_SECONDS
 from agentic_dev.claude.llm_parser import parse_with_llm
 from agentic_dev.claude.output_parser import OutputParser
 from agentic_dev.claude.rate_limiter import UsageApiClient, WaitStrategy
@@ -33,18 +30,16 @@ from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import (
     AgentRunRecord,
-    FrontendKind,
     PipelinePhase,
     PipelineState,
-    ProjectType,
     SprintState,
     SprintStatus,
 )
 from agentic_dev.state.parser_models import ParsedSprintPlan
 from agentic_dev.state.transitions import advance_phase
+from agentic_dev.tracks import Track, default_tracks
 from agentic_dev.workspace.claude_md import (
-    generate_backend_claude_md,
-    generate_frontend_claude_md,
+    generate_track_claude_md,
     parse_tech_stack,
     write_claude_md,
 )
@@ -70,7 +65,6 @@ class PipelineEngine:
         prompt_renderer: PromptRenderer,
         state_manager: StateManager,
         checkpoint_config: CheckpointConfig,
-        directory_map: DirectoryMap | None = None,
     ) -> None:
         self._project_dir = project_dir
         self._claude = claude
@@ -80,24 +74,26 @@ class PipelineEngine:
         self._state_manager = state_manager
         self._checkpoint_config = checkpoint_config
         self._output_parser = OutputParser()
-        self._directory_map = directory_map or DirectoryMap(
-            frontend="frontend", backend="backend",
-        )
+
+    def _resolve_tracks(self, state: PipelineState | None) -> list[Track]:
+        """Return the project's declared tracks, defaulting to a single ``app`` track."""
+        if state is not None and state.tracks:
+            return state.tracks
+        return default_tracks()
 
     def _get_sprint_runner(
-        self, project_type: str = "fullstack", state: PipelineState | None = None,
+        self, state: PipelineState | None = None,
     ) -> SprintRunner:
-        """Create a SprintRunner configured for the given project type."""
+        """Create a SprintRunner for this project's tracks."""
         return SprintRunner(
             claude=self._claude,
             registry=self._registry,
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             project_dir=self._project_dir,
-            project_type=project_type,
+            tracks=self._resolve_tracks(state),
             state_manager=self._state_manager,
             pipeline_state=state,
-            directory_map=self._directory_map,
         )
 
     async def _compute_rate_limit_wait(
@@ -167,7 +163,7 @@ class PipelineEngine:
         shutdown_event = get_shutdown_event()
 
         while state.phase not in (
-            PipelinePhase.COMPLETE, PipelinePhase.FAILED, PipelinePhase.ADOPTED,
+            PipelinePhase.COMPLETE, PipelinePhase.FAILED,
         ):
             if shutdown_event.is_set():
                 self._state_manager.save(state)
@@ -269,50 +265,11 @@ class PipelineEngine:
         self._record_agent_run(state, "input_processor", result.total_cost)
         await self._commit_docs_changes("docs: structured input from requirements")
 
-        state.project_type = self._parse_project_type(result.output)
-        if state.frontend_kind is None:
-            state.frontend_kind = self._parse_frontend_kind(
-                result.output, has_frontend=state.has_frontend
-            )
-
-        # Create code directories based on detected project type
-        frontend_name = self._directory_map.frontend or "frontend"
-        backend_name = self._directory_map.backend or "backend"
-        if state.has_frontend:
-            (self._project_dir / frontend_name).mkdir(parents=True, exist_ok=True)
-        if state.has_backend:
-            (self._project_dir / backend_name).mkdir(parents=True, exist_ok=True)
+        # Materialise each declared track's working directory.
+        for track in self._resolve_tracks(state):
+            (self._project_dir / track.path).mkdir(parents=True, exist_ok=True)
 
         return advance_phase(state, PipelinePhase.INPUT_PROCESSING_QA)
-
-    @staticmethod
-    def _parse_project_type(structured_input: str) -> ProjectType:
-        """Extract the project type from the structured input document."""
-        match = re.search(
-            r"##\s*Project\s+Type\s*\n\s*(fullstack|frontend_only|backend_only)",
-            structured_input,
-        )
-        if match:
-            return ProjectType(match.group(1))
-        return ProjectType.FULLSTACK
-
-    @staticmethod
-    def _parse_frontend_kind(
-        structured_input: str, has_frontend: bool
-    ) -> FrontendKind:
-        """Extract the frontend kind from the structured input document.
-
-        When the block is absent or value is unrecognized, defaults to ``web``
-        for projects that have a frontend and ``none`` otherwise.
-        """
-        match = re.search(
-            r"##\s*Frontend\s+Kind\s*\n\s*(web|cli|desktop|mobile|none)",
-            structured_input,
-            re.IGNORECASE,
-        )
-        if match:
-            return FrontendKind(match.group(1).lower())
-        return FrontendKind.WEB if has_frontend else FrontendKind.NONE
 
     async def _merge_change_request(self, state: PipelineState) -> None:
         """Merge a pending change_request into structured_input.
@@ -344,7 +301,6 @@ class PipelineEngine:
         self._record_agent_run(state, "input_updater", result.total_cost)
         self._doc_store.delete("change_request")
         await self._commit_docs_changes("docs: updated structured input from change request")
-        state.project_type = self._parse_project_type(result.output)
 
     def _update_extra_context(self, state: PipelineState) -> dict[str, str]:
         """Build extra_context dict with change context when in update mode."""
@@ -387,7 +343,9 @@ class PipelineEngine:
         return advance_phase(state, PipelinePhase.FEATURE_ANALYSIS_QA)
 
     async def _run_architecture(self, state: PipelineState) -> PipelineState:
-        """Run architect + architect_qa. Parse multi-document output."""
+        """Run architect + architect_qa. Parse multi-document output (per-track)."""
+        from agentic_dev.tracks import expected_architecture_docs  # noqa: WPS433
+
         features = self._doc_store.read("features")
         structured_input = self._doc_store.read("structured_input")
         figma_sources = (
@@ -405,10 +363,8 @@ class PipelineEngine:
             except Exception:  # noqa: BLE001
                 pass
 
-        project_type_str = state.project_type.value if state.project_type else "fullstack"
-        extra_context = {"project_type": project_type_str}
-        if state.frontend_kind is not None:
-            extra_context["frontend_kind"] = state.frontend_kind.value
+        tracks = self._resolve_tracks(state)
+        extra_context: dict[str, object] = {"tracks": tracks}
         extra_context.update(self._update_extra_context(state))
 
         result = await run_qa_cycle(
@@ -429,10 +385,11 @@ class PipelineEngine:
             session_id=state.active_session_id,
         )
 
-        # Split multi-document output into separate specs
+        # Split multi-document output into separate per-track specs
+        expected = expected_architecture_docs(tracks)
         docs = self._output_parser.split_documents(
             result.output,
-            expected_documents=state.expected_architecture_docs,
+            expected_documents=expected,
             agent_name="architect",
         )
         for doc_name, content in docs.items():
@@ -456,19 +413,22 @@ class PipelineEngine:
         features = self._doc_store.read("features")
         input_docs: dict[str, str] = {"features": features}
 
-        if state.has_frontend:
-            input_docs["frontend_spec"] = self._doc_store.read("frontend_spec")
-        else:
-            input_docs["frontend_spec"] = ""
-
-        if state.has_backend:
-            input_docs["backend_spec"] = self._doc_store.read("backend_spec")
+        tracks = self._resolve_tracks(state)
+        track_specs: dict[str, str] = {}
+        for track in tracks:
+            spec_name = f"{track.name}_spec"
+            if self._doc_store.exists(spec_name):
+                track_specs[spec_name] = self._doc_store.read(spec_name)
+        if self._doc_store.exists("api_contract"):
             input_docs["api_contract"] = self._doc_store.read("api_contract")
         else:
-            input_docs["backend_spec"] = ""
             input_docs["api_contract"] = ""
 
-        extra_context = self._update_extra_context(state)
+        extra_context: dict[str, object] = {
+            "tracks": tracks,
+            "track_specs": track_specs,
+        }
+        extra_context.update(self._update_extra_context(state))
 
         result = await run_qa_cycle(
             claude=self._claude,
@@ -542,7 +502,7 @@ class PipelineEngine:
         return advance_phase(state, PipelinePhase.SPRINTING)
 
     async def _setup_workspaces(self, state: PipelineState) -> None:
-        """Initialize git repos and generate CLAUDE.md for code directories.
+        """Initialize git repos and generate CLAUDE.md for each track's directory.
 
         Skipped for update and remediate modes where the workspace already
         exists with its own CLAUDE.md, git history, and committed code.
@@ -551,42 +511,24 @@ class PipelineEngine:
             return
 
         project_name = state.project_name
-
-        frontend_name = self._directory_map.frontend or "frontend"
-        backend_name = self._directory_map.backend or "backend"
-
-        if state.has_frontend:
-            frontend_dir = self._project_dir / frontend_name
-            tech_stack = self._read_tech_stack("frontend_spec")
-            content = generate_frontend_claude_md(project_name, tech_stack)
-            write_claude_md(frontend_dir, content)
-            await init_repo(frontend_dir)
-            await commit(frontend_dir, "Initial commit: project scaffold and CLAUDE.md")
-
-        if state.has_backend:
-            backend_dir = self._project_dir / backend_name
-            tech_stack = self._read_tech_stack("backend_spec")
-            content = generate_backend_claude_md(project_name, tech_stack)
-            write_claude_md(backend_dir, content)
-            await init_repo(backend_dir)
-            await commit(backend_dir, "Initial commit: project scaffold and CLAUDE.md")
+        for track in self._resolve_tracks(state):
+            track_dir = self._project_dir / track.path
+            track_dir.mkdir(parents=True, exist_ok=True)
+            tech_stack = self._read_tech_stack(f"{track.name}_spec")
+            content = generate_track_claude_md(project_name, track, tech_stack)
+            write_claude_md(track_dir, content)
+            await init_repo(track_dir)
+            await commit(track_dir, "Initial commit: project scaffold and CLAUDE.md")
 
     async def _commit_sprint_changes(
         self, state: PipelineState, sprint: SprintState
     ) -> None:
-        """Commit changes in code directories after a successful sprint."""
+        """Commit changes in each track's directory after a successful sprint."""
         message = f"Sprint {sprint.sprint_number}: {sprint.name}"
-        frontend_name = self._directory_map.frontend or "frontend"
-        backend_name = self._directory_map.backend or "backend"
-        dirs = []
-        if state.has_frontend:
-            dirs.append(self._project_dir / frontend_name)
-        if state.has_backend:
-            dirs.append(self._project_dir / backend_name)
-
-        for code_dir in dirs:
-            if await has_changes(code_dir):
-                await commit(code_dir, message)
+        for track in self._resolve_tracks(state):
+            track_dir = self._project_dir / track.path
+            if track_dir.is_dir() and await has_changes(track_dir):
+                await commit(track_dir, message)
 
     async def _commit_docs_changes(self, message: str) -> None:
         """Commit changes in the docs directory if there are any.
@@ -661,8 +603,7 @@ class PipelineEngine:
 
     async def _run_sprints(self, state: PipelineState) -> PipelineState:
         """Run each sprint sequentially using SprintRunner."""
-        project_type_str = state.project_type.value if state.project_type else "fullstack"
-        sprint_runner = self._get_sprint_runner(project_type_str, state=state)
+        sprint_runner = self._get_sprint_runner(state=state)
 
         mcp_warnings = self._validate_sprint_mcp_services(state.sprints)
         if mcp_warnings:
@@ -679,7 +620,7 @@ class PipelineEngine:
                 continue
 
             if sprint.status == SprintStatus.PENDING:
-                sprint.status = SprintStatus.BACKEND_DEV
+                sprint.status = SprintStatus.IN_PROGRESS
             sprint.started_at = sprint.started_at or datetime.now(timezone.utc)
             state.current_sprint = sprint.sprint_number
 
@@ -730,8 +671,9 @@ class PipelineEngine:
         return advance_phase(state, PipelinePhase.UAT)
 
     async def _run_uat(self, state: PipelineState) -> PipelineState:
-        """Run the per-kind UAT agent with QA cycle + false-PASS validator."""
-        from agentic_dev.config import AGENTIC_DEV_METADATA_DIR, load_project_config
+        """Run UAT for every UAT-capable track and aggregate the verdicts."""
+        from agentic_dev.config import load_project_config
+        from agentic_dev.uat.aggregator import aggregate_uat_reports
         from agentic_dev.uat.dispatcher import (
             _read_desktop_framework,
             pick_uat_agent,
@@ -742,81 +684,93 @@ class PipelineEngine:
         )
         from agentic_dev.uat.validator import validate_uat_report
 
-        project_type = state.project_type or ProjectType.FULLSTACK
-        frontend_kind = state.frontend_kind or (
-            FrontendKind.NONE if project_type == ProjectType.BACKEND_ONLY
-            else FrontendKind.WEB
-        )
-
-        desktop_framework: str | None = None
-        if (
-            frontend_kind == FrontendKind.DESKTOP
-            and self._doc_store.exists("frontend_spec")
-        ):
-            desktop_framework = _read_desktop_framework(
-                self._doc_store.read("frontend_spec")
-            )
-
-        prereq_result = check_prereqs(
-            project_type=project_type,
-            frontend_kind=frontend_kind,
-            desktop_framework=desktop_framework,
-            project_dir=self._project_dir,
-        )
-        self._doc_store.write("uat_prereqs", render_prereqs_doc(prereq_result))
-
+        tracks = self._resolve_tracks(state)
+        uat_tracks = [t for t in tracks if t.uat_kind]
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        artifacts_dir = (
-            self._project_dir / AGENTIC_DEV_METADATA_DIR / "uat_artifacts" / run_id
-        )
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        agent_name = pick_uat_agent(
-            project_type=project_type,
-            frontend_kind=frontend_kind,
-            desktop_framework=desktop_framework,
-        )
-        agent_def = self._registry.get(agent_name)
-
-        input_docs: dict[str, str] = {}
-        for doc_name in agent_def.input_documents:
-            if self._doc_store.exists(doc_name):
-                input_docs[doc_name] = self._doc_store.read(doc_name)
-        # Back-compat alias: older specs used "features"; the new UAT agents
-        # declare "features_request". Supply it from either name.
-        if (
-            "features_request" in agent_def.input_documents
-            and "features_request" not in input_docs
-            and self._doc_store.exists("features")
-        ):
-            input_docs["features_request"] = self._doc_store.read("features")
-
-        extra_context = self._update_extra_context(state)
-        extra_context["frontend_kind"] = frontend_kind.value
-        extra_context["run_id"] = run_id
-
-        result = await run_qa_cycle(
-            claude=self._claude,
-            action_agent=agent_def,
-            qa_agent=self._registry.get("uat_qa"),
-            input_docs=input_docs,
-            output_doc_name="uat_report",
-            workspace=self._project_dir,
-            doc_store=self._doc_store,
-            prompt_renderer=self._prompt_renderer,
-            session_id=state.active_session_id,
-            extra_context=extra_context,
-        )
+        if not uat_tracks:
+            self._doc_store.write(
+                "uat_report",
+                "## Overall Result: FAIL\n\nNo UAT-capable tracks declared.\n",
+            )
+            await self._commit_docs_changes("docs: UAT report (no UAT tracks)")
+            return advance_phase(state, PipelinePhase.UAT_QA)
 
         cfg = load_project_config(self._project_dir)
-        uat_report = self._doc_store.read("uat_report")
-        validated = validate_uat_report(uat_report, uat_mode=cfg.uat_mode)
-        if validated != uat_report:
-            self._doc_store.write("uat_report", validated)
+        per_track_reports: dict[str, str] = {}
+        total_cost = 0.0
 
-        state.total_cost_usd += result.total_cost
+        for track in uat_tracks:
+            desktop_framework: str | None = None
+            spec_doc = f"{track.name}_spec"
+            if (
+                track.uat_kind == "desktop"
+                and self._doc_store.exists(spec_doc)
+            ):
+                desktop_framework = _read_desktop_framework(
+                    self._doc_store.read(spec_doc)
+                )
+
+            prereq_result = check_prereqs(
+                track=track,
+                desktop_framework=desktop_framework,
+                project_dir=self._project_dir,
+            )
+            self._doc_store.write(
+                f"uat_prereqs_{track.name}",
+                render_prereqs_doc(prereq_result),
+            )
+
+            agent_name = pick_uat_agent(track, desktop_framework)
+            agent_def = self._registry.get(agent_name)
+
+            input_docs: dict[str, str] = {}
+            for doc_name in agent_def.input_documents:
+                if self._doc_store.exists(doc_name):
+                    input_docs[doc_name] = self._doc_store.read(doc_name)
+            # Back-compat alias: older specs used "features"; the new UAT agents
+            # declare "features_request". Supply it from either name.
+            if (
+                "features_request" in agent_def.input_documents
+                and "features_request" not in input_docs
+                and self._doc_store.exists("features")
+            ):
+                input_docs["features_request"] = self._doc_store.read("features")
+            # Track spec is the per-track input.
+            if self._doc_store.exists(spec_doc):
+                input_docs[spec_doc] = self._doc_store.read(spec_doc)
+
+            extra_context = self._update_extra_context(state)
+            extra_context["track_name"] = track.name
+            extra_context["track_kind"] = track.kind
+            extra_context["frontend_kind"] = track.uat_kind or track.kind
+            extra_context["run_id"] = run_id
+
+            result = await run_qa_cycle(
+                claude=self._claude,
+                action_agent=agent_def,
+                qa_agent=self._registry.get("uat_qa"),
+                input_docs=input_docs,
+                output_doc_name=f"uat_report_{track.name}",
+                workspace=self._project_dir / track.path,
+                doc_store=self._doc_store,
+                prompt_renderer=self._prompt_renderer,
+                session_id=None,
+                extra_context=extra_context,
+            )
+            total_cost += result.total_cost
+            raw_report = self._doc_store.read(f"uat_report_{track.name}")
+            validated = validate_uat_report(raw_report, uat_mode=cfg.uat_mode)
+            if validated != raw_report:
+                self._doc_store.write(f"uat_report_{track.name}", validated)
+            per_track_reports[track.name] = validated
+            self._record_agent_run(state, agent_name, result.total_cost)
+
+        aggregated = aggregate_uat_reports(per_track_reports)
+        self._doc_store.write("uat_report", aggregated)
+
+        state.total_cost_usd += total_cost
         state.active_session_id = None
-        self._record_agent_run(state, agent_name, result.total_cost)
         await self._commit_docs_changes("docs: UAT report")
 
         return advance_phase(state, PipelinePhase.UAT_QA)
@@ -966,7 +920,9 @@ class PipelineEngine:
             "line appears inside the sprint block\n"
             "- integration_services: when needs_integration is true, the "
             "comma-separated list from `**Integration Services:**`, "
-            "lowercased and trimmed; otherwise an empty list"
+            "lowercased and trimmed; otherwise an empty list\n"
+            "- tracks_in_scope: comma-separated list from `**Tracks in scope:**`, "
+            "trimmed; empty list if the field is absent"
         )
 
         parsed = await parse_with_llm(
@@ -986,6 +942,9 @@ class PipelineEngine:
                 scope_text=entry.scope_text,
                 integration_services=[
                     s.strip().lower() for s in entry.integration_services if s.strip()
+                ],
+                tracks_in_scope=[
+                    s.strip() for s in entry.tracks_in_scope if s.strip()
                 ],
             )
             for entry in parsed.sprints

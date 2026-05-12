@@ -48,7 +48,7 @@ If any probe is missing, follow the fallback guidance in the Runtime Verificatio
 
 1. **Start the application.** Start the backend (if present) and the frontend dev server via `Bash`. Wait until both are responding.
 2. **Drive user flows.** For each acceptance criterion, use Playwright MCP to navigate, click, fill forms, and assert visible outcomes. One browser interaction per assertion — no shortcuts through API calls.
-3. **Capture artifacts.** Save screenshots and browser console/network transcripts under `.agentic-dev/uat_artifacts/<run_id>/` — one file per AC assertion where applicable. Reference artifact paths in the report.
+3. **Capture artifacts.** Save screenshots and browser console/network transcripts under `.agentic-dev/uat/<run_id>/evidence/<track>/` — one file per AC assertion where applicable. Reference artifact paths in the report.
 4. **Run the existing test suites** via `Bash` for regression context, but do not treat their passing as evidence of AC coverage.
 
 **If Playwright MCP is unavailable (per prereqs):** do not fabricate runtime evidence. Set `Verification mode: skipped` and `Driver: none` for affected ACs. The validator will force FAIL; that is the correct outcome.

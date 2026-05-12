@@ -1,6 +1,5 @@
 """Tests for sprint-scoped spec filtering."""
 
-import pytest
 
 from agentic_dev.documents.scoping import (
     extract_sprint_feature_ids,

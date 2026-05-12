@@ -1,4 +1,9 @@
-"""Document storage for reading and writing pipeline documents."""
+"""Artifact storage for reading and writing pipeline-generated documents.
+
+All agent artifacts live under ``<project>/.agentic-dev/artifacts/``. There is
+no longer a top-level ``docs/`` directory created by agentic-dev; user-facing
+documentation lives inside each track's own codebase.
+"""
 
 from pathlib import Path
 
@@ -12,11 +17,11 @@ _event_log = get_event_logger("documents")
 
 
 class DocumentStore:
-    """Manages reading and writing documents in a project's docs directory."""
+    """Manages reading and writing agent artifacts under .agentic-dev/artifacts/."""
 
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = project_dir
-        self.docs_dir = project_dir / "docs"
+        self.docs_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "artifacts"
         self.lock_file = project_dir / AGENTIC_DEV_METADATA_DIR / DOCS_LOCK_FILE
 
     def _resolve(self, doc_name: str) -> Path:
@@ -26,12 +31,7 @@ class DocumentStore:
         return self.docs_dir / doc_name
 
     def write(self, doc_name: str, content: str) -> Path:
-        """Write a document to the docs directory.
-
-        If doc_name starts with "qa_reports/", writes to the qa_reports
-        subdirectory within docs. Creates directories as needed.
-        Automatically appends .md extension if not present.
-        """
+        """Write an artifact. Nested paths (e.g. ``qa/foo``) are supported."""
         target = self._resolve(doc_name)
         target.parent.mkdir(parents=True, exist_ok=True)
         with file_lock(self.lock_file):
@@ -45,10 +45,7 @@ class DocumentStore:
         return target
 
     def read(self, doc_name: str) -> str:
-        """Read a document's content.
-
-        Raises DocumentError if the document does not exist.
-        """
+        """Read an artifact's content. Raises DocumentError if missing."""
         target = self._resolve(doc_name)
         if not target.exists():
             raise DocumentError(f"Document not found: {target}")
@@ -63,29 +60,24 @@ class DocumentStore:
         return content
 
     def exists(self, doc_name: str) -> bool:
-        """Check whether a document exists."""
         return self._resolve(doc_name).exists()
 
     def delete(self, doc_name: str) -> None:
-        """Delete a document from the docs directory.
-
-        Silently succeeds if the document does not exist.
-        """
+        """Delete an artifact. Silently succeeds if missing."""
         target = self._resolve(doc_name)
         if target.exists():
             with file_lock(self.lock_file):
                 target.unlink()
 
     def list_documents(self) -> list[str]:
-        """List all .md files in the docs directory (non-recursive top level)."""
+        """List all .md files at the artifacts root (non-recursive)."""
         if not self.docs_dir.exists():
             return []
         return sorted(f.name for f in self.docs_dir.glob("*.md"))
 
     def list_qa_reports(self) -> list[str]:
-        """List all .md files in the qa_reports subdirectory."""
-        qa_dir = self.docs_dir / "qa_reports"
+        """List all .md files under the ``qa/`` subdirectory."""
+        qa_dir = self.docs_dir / "qa"
         if not qa_dir.exists():
             return []
         return sorted(f.name for f in qa_dir.glob("*.md"))
-

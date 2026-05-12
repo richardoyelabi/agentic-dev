@@ -1,109 +1,61 @@
-"""Tests for the UAT agent dispatcher."""
+"""Tests for the track-based UAT dispatcher."""
 
 import pytest
 
-from agentic_dev.state.models import FrontendKind, ProjectType
-from agentic_dev.uat.dispatcher import (
-    _read_desktop_framework,
-    pick_uat_agent,
-)
+from agentic_dev.tracks import Track
+from agentic_dev.uat.dispatcher import _read_desktop_framework, pick_uat_agent
 
 
-class TestPickUatAgentValidCombos:
-    """Valid (ProjectType, FrontendKind) combos return the documented agent."""
+class TestPickUatAgent:
+    def test_web_kind(self):
+        assert pick_uat_agent(Track(name="web", kind="web", uat_kind="web")) == "uat_web"
 
-    @pytest.mark.parametrize(
-        "project_type,frontend_kind,expected",
-        [
-            (ProjectType.FULLSTACK, FrontendKind.WEB, "uat_web"),
-            (ProjectType.FULLSTACK, FrontendKind.CLI, "uat_cli"),
-            (ProjectType.FULLSTACK, FrontendKind.MOBILE, "uat_mobile"),
-            (ProjectType.FRONTEND_ONLY, FrontendKind.WEB, "uat_web"),
-            (ProjectType.FRONTEND_ONLY, FrontendKind.CLI, "uat_cli"),
-            (ProjectType.FRONTEND_ONLY, FrontendKind.MOBILE, "uat_mobile"),
-            (ProjectType.BACKEND_ONLY, FrontendKind.NONE, "uat_api"),
-        ],
-    )
-    def test_non_desktop_combos(self, project_type, frontend_kind, expected):
-        assert pick_uat_agent(project_type, frontend_kind) == expected
+    def test_api_kind(self):
+        assert pick_uat_agent(Track(name="api", kind="api", uat_kind="api")) == "uat_api"
 
-    @pytest.mark.parametrize("project_type", [ProjectType.FULLSTACK, ProjectType.FRONTEND_ONLY])
-    def test_desktop_electron(self, project_type):
+    def test_cli_kind(self):
+        assert pick_uat_agent(Track(name="cli", kind="cli", uat_kind="cli")) == "uat_cli"
+
+    def test_mobile_kind(self):
         assert (
-            pick_uat_agent(project_type, FrontendKind.DESKTOP, desktop_framework="electron")
-            == "uat_desktop_electron"
+            pick_uat_agent(Track(name="m", kind="mobile", uat_kind="mobile")) == "uat_mobile"
         )
 
-    @pytest.mark.parametrize("project_type", [ProjectType.FULLSTACK, ProjectType.FRONTEND_ONLY])
-    def test_desktop_tauri(self, project_type):
-        assert (
-            pick_uat_agent(project_type, FrontendKind.DESKTOP, desktop_framework="tauri")
-            == "uat_desktop_tauri"
-        )
+    def test_desktop_electron(self):
+        track = Track(name="d", kind="desktop", uat_kind="desktop")
+        assert pick_uat_agent(track, desktop_framework="electron") == "uat_desktop_electron"
 
+    def test_desktop_tauri(self):
+        track = Track(name="d", kind="desktop", uat_kind="desktop")
+        assert pick_uat_agent(track, desktop_framework="tauri") == "uat_desktop_tauri"
 
-class TestPickUatAgentInvalidCombos:
-    """Invalid combos raise ValueError with both axes named in the message."""
+    def test_desktop_requires_framework(self):
+        track = Track(name="d", kind="desktop", uat_kind="desktop")
+        with pytest.raises(ValueError, match="desktop_framework is required"):
+            pick_uat_agent(track)
 
-    @pytest.mark.parametrize(
-        "project_type,frontend_kind",
-        [
-            (ProjectType.FULLSTACK, FrontendKind.NONE),
-            (ProjectType.FRONTEND_ONLY, FrontendKind.NONE),
-            (ProjectType.BACKEND_ONLY, FrontendKind.WEB),
-            (ProjectType.BACKEND_ONLY, FrontendKind.CLI),
-            (ProjectType.BACKEND_ONLY, FrontendKind.DESKTOP),
-            (ProjectType.BACKEND_ONLY, FrontendKind.MOBILE),
-        ],
-    )
-    def test_invalid_combo_raises(self, project_type, frontend_kind):
-        with pytest.raises(ValueError) as exc:
-            pick_uat_agent(project_type, frontend_kind)
-        # Error must name both axes so debugging isn't a guess-fest.
-        assert str(project_type.value) in str(exc.value)
-        assert str(frontend_kind.value) in str(exc.value)
+    def test_desktop_unknown_framework(self):
+        track = Track(name="d", kind="desktop", uat_kind="desktop")
+        with pytest.raises(ValueError, match="Unknown desktop_framework"):
+            pick_uat_agent(track, desktop_framework="weird")
 
-
-class TestPickUatAgentDesktopFrameworkErrors:
-    """Desktop dispatch requires a known framework."""
-
-    def test_missing_framework_raises(self):
-        with pytest.raises(ValueError) as exc:
-            pick_uat_agent(ProjectType.FULLSTACK, FrontendKind.DESKTOP)
-        assert "desktop_framework" in str(exc.value)
-
-    def test_unknown_framework_raises(self):
-        with pytest.raises(ValueError) as exc:
-            pick_uat_agent(
-                ProjectType.FULLSTACK, FrontendKind.DESKTOP, desktop_framework="qt"
-            )
-        assert "qt" in str(exc.value)
+    def test_missing_uat_kind_raises(self):
+        with pytest.raises(ValueError, match="no uat_kind"):
+            pick_uat_agent(Track(name="lib", kind="library"))
 
 
 class TestReadDesktopFramework:
-    """`_read_desktop_framework` extracts `desktop_framework:` header from spec text."""
-
     def test_extracts_electron(self):
-        text = (
-            "# Frontend Spec\n\n"
-            "## Frontend Kind\ndesktop\n\n"
-            "## desktop_framework\nelectron\n\n"
-            "## Components\n..."
-        )
-        assert _read_desktop_framework(text) == "electron"
+        spec = "# Frontend Spec\n## desktop_framework: electron\n"
+        assert _read_desktop_framework(spec) == "electron"
 
     def test_extracts_tauri(self):
-        text = "## desktop_framework: tauri\n"
-        assert _read_desktop_framework(text) == "tauri"
+        spec = "# Frontend Spec\n## desktop_framework\ntauri\n"
+        assert _read_desktop_framework(spec) == "tauri"
+
+    def test_returns_none_for_unknown(self):
+        spec = "## desktop_framework: weird\n"
+        assert _read_desktop_framework(spec) is None
 
     def test_returns_none_when_absent(self):
-        text = "# Frontend Spec\n\n## Components\n..."
-        assert _read_desktop_framework(text) is None
-
-    def test_case_insensitive_value(self):
-        text = "## desktop_framework: Electron\n"
-        assert _read_desktop_framework(text) == "electron"
-
-    def test_unknown_framework_returns_none(self):
-        text = "## desktop_framework: qt\n"
-        assert _read_desktop_framework(text) is None
+        assert _read_desktop_framework("# Frontend Spec\n## Pages") is None

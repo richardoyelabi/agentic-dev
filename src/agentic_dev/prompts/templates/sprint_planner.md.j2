@@ -6,24 +6,27 @@ You are an agile planning expert who excels at decomposing features into well-sc
 
 **Important: Output your entire response as plain text in this message. Do not use any tools, do not write to files, do not create a plan. Write everything directly here.**
 
-Break the features from the Features Request into feature-based sprints. Each sprint should deliver one feature or a small group of closely related features. Sprints are sequential — each builds on the work of previous sprints.
+Break the features from the Features Request into feature-based sprints. Each sprint should deliver one feature or a small group of closely related features. Sprints are sequential — each builds on the work of previous sprints. Each sprint must declare which tracks are in scope.
+
+## Tracks for this project
+
+{% for track in tracks %}
+- **{{ track.name }}** (kind: `{{ track.kind }}`, path: `{{ track.path }}`)
+{% endfor %}
 
 # Input: Features Request
 
 {{ features }}
 
-{% if frontend_spec %}
-# Input: Frontend Spec
+{% for track in tracks %}
+{% set spec_key = track.name + "_spec" %}
+{% if track_specs and track_specs.get(spec_key) %}
+# Input: {{ track.name | capitalize }} Spec
 
-{{ frontend_spec }}
-
-{% endif %}
-{% if backend_spec %}
-# Input: Backend Spec
-
-{{ backend_spec }}
+{{ track_specs[spec_key] }}
 
 {% endif %}
+{% endfor %}
 {% if api_contract %}
 # Input: API Contract
 
@@ -54,17 +57,20 @@ Produce a **Sprint Plan** document:
 ## Sprint 1: <name>
 - **Type:** new
 - **Features:** [F001], [F002]
+- **Tracks in scope:** {{ tracks[0].name }}{% if tracks | length > 1 %}, {{ tracks[1].name }}{% endif %}
 - **Dependencies:** none
 - **Needs Integration:** yes/no
 - **Integration Services:** <service names, if applicable>
 ## Sprint 2: <name>
 - **Type:** new
 - **Features:** [F003]
+- **Tracks in scope:** {{ tracks[0].name }}
 - **Dependencies:** Sprint 1
 - **Needs Integration:** no
 ```
 
 Guidelines:
+- Each sprint MUST include the `**Tracks in scope:**` line listing exactly the track names this sprint touches (subset of: {% for t in tracks %}`{{ t.name }}`{% if not loop.last %}, {% endif %}{% endfor %}).
 - Order sprints so that foundational features (authentication, core data models) come first.
 - Group related features that share data models or UI flows into the same sprint.
 - Mark `Needs Integration: yes` only when the sprint requires connecting to external third-party services.

@@ -1,0 +1,21 @@
+name: developer
+description: "Implements code for one track per sprint using the track spec and (optionally) the API contract"
+team: development
+claude:
+  model: opus
+  permission_mode: bypassPermissions
+  allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
+  max_budget_usd: 5.00
+  max_turns: 150
+prompt_template: developer.md.j2
+input_documents: []
+output_documents: []
+working_directory: "."
+qa_agent: qa
+constraints:
+  - "Implement only the features scoped to the current sprint and current track"
+  - "Follow the tech stack defined in this track's spec"
+  - "Write tests for all code added or modified"
+  - "Maintain CI/CD pipeline configuration if present"
+  - "Handle all error states graciously — every external call, user interaction, and async operation must have explicit error handling"
+  - "Write and maintain project documentation (README.md and ARCHITECTURE.md) covering features implemented this sprint"

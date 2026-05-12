@@ -19,7 +19,7 @@ from agentic_dev.mcp.claude_settings import (
     discover_mcp_servers,
     find_server_for_service,
 )
-from agentic_dev.state.models import FrontendKind, ProjectType
+from agentic_dev.tracks import Track
 from agentic_dev.uat.dispatcher import pick_uat_agent
 
 
@@ -46,13 +46,12 @@ class PrereqResult:
 
 
 def check_prereqs(
-    project_type: ProjectType,
-    frontend_kind: FrontendKind,
+    track: Track,
     desktop_framework: str | None = None,
     project_dir=None,
 ) -> PrereqResult:
-    """Probe the environment for the UAT agent that would run this combo."""
-    agent_name = pick_uat_agent(project_type, frontend_kind, desktop_framework)
+    """Probe the environment for the UAT agent that would run for ``track``."""
+    agent_name = pick_uat_agent(track, desktop_framework)
     env = discover_mcp_servers(project_dir=project_dir)
 
     probes: list[PrereqProbe] = []

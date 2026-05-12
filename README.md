@@ -1,22 +1,42 @@
 # Agentic-Dev
 
-Autonomous software development agency powered by Claude Code CLI. Takes a product description and produces complete applications — web, CLI, desktop (Electron/Tauri), and mobile (React Native Expo, Flutter) — with frontend, backend, and runtime-verified UAT.
+Autonomous software development agency powered by the Claude Code CLI. Takes a
+product description, decomposes it into manageable sprints, drives the
+implementation end-to-end, and runtime-verifies the result with UAT — across
+any combination of web, CLI, desktop, mobile, API, and worker codebases.
 
-## Features
+## Core ideas
 
-- **36 specialized agents** organized into 7 teams (Design & Architecture, Adoption, Sync, Frontend, Backend, Integration, QA)
-- **Multi-kind frontend support** — web, CLI, desktop, and mobile apps on the same pipeline via `--frontend-kind`
-- **Runtime-driven UAT** — six per-kind UAT agents actually drive the running product (Playwright, subprocess, tauri-driver, Maestro) rather than reading files
-- **False-PASS enforcement** — code-level validator rejects UAT reports that lack runtime evidence, overriding prompt discipline
-- **Independent QA review** at every stage with one-cycle correction
-- **Feature-based sprints** break large projects into manageable chunks
-- **Configurable checkpoints** for human review (default: pause after design)
-- **Full autonomy mode** for end-to-end unattended execution
-- **Update support** for targeted changes, full re-specifications, and design updates via `--from-figma`
-- **Figma as first-class design input** — design and text are parallel, equal channels; frontend agents get direct Figma MCP access during implementation
-- **Automatic design and spec diffing** — `design_diff` and `spec_diff` agents produce change summaries that flow to all downstream agents
-- **Adopt existing projects** with full spec reverse-engineering from codebases and Figma designs
-- **Continuous sync** between code, specs, and Figma with flexible source-of-truth resolution
+- **Tracks, not fixed roles.** A project is a list of `Track(name, path, kind, uat_kind)` values. Each track is one codebase in a nested directory inside the project root. The default is a single `app` track at the repo root; multi-codebase projects declare each track explicitly with repeatable `--track name::path::kind[::uat_kind]` flags.
+- **Deterministic pipeline.** A finite state machine advances through `INPUT_PROCESSING → FEATURE_ANALYSIS → ARCHITECTURE → SPRINT_PLANNING → DESIGN_CHECKPOINT → SPRINTING → UAT → COMPLETE`. State is persisted to `.agentic-dev/state.json` and every step is resumable.
+- **Per-track parallel artifacts.** The architect emits one `<track>_spec.md` per track (plus an `api_contract.md` only when any track has `kind=api`). The sprint planner produces a per-sprint `**Tracks in scope:**` line. The sprint runner runs one generic `developer` + `qa` cycle per in-scope track, passing the track's kind into the prompt for kind-specific guidance.
+- **Multi-track UAT with aggregator.** Every track that has `uat_kind` set gets its own UAT cycle (web / api / cli / mobile / desktop). Per-track verdicts roll up through `uat/aggregator.py` into a single `## Overall Result: PASS|FAIL` report.
+- **Ralph loop semantics.** Two layered loops give ralph-style persistence without an extra outer controller: the per-agent QA correction loop inside `run_qa_cycle`, and the unbounded `agentic-dev remediate` command which re-enters the pipeline whenever UAT reports `FAIL`.
+- **All artifacts under `.agentic-dev/`.** No `docs/` directory is created. The codebases and their inline `README.md` / `ARCHITECTURE.md` are the only user-facing documentation.
+
+## Project layout produced by the agency
+
+```
+<project>/
+├── .agentic-dev/
+│   ├── state.json
+│   ├── config.json
+│   ├── artifacts/                       # git-tracked agent artifacts
+│   │   ├── user_input.md
+│   │   ├── structured_input.md
+│   │   ├── features.md
+│   │   ├── <track>_spec.md              # one per track
+│   │   ├── api_contract.md              # iff any track has kind=api
+│   │   ├── sprint_plan.md
+│   │   ├── sprint_<N>_<track>.md
+│   │   ├── sprint_rolling_summary.md
+│   │   ├── qa/<name>.md                 # QA reports
+│   │   ├── uat_report_<track>.md
+│   │   └── uat_report.md                # aggregated multi-track verdict
+│   ├── uat/<run_id>/evidence/<track>/   # screenshots, transcripts, http logs
+│   ├── logs/   sessions/   history/   runs/   agent_dumps/
+└── <track_dirs>/                        # one nested dir per declared track
+```
 
 ## Installation
 
@@ -25,30 +45,38 @@ pip install -e ".[dev]"
 ```
 
 Requires:
+
 - Python 3.12+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 
-## Quick Start
+## Quick start
 
 ```bash
-# Create a new project
+# Single-track project (defaults to one track named "app" at the repo root)
 agentic-dev new my-saas-app
+
+# Multi-track project: web frontend + JSON API + background worker
+agentic-dev new shop \
+  --track web::web::web::web \
+  --track api::api::api::api \
+  --track worker::workers/jobs::worker
 
 # Check status
 agentic-dev status my-saas-app
 
-# Resume after reviewing design documents
+# Resume after reviewing artifacts at .agentic-dev/artifacts/
 agentic-dev resume my-saas-app
 
 # Resume with feedback
 agentic-dev resume my-saas-app --feedback "Use Supabase instead of raw PostgreSQL"
+
+# Remediate failing UAT (unbounded outer ralph loop)
+agentic-dev remediate my-saas-app
 ```
 
-## CLI Reference
+## CLI reference
 
-> **Tip:** Always quote URLs and multi-word option values to prevent shell interpretation (e.g., `--from-figma "https://..."`, `--extend "add dark mode"`). See the [User Guide troubleshooting section](docs/user-guide.md#shell-quoting) for details.
-
-### `agentic-dev new <app-name>`
+### `new <app-name>`
 
 Create a new project and start the development pipeline.
 
@@ -56,16 +84,21 @@ Create a new project and start the development pipeline.
 Options:
   --path TEXT            Directory to create the project in (default: ~/projects)
   --from-file TEXT       Path to a file containing project requirements
-  --from-figma TEXT      Figma URL to import designs from (supports value::annotation, repeatable)
-  --from-codebase TEXT   Path to existing codebase to use as reference context (supports value::annotation, repeatable)
-  --frontend-kind TEXT   Frontend runtime: web, cli, desktop, mobile (auto-detected when omitted)
+  --from-figma TEXT      Figma URL to import designs (value::annotation, repeatable)
+  --from-codebase TEXT   Existing codebase to use as reference context (value::annotation, repeatable)
+  --track TEXT           Declare a codebase track: name[::path[::kind[::uat_kind]]]
+                         Repeatable. Omit for a single default track at the repo root.
 ```
 
-`--from-codebase` and `--from-figma` analyze existing sources read-only and use them as context for the new project — they do not manage or modify the existing codebase. To bring an existing project under agentic-dev management in-place, use `adopt` instead.
+`--track` examples:
 
-See the [User Guide](docs/user-guide.md#referencing-existing-sources) for detailed documentation.
+- `--track app` — track named `app` at `./app/`, kind=`generic`
+- `--track web::frontend::web::web` — track named `web` at `./frontend/`, kind=`web`, UAT via `uat_web`
+- `--track api::services/api::api::api` — track named `api` at `./services/api/`, kind=`api`, UAT via `uat_api`
 
-### `agentic-dev resume [app-name]`
+`--from-codebase` and `--from-figma` analyze sources read-only as context. They never adopt or modify the source.
+
+### `resume [app-name]`
 
 Resume a paused or failed pipeline.
 
@@ -74,159 +107,48 @@ Options:
   --feedback TEXT  Feedback to inject into the next agent's context
 ```
 
-### `agentic-dev adopt <path>`
+### `update <app-name>`
 
-Bring an existing project under agentic-dev management. Works **in-place** — no new directory is created. Specialized agents read the existing code and reverse-engineer the full spec suite (`frontend_spec.md`, `backend_spec.md`, `api_contract.md`, `features.md`). After adoption, all standard commands (`update`, `sync`, `status`, `cost`) work on the project.
-
-This is different from `new --from-codebase`, which creates a **separate new project** using existing code only as reference context.
-
-```
-Options:
-  --from-figma TEXT     Figma URL (supports value::annotation, repeatable)
-  --extend TEXT         New requirements to add on top
-  --frontend TEXT       Explicit frontend directory name
-  --backend TEXT        Explicit backend directory name
-  --yes / -y            Skip confirmation prompts
-```
-
-See the [User Guide](docs/user-guide.md#adopting-an-existing-project) for detailed documentation.
-
-### `agentic-dev sync [app-name]`
-
-Detect and resolve drift between code and specs — for example, after manual code edits or direct spec modifications. **Diagnostic**: compares current code state against specs, reports what's misaligned, and lets you choose how to resolve each item (update the spec, queue a code change, or ignore).
-
-Use `update` instead when you want to request intentional new features or changes.
-
-```
-Options:
-  --from TEXT           Source of truth: code, specs, or figma
-  --scope TEXT          Sync scope: api, frontend, or backend
-  --check               Check-only mode (report drift, no changes)
-```
-
-See the [User Guide](docs/user-guide.md#syncing-code-and-specs) for detailed documentation.
-
-### `agentic-dev update <app-name>`
-
-Request **intentional changes** to an existing project — adding features, modifying behavior, or replacing requirements entirely. Re-runs the pipeline from the appropriate phase. Requires the project to be in `COMPLETE` state.
-
-Use `sync` instead if you've edited code or specs manually and need to resolve the resulting drift.
-
-When neither `--from-file` nor `--full-spec` is provided, you'll be prompted to type or paste your change description interactively.
+Request intentional changes to a `COMPLETE` project. Re-runs the pipeline from the appropriate phase.
 
 ```
 Options:
   --from-file TEXT   Path to a file containing change requirements
-  --full-spec TEXT   Path to full updated spec file (triggers structured diff for optimal restart point)
-  --from-figma TEXT  Figma URL to import updated designs from (supports value::annotation, repeatable)
+  --from-figma TEXT  Figma URL with updated designs (value::annotation, repeatable)
 ```
 
-`--from-file` and `--full-spec` are mutually exclusive. `--from-figma` is compatible with all options — it adds a parallel design channel alongside text changes. When Figma is provided, the pipeline automatically diffs old vs new design analyses and distributes the change summary to all downstream agents.
+### `remediate <app-name>`
 
-### `agentic-dev status [app-name]`
+Fix failing UAT acceptance criteria by re-entering the pipeline with the UAT report as a remediation prompt. Increments `remediation_cycle`. Intended to be run as many times as needed until UAT passes.
+
+### `status [app-name]`
 
 Show pipeline status: current phase, sprint progress, and costs.
 
-### `agentic-dev config <app-name>`
+### `config <app-name>`
 
-Configure checkpoint behavior.
+Configure checkpoint behavior and autonomy level.
 
-```
-Options:
-  --checkpoints TEXT  Comma-separated checkpoint names (design, sprint, uat)
-  --autonomy TEXT     Autonomy level: full, default, or maximum
-```
+### `logs <app-name>`
 
-### `agentic-dev logs <app-name>`
+View per-run and per-agent logs from `.agentic-dev/logs/`.
 
-View agent run logs.
-
-```
-Options:
-  --agent TEXT   Filter by agent name
-  --sprint INT   Filter by sprint number
-```
-
-### `agentic-dev cost <app-name>`
+### `cost <app-name>`
 
 Show cost breakdown by agent and sprint.
 
-## Architecture
+## Tech stack
 
-The agency consists of 7 teams with 36 agents:
+- Python 3.12+
+- Typer (CLI), Pydantic (models), Jinja2 (templates), Rich (terminal UI), PyYAML (config)
+- Pytest with pytest-asyncio for async tests
 
-| Team | Agents | Purpose |
-|---|---|---|
-| Design & Architecture | Input Processor + QA, Input Updater + QA, Feature Analyst + QA, Architect + QA, Sprint Planner + QA, Design Diff, Spec Diff | Requirements analysis, specifications, sprint planning, change diffing |
-| Adoption | Structure Detector, Spec Reverse Engineer + QA, Feature Extractor + QA | Reverse-engineer specs from existing codebases |
-| Sync | Code Analyzer + QA, Drift Detector + QA, Spec Updater + QA | Detect and resolve drift between code and specs |
-| Frontend | Frontend Developer + QA | Kind-aware UI implementation per sprint (web/CLI/desktop/mobile); direct Figma MCP access |
-| Backend | Backend Developer + QA | API and business logic per sprint |
-| Integration | Integration Agent + QA | Third-party service connections |
-| QA | `uat_web`, `uat_cli`, `uat_desktop_electron`, `uat_desktop_tauri`, `uat_mobile`, `uat_api` + shared UAT QA | Runtime-driven user acceptance testing dispatched by `(ProjectType, FrontendKind)` |
-
-### Pipeline Flow
-
-```
-New project:    Text + Figma → Design Phase → [CHECKPOINT] → Sprint 1..N → UAT → Done
-Adopt project:  Existing Code → Spec Generation → [ADOPTED] → (update/sync as needed)
-Adopt + extend: Existing Code → Spec Generation → Design Phase → Sprint 1..N → UAT → Done
-Update:         Text changes + Figma changes (parallel) → Diff → Design Phase → Sprint 1..N → Done
-Sync:           Code + Specs → Drift Detection → User Resolution → Spec/Code Updates
-```
-
-Text and design are **parallel input channels** — both flow independently through the pipeline. When Figma designs change, `design_diff` computes what changed; when full specs change, `spec_diff` computes what changed. Both summaries flow to every downstream agent including UAT.
-
-Each sprint: Backend → Frontend (with Figma MCP access) → Integration (if needed)
-
-### QA Pattern
-
-Every agent has an independent QA counterpart. QA receives only the agent's input and output (no shared context). One review cycle: QA gives feedback → agent corrects → done.
-
-### Documents Produced
-
-- **Structured Input** — Normalized requirements
-- **Features Request** — Detailed features with acceptance criteria
-- **Frontend Spec** — UI components, routes, state management
-- **Backend Spec** — Data models, services, business logic
-- **API Contract** — Single source of truth for frontend/backend interface
-- **Sprint Plan** — Feature-based sprint decomposition
-- **Design Analyses** — Extracted pages, components, tokens, and navigation from Figma
-- **Figma Sources** — Figma URLs passed to frontend agents for direct MCP access
-- **Design Changes** — Summary of what changed between old and new design analyses (`design_diff`)
-- **Spec Changes** — Summary of what changed between old and new full specs (`spec_diff`)
-- **QA Reports** — Review feedback at every stage
-- **UAT Prereqs** — Runtime probe results written before UAT dispatch (driver availability, Playwright MCP, devices)
-- **UAT Report** — Final acceptance test results with per-AC runtime evidence (screenshots, subprocess transcripts, HTTP traces)
-
-## Configuration
-
-Projects are created at `~/projects/<app-name>/` by default. The project structure:
-
-```
-~/projects/<app-name>/
-├── .agentic-dev/     # Pipeline state, config, logs
-├── docs/             # All specification documents
-├── frontend/         # Separate git repo
-└── backend/          # Separate git repo
-```
-
-## Development
+## Running tests
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
 pytest
-
-# Lint
-ruff check src/ tests/
-
-# Type check
-mypy src/agentic_dev/ --ignore-missing-imports
 ```
 
-## Design Spec
+## License
 
-See [docs/superpowers/specs/2026-03-28-agentic-dev-agency-design.md](docs/superpowers/specs/2026-03-28-agentic-dev-agency-design.md) for the full design specification.
+See [LICENSE](LICENSE).

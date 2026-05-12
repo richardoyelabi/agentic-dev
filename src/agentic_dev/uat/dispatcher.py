@@ -1,14 +1,16 @@
-"""Dispatches a UAT agent name based on project type + frontend kind.
+"""Dispatch a UAT agent name from a track's ``uat_kind``.
 
-Pure logic — no I/O, no engine or registry imports. See the design spec
-section 5a for the full dispatch matrix.
+Pure logic — no I/O, no engine or registry imports. Lookup is direct:
+``track.uat_kind`` -> ``uat_<uat_kind>``. The desktop case still picks
+between ``uat_desktop_electron`` and ``uat_desktop_tauri`` based on a
+framework hint that the architecture phase records in the track spec.
 """
 
 from __future__ import annotations
 
 import re
 
-from agentic_dev.state.models import FrontendKind, ProjectType
+from agentic_dev.tracks import Track
 
 
 _KNOWN_DESKTOP_FRAMEWORKS = {"electron", "tauri"}
@@ -18,41 +20,23 @@ _DESKTOP_FRAMEWORK_HEADER_RE = re.compile(
 )
 
 
-def pick_uat_agent(
-    project_type: ProjectType,
-    frontend_kind: FrontendKind,
-    desktop_framework: str | None = None,
-) -> str:
-    """Return the UAT agent name for the given project configuration.
+def pick_uat_agent(track: Track, desktop_framework: str | None = None) -> str:
+    """Return the UAT agent name to run for ``track``.
 
-    Raises ValueError for any invalid combination (spec §5a).
+    Raises ``ValueError`` when the track has no ``uat_kind`` (caller should
+    filter such tracks out) or when ``uat_kind == "desktop"`` without a known
+    framework.
     """
-    if project_type == ProjectType.BACKEND_ONLY:
-        if frontend_kind != FrontendKind.NONE:
-            raise ValueError(
-                f"Invalid combination: project_type={project_type.value} "
-                f"with frontend_kind={frontend_kind.value} "
-                "(backend-only projects require frontend_kind=none)"
-            )
-        return "uat_api"
-
-    if frontend_kind == FrontendKind.NONE:
+    if not track.uat_kind:
         raise ValueError(
-            f"Invalid combination: project_type={project_type.value} "
-            f"with frontend_kind={frontend_kind.value} "
-            "(frontend_kind=none is only valid for backend-only projects)"
+            f"Track {track.name!r} has no uat_kind; nothing to dispatch."
         )
 
-    if frontend_kind == FrontendKind.WEB:
-        return "uat_web"
-    if frontend_kind == FrontendKind.CLI:
-        return "uat_cli"
-    if frontend_kind == FrontendKind.MOBILE:
-        return "uat_mobile"
-    if frontend_kind == FrontendKind.DESKTOP:
+    kind = track.uat_kind.strip().lower()
+    if kind == "desktop":
         if desktop_framework is None:
             raise ValueError(
-                "desktop_framework is required when frontend_kind=desktop "
+                "desktop_framework is required when uat_kind=desktop "
                 "(expected 'electron' or 'tauri')"
             )
         normalized = desktop_framework.strip().lower()
@@ -62,21 +46,16 @@ def pick_uat_agent(
                 f"expected one of {sorted(_KNOWN_DESKTOP_FRAMEWORKS)}"
             )
         return f"uat_desktop_{normalized}"
-
-    raise ValueError(
-        f"Unhandled frontend_kind={frontend_kind.value} "
-        f"for project_type={project_type.value}"
-    )
+    return f"uat_{kind}"
 
 
-def _read_desktop_framework(frontend_spec_text: str) -> str | None:
-    """Extract the ``desktop_framework`` header value from frontend_spec text.
+def _read_desktop_framework(spec_text: str) -> str | None:
+    """Extract the ``desktop_framework`` header value from a track spec.
 
-    Accepts variants: ``desktop_framework: electron``, ``## desktop_framework: tauri``,
-    or ``## desktop_framework\\nelectron``. Returns the normalized lowercase value
-    if it matches a known framework, else None.
+    Accepts the same variants as the legacy implementation. Returns the
+    normalized lowercase value when it matches a known framework, else None.
     """
-    match = _DESKTOP_FRAMEWORK_HEADER_RE.search(frontend_spec_text)
+    match = _DESKTOP_FRAMEWORK_HEADER_RE.search(spec_text)
     if not match:
         return None
     value = match.group(1).strip().lower()

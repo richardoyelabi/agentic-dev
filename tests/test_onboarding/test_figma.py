@@ -9,7 +9,6 @@ from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.exceptions import AgentRunError
 from agentic_dev.mcp.claude_settings import ClaudeMCPEnvironment, MCPServerEntry
 from agentic_dev.onboarding.figma import (
-    DesignChangeResult,
     FigmaMCPNotConfigured,
     NO_DESIGN_CHANGES_SENTINEL,
     _parse_design_change_result,

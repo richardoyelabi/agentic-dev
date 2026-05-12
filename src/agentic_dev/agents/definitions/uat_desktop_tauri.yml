@@ -14,5 +14,5 @@ qa_agent: uat_qa
 constraints:
   - "Test every acceptance criterion from the features request"
   - "Drive the app through tauri-driver (WebDriver) — Playwright cannot attach to Tauri's OS-native webview"
-  - "Save WebDriver session logs and screenshots under .agentic-dev/uat_artifacts/<run_id>/"
+  - "Save WebDriver session logs and screenshots under .agentic-dev/uat/<run_id>/evidence/<track>/"
   - "Include pass/fail status and concrete evidence per AC; vague language will be flagged"

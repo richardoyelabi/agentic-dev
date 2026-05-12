@@ -2,37 +2,30 @@
 
 from __future__ import annotations
 
-from agentic_dev.state.models import FrontendKind
-
-
-_KIND_PHRASE: dict[FrontendKind | None, str] = {
-    FrontendKind.WEB: "backend and frontend",
-    FrontendKind.CLI: "backend and CLI",
-    FrontendKind.DESKTOP: "backend and desktop app",
-    FrontendKind.MOBILE: "backend and mobile app",
-    FrontendKind.NONE: "backend",
-    None: "existing",
-}
+from agentic_dev.tracks import Track
 
 
 def compose_remediation_input(
     uat_report: str,
     project_name: str,
-    frontend_kind: FrontendKind | None,
+    tracks: list[Track] | None = None,
 ) -> str:
     """Wrap a UAT report as a change request for a remediation pipeline run.
 
     The returned string is suitable for writing as user_input to the document
-    store before starting a remediation pipeline cycle. The phrasing adapts to
-    the project's FrontendKind so CLI / mobile / desktop projects don't get
-    web-specific language.
+    store before starting a remediation pipeline cycle. The phrasing lists
+    the existing tracks so the planner knows the modify-in-place context.
     """
-    kind_phrase = _KIND_PHRASE.get(frontend_kind, "existing")
+    if tracks:
+        names = ", ".join(t.name for t in tracks)
+        scope_phrase = f"existing tracks ({names})"
+    else:
+        scope_phrase = "existing"
     return (
         f"# Remediation Request for {project_name}\n"
         "\n"
         "Fix all failing acceptance criteria identified in the UAT report below.\n"
-        f"The {kind_phrase} codebase already exists \u2014 modify existing code,\n"
+        f"The {scope_phrase} codebase already exists — modify existing code,\n"
         "do not start from scratch. Preserve all currently passing functionality.\n"
         "\n"
         "## UAT Report\n"

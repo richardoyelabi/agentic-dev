@@ -20,8 +20,7 @@ class TestAgentRegistry:
 
     def test_loads_all_definitions(self, registry: AgentRegistry):
         agents = registry.list_agents()
-        # 31 original − 1 removed (old `uat`) + 6 per-kind UAT agents = 36
-        assert len(agents) == 36
+        assert len(agents) == 23
 
     def test_get_returns_correct_agent(self, registry: AgentRegistry):
         architect = registry.get("architect")
@@ -43,17 +42,11 @@ class TestAgentRegistry:
         assert "architect" in names
         assert "sprint_planner_qa" in names
 
-    def test_list_by_team_frontend(self, registry: AgentRegistry):
-        frontend_agents = registry.list_by_team("frontend")
-        assert len(frontend_agents) == 2
-        names = {a.name for a in frontend_agents}
-        assert names == {"frontend_developer", "frontend_qa"}
-
-    def test_list_by_team_backend(self, registry: AgentRegistry):
-        backend_agents = registry.list_by_team("backend")
-        assert len(backend_agents) == 2
-        names = {a.name for a in backend_agents}
-        assert names == {"backend_developer", "backend_qa"}
+    def test_list_by_team_development(self, registry: AgentRegistry):
+        development_agents = registry.list_by_team("development")
+        assert len(development_agents) == 2
+        names = {a.name for a in development_agents}
+        assert names == {"developer", "qa"}
 
     def test_list_by_team_integration(self, registry: AgentRegistry):
         integration_agents = registry.list_by_team("integration")
@@ -93,36 +86,33 @@ class TestAgentRegistry:
         assert len(agent.constraints) >= 4
 
     def test_agent_fields_loaded_correctly(self, registry: AgentRegistry):
-        frontend_dev = registry.get("frontend_developer")
-        assert frontend_dev.claude.permission_mode == "bypassPermissions"
-        assert frontend_dev.working_directory == "frontend"
-        assert frontend_dev.qa_agent == "frontend_qa"
-        assert "Bash" in frontend_dev.claude.allowed_tools
-        assert frontend_dev.output_documents == []
+        developer = registry.get("developer")
+        assert developer.claude.permission_mode == "bypassPermissions"
+        assert developer.qa_agent == "qa"
+        assert "Bash" in developer.claude.allowed_tools
+        assert developer.output_documents == []
 
     def test_developer_agents_have_documentation_constraint(
         self, registry: AgentRegistry
     ):
-        for name in ["frontend_developer", "backend_developer"]:
-            agent = registry.get(name)
-            doc_constraints = [
-                c for c in agent.constraints if "documentation" in c.lower()
-            ]
-            assert len(doc_constraints) >= 1, (
-                f"{name} missing documentation constraint"
-            )
+        agent = registry.get("developer")
+        doc_constraints = [
+            c for c in agent.constraints if "documentation" in c.lower()
+        ]
+        assert len(doc_constraints) >= 1, (
+            "developer missing documentation constraint"
+        )
 
     def test_qa_agents_have_documentation_constraint(
         self, registry: AgentRegistry
     ):
-        for name in ["frontend_qa", "backend_qa"]:
-            agent = registry.get(name)
-            doc_constraints = [
-                c for c in agent.constraints if "documentation" in c.lower()
-            ]
-            assert len(doc_constraints) >= 1, (
-                f"{name} missing documentation verification constraint"
-            )
+        agent = registry.get("qa")
+        doc_constraints = [
+            c for c in agent.constraints if "documentation" in c.lower()
+        ]
+        assert len(doc_constraints) >= 1, (
+            "qa missing documentation verification constraint"
+        )
 
     def test_invalid_definitions_dir_raises(self, tmp_path: Path):
         bad_yaml = tmp_path / "bad.yml"

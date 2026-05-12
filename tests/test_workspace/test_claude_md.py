@@ -1,70 +1,56 @@
-"""Tests for CLAUDE.md generation and tech stack parsing."""
+"""Tests for the unified per-track CLAUDE.md generator and tech stack parser."""
 
 from pathlib import Path
 
-
+from agentic_dev.tracks import Track
 from agentic_dev.workspace.claude_md import (
-    generate_backend_claude_md,
-    generate_frontend_claude_md,
+    generate_track_claude_md,
     parse_tech_stack,
     write_claude_md,
 )
 
 
-class TestGenerateFrontendClaudeMd:
+class TestGenerateTrackClaudeMd:
     def test_includes_project_name(self) -> None:
-        content = generate_frontend_claude_md("MyApp", {})
+        track = Track(name="web", kind="web", uat_kind="web")
+        content = generate_track_claude_md("MyApp", track, {})
         assert "MyApp" in content
 
-    def test_includes_custom_framework(self) -> None:
-        content = generate_frontend_claude_md("MyApp", {"framework": "Next.js"})
+    def test_header_mentions_track_name_and_kind(self) -> None:
+        track = Track(name="api", kind="api", uat_kind="api")
+        content = generate_track_claude_md("MyApp", track, {})
+        assert "Track: api" in content
+        assert "(api)" in content
+
+    def test_web_kind_uses_react_defaults_and_api_layer_section(self) -> None:
+        track = Track(name="web", kind="web", uat_kind="web")
+        content = generate_track_claude_md("MyApp", track, {})
+        assert "React" in content
+        assert "## API Layer" in content
+        assert "api_contract" in content
+
+    def test_api_kind_uses_django_defaults_and_error_handling(self) -> None:
+        track = Track(name="api", kind="api", uat_kind="api")
+        content = generate_track_claude_md("MyApp", track, {})
+        assert "Django REST Framework" in content
+        assert "## Error Handling" in content
+
+    def test_custom_framework_overrides_default(self) -> None:
+        track = Track(name="web", kind="web", uat_kind="web")
+        content = generate_track_claude_md("MyApp", track, {"framework": "Next.js"})
         assert "Next.js" in content
 
-    def test_includes_default_framework_when_not_specified(self) -> None:
-        content = generate_frontend_claude_md("MyApp", {})
-        assert "React" in content
+    def test_cli_kind_includes_cli_conventions(self) -> None:
+        track = Track(name="cli", kind="cli", uat_kind="cli")
+        content = generate_track_claude_md("MyApp", track, {})
+        assert "CLI Conventions" in content
+        assert "stderr" in content
 
-    def test_includes_styling(self) -> None:
-        content = generate_frontend_claude_md("MyApp", {"styling": "CSS Modules"})
-        assert "CSS Modules" in content
-
-    def test_includes_api_contract_reference(self) -> None:
-        content = generate_frontend_claude_md("MyApp", {})
-        assert "api_contract" in content
-
-    def test_includes_error_handling_section(self) -> None:
-        content = generate_frontend_claude_md("MyApp", {})
-        assert "## Error Handling" in content
-        assert "error boundaries" in content
-        assert "user-friendly messages" in content
-
-
-class TestGenerateBackendClaudeMd:
-    def test_includes_project_name(self) -> None:
-        content = generate_backend_claude_md("MyApp", {})
-        assert "MyApp" in content
-
-    def test_includes_custom_framework(self) -> None:
-        content = generate_backend_claude_md("MyApp", {"framework": "FastAPI"})
-        assert "FastAPI" in content
-
-    def test_includes_default_framework_when_not_specified(self) -> None:
-        content = generate_backend_claude_md("MyApp", {})
-        assert "Django REST Framework" in content
-
-    def test_includes_database(self) -> None:
-        content = generate_backend_claude_md("MyApp", {"database": "MongoDB"})
-        assert "MongoDB" in content
-
-    def test_includes_api_contract_reference(self) -> None:
-        content = generate_backend_claude_md("MyApp", {})
-        assert "api_contract" in content
-
-    def test_includes_error_handling_section(self) -> None:
-        content = generate_backend_claude_md("MyApp", {})
-        assert "## Error Handling" in content
-        assert "consistent error response schema" in content
-        assert "internal error details" in content
+    def test_worker_kind_includes_worker_conventions(self) -> None:
+        track = Track(name="worker", kind="worker")
+        content = generate_track_claude_md("MyApp", track, {})
+        assert "Worker Conventions" in content
+        assert "idempotent" in content
 
 
 class TestWriteClaudeMd:
@@ -98,21 +84,11 @@ class TestParseTechStack:
 - **Framework:** FastAPI
 - **Database:** PostgreSQL
 - **Testing:** Pytest
-- **Styling:** Tailwind CSS
 """
         result = parse_tech_stack(spec)
         assert result["framework"] == "FastAPI"
         assert result["database"] == "PostgreSQL"
         assert result["testing"] == "Pytest"
-        assert result["styling"] == "Tailwind CSS"
-
-    def test_extracts_state_management(self) -> None:
-        spec = """\
-## Tech Stack
-- **State Management:** Redux Toolkit
-"""
-        result = parse_tech_stack(spec)
-        assert result["state_management"] == "Redux Toolkit"
 
     def test_returns_empty_dict_on_unparseable_input(self) -> None:
         result = parse_tech_stack("No tech stack section here.")
@@ -121,14 +97,6 @@ class TestParseTechStack:
     def test_handles_empty_string(self) -> None:
         result = parse_tech_stack("")
         assert result == {}
-
-    def test_handles_tech_stack_with_extra_whitespace(self) -> None:
-        spec = """\
-## Tech Stack
--  **Framework:**   Django REST Framework
-"""
-        result = parse_tech_stack(spec)
-        assert result["framework"] == "Django REST Framework"
 
     def test_stops_at_next_section(self) -> None:
         spec = """\

@@ -1,4 +1,0 @@
-# Artifacts created when this fixture is adopted by `agentic-dev adopt`.
-# They should not be checked in — the fixture must stay a clean adopt source.
-.agentic-dev/
-docs/

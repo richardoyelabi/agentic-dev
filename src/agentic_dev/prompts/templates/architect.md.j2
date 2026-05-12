@@ -6,28 +6,13 @@ You are a senior software architect who prioritizes minimalism: the simplest sol
 
 **Important: Output your entire response as plain text in this message. Do not use any tools, do not write to files, do not create a plan. Write everything directly here.**
 
-{% if project_type == "frontend_only" %}
-Produce one document from the Features Request and Structured Input:
+Produce one architecture document per track listed below, plus an API Contract iff any track has `kind="api"`. The API Contract is the single source of truth for any cross-track interface — track specs reference it rather than repeat endpoint details.
 
-1. **Frontend Spec** — UI components, routes, pages, state management, and backend service configuration
+## Tracks for this project
 
-There is no custom backend for this project. If the project uses a Backend-as-a-Service (Supabase, Firebase, Convex, etc.), include a "Backend Services" section in the Frontend Spec describing the BaaS schema, security rules, and client SDK configuration.
-{% elif project_type == "backend_only" %}
-Produce two documents from the Features Request and Structured Input:
-
-1. **Backend Spec** — Data models, services, business logic, infrastructure
-2. **API Contract** — Endpoints, request/response schemas, authentication
-
-There is no frontend for this project. The API Contract describes the interface for external consumers.
-{% else %}
-Produce three documents from the Features Request and Structured Input:
-
-1. **Frontend Spec** — UI components, routes, pages, state management
-2. **Backend Spec** — Data models, services, business logic, infrastructure
-3. **API Contract** — Endpoints, request/response schemas, authentication
-
-The API Contract is the **single source of truth** for the frontend/backend interface. Neither the Frontend Spec nor the Backend Spec should repeat endpoint details — they reference API Contract endpoint IDs instead.
-{% endif %}
+{% for track in tracks %}
+- **{{ track.name }}** (kind: `{{ track.kind }}`, path: `{{ track.path }}`)
+{% endfor %}
 
 # Input: Features Request
 
@@ -37,61 +22,13 @@ The API Contract is the **single source of truth** for the frontend/backend inte
 
 {{ structured_input }}
 
-{% if frontend_kind is defined and project_type != "backend_only" %}
-# Frontend Kind: {{ frontend_kind }}
-
-The `## Frontend Kind` in the structured input indicates a **{{ frontend_kind }}** client surface. The `frontend_spec` MUST begin with a machine-readable header:
-
-```markdown
-## Frontend Kind
-{{ frontend_kind }}
-```
-
-{% if frontend_kind == "web" %}
-Use the default web-app frontend_spec structure shown below (Pages & Routes, Shared Components, State Management, etc.).
-{% elif frontend_kind == "cli" %}
-Structure the frontend_spec around the CLI surface rather than pages:
-
-- **Commands & Subcommands** — Each command gets an ID, purpose, required/optional flags, argument schema, stdout contract (data shape), stderr contract (error messages), and exit codes.
-- **Config & Environment** — Config file format, env vars, default paths.
-- **Interactive Mode vs Non-Interactive Mode** — Every command MUST support non-interactive invocation for automation.
-- **Error Handling** — Exit code table; stderr message format; how errors distinguish from data.
-- Replace "Pages & Routes" / "Shared Components" / "Authentication & Authorization" sections with Commands / Shared Helpers / Auth Flow (if any).
-{% elif frontend_kind == "desktop" %}
-Structure the frontend_spec for a desktop application. The spec MUST include a framework header:
-
-```markdown
-## desktop_framework
-electron | tauri
-```
-
-- **Windows & Menus** — Window definitions, menu structures, tray items.
-- **IPC Contracts** — Messages between main and renderer/webview.
-- **Packaging Target** — OS targets, installer format, auto-update channel.
-- In addition to the standard web-style sections (Pages, Components, State) for the webview content.
-{% elif frontend_kind == "mobile" %}
-Structure the frontend_spec for a mobile application. The spec MUST include a framework header:
-
-```markdown
-## mobile_framework
-react_native | flutter
-```
-
-- **Screens & Navigation** — Each screen with ID, features, and transitions; the navigation graph.
-- **Platform Lifecycle** — Foreground/background handling, deep links, notifications.
-- **State & Persistence** — In-memory state + on-device storage strategy.
-- **Target OSes** — iOS, Android, both; min versions.
-- Replace "Pages & Routes" with Screens & Navigation. Keep Shared Components, State Management, Error Handling.
-{% endif %}
-{% endif %}
-
 {% if figma_sources is defined and figma_sources %}
 # Figma Design Reference
 
 {% if figma_mcp_available == "true" %}
-Use Figma MCP tools to inspect the designs below. Incorporate into the **Frontend Spec**:
-- Extract exact **design tokens** (colors, typography, spacing) into a Design Tokens subsection
-- Reference **component names** from the designs when defining Shared Components
+Use Figma MCP tools to inspect the designs below. Incorporate into the track spec(s) for any web/desktop/mobile track:
+- Extract exact **design tokens** (colors, typography, spacing)
+- Reference **component names** when defining Shared Components
 - Reflect **page layouts** in the Pages & Routes section
 - Map **navigation flows** to routes and transitions
 
@@ -119,12 +56,15 @@ Figma MCP tools are not available. Proceed without direct design reference.
 
 # Output Format
 
-{% if project_type == "frontend_only" %}
-Produce the document with the following section marker:
+Produce one document per track separated by section markers. Use the exact `<!-- DOCUMENT: name -->` marker shown for each.
 
-<!-- DOCUMENT: frontend_spec -->
+{% for track in tracks %}
+<!-- DOCUMENT: {{ track.name }}_spec -->
 ```markdown
-# Frontend Spec
+# {{ track.name | capitalize }} Spec
+{% if track.kind == "web" %}
+## Track Kind
+web
 ## Tech Stack
 - Framework: <e.g. Next.js 15>
 - State management: <e.g. TanStack Query>
@@ -143,29 +83,58 @@ Produce the document with the following section marker:
 - **Used by:** [P001], [P003]
 ## State Management
 - <global state shape and management approach>
-## Authentication & Authorization
-- <how auth is handled on the frontend>
 ## Error Handling
-- **Error boundary strategy:** <where error boundaries are placed — page-level, feature-level, or both>
-- **User-facing error messages:** <how errors are presented to users — toast notifications, inline messages, error pages>
-- **Network error handling:** <how API failures, timeouts, and offline states are handled>
-- **Fallback UI states:** <what users see when data fails to load or an action fails>
-- **Form validation approach:** <client-side validation strategy and how validation errors are displayed>
-## Backend Services
-- **Provider:** <e.g. Supabase, Firebase, Convex>
-- **Database schema:** <tables/collections, fields, relationships>
-- **Security rules:** <row-level security, auth rules>
-- **Client SDK setup:** <initialization, environment variables>
-- **Real-time subscriptions:** <if applicable>
-```
-
-Use the exact `<!-- DOCUMENT: name -->` marker shown above. Do not omit the marker.
-{% elif project_type == "backend_only" %}
-Produce both documents separated by section markers. Follow these schemas exactly:
-
-<!-- DOCUMENT: backend_spec -->
-```markdown
-# Backend Spec
+- Error boundary strategy, network error handling, fallback UI states, form validation approach.
+{% elif track.kind == "cli" %}
+## Track Kind
+cli
+## Tech Stack
+- Language/runtime, CLI framework, packaging.
+## Commands & Subcommands
+### [CMD001] <command name>
+- **Features:** [F001]
+- **Flags:** <required/optional flags>
+- **Arguments:** <positional arguments and schema>
+- **stdout contract:** <data shape>
+- **stderr contract:** <error message format>
+- **Exit codes:** <table of distinct codes>
+## Config & Environment
+- Config file format, env vars, default paths.
+## Interactive vs Non-Interactive Mode
+- Every command MUST support a non-interactive flag for automation.
+## Error Handling
+- Exit code table, stderr message format.
+{% elif track.kind == "desktop" %}
+## Track Kind
+desktop
+## desktop_framework
+electron | tauri
+## Windows & Menus
+- Window definitions, menu structures, tray items.
+## IPC Contracts
+- Messages between main and renderer/webview.
+## Packaging Target
+- OS targets, installer format, auto-update channel.
+## Web View Content
+- Pages, Components, State (same shape as web track).
+{% elif track.kind == "mobile" %}
+## Track Kind
+mobile
+## mobile_framework
+react_native | flutter
+## Screens & Navigation
+### [SCR001] <screen name>
+- **Features:** [F001]
+- **Transitions:** <to / from screens>
+## Platform Lifecycle
+- Foreground/background, deep links, notifications.
+## State & Persistence
+- In-memory + on-device storage strategy.
+## Target OSes
+- iOS, Android, min versions.
+{% elif track.kind == "api" %}
+## Track Kind
+api
 ## Tech Stack
 - Framework: <e.g. Django REST Framework>
 - Database: <e.g. PostgreSQL>
@@ -185,112 +154,64 @@ Produce both documents separated by section markers. Follow these schemas exactl
 - **Trigger:** <what triggers it>
 - **Purpose:** <what it does>
 ## Error Handling
-- **Error response schema:** <consistent JSON shape for all error responses, e.g. {"error": {"code": "...", "message": "...", "details": ...}}>
-- **Exception hierarchy:** <how application exceptions map to HTTP status codes>
-- **Validation approach:** <where and how inputs are validated, and how validation errors are returned>
-- **Logging strategy:** <what context is logged with errors — request ID, user ID, sanitised inputs>
+- Error response schema, exception hierarchy, validation, logging strategy.
 ## Infrastructure
-- Database migrations strategy
-- Environment variables required
-- Third-party service credentials needed
-```
-
-<!-- DOCUMENT: api_contract -->
-```markdown
-# API Contract
-## Authentication
-<auth scheme>
-## Error Response Schema
-<define the consistent error response shape used across all endpoints — every error response must follow this schema>
-## Endpoints
-### [E001] <METHOD> <path>
-- **Feature:** [F001]
-- **Request:** <schema or example>
-- **Response:** <schema or example>
-- **Errors:** <error codes and meanings, using the standard error response schema>
-```
-
-Use the exact `<!-- DOCUMENT: name -->` markers shown above. Do not omit any marker.
+- Migrations strategy, environment variables, third-party credentials.
+{% elif track.kind == "worker" %}
+## Track Kind
+worker
+## Tech Stack
+- Runtime, queue/scheduler, observability stack.
+## Jobs
+### [J001] <job name>
+- **Features:** [F001]
+- **Trigger:** <cron, queue, event>
+- **Inputs/Outputs:** <payload schema and side effects>
+- **Idempotency:** <how retries stay safe>
+## Reliability
+- Visibility timeout, retries, dead-letter routing.
+## Observability
+- Logs, metrics, alerting.
+{% elif track.kind == "library" %}
+## Track Kind
+library
+## Tech Stack
+- Language, package manager, distribution channel.
+## Public API
+### [API001] <module/symbol>
+- **Features:** [F001]
+- **Signature:** <function/class signature>
+- **Behavior:** <semantics, errors raised>
+## Versioning & Compatibility
+- Semver policy, deprecation strategy.
 {% else %}
-Produce all three documents separated by section markers. Follow these schemas exactly:
-
-<!-- DOCUMENT: frontend_spec -->
-```markdown
-# Frontend Spec
+## Track Kind
+{{ track.kind }}
 ## Tech Stack
-- Framework: <e.g. Next.js 15>
-- State management: <e.g. TanStack Query>
-- Styling: <e.g. Tailwind CSS v4>
-- Testing: <e.g. Vitest + React Testing Library>
-## Pages & Routes
-### [P001] <page name> — <route path>
-- **Features:** [F001]
-- **Components:** <list of components on this page>
-- **State:** <what state this page manages>
-- **Behavior:** <interactions, transitions>
-## Shared Components
-### [C001] <component name>
-- **Purpose:** <what it does>
-- **Props:** <key props>
-- **Used by:** [P001], [P003]
-## State Management
-- <global state shape and management approach>
-## Authentication & Authorization
-- <how auth is handled on the frontend — references API Contract for endpoints>
+- <define stack appropriate for this track kind>
+## Architecture
+- <modules, responsibilities, key flows>
 ## Error Handling
-- **Error boundary strategy:** <where error boundaries are placed — page-level, feature-level, or both>
-- **User-facing error messages:** <how errors are presented to users — toast notifications, inline messages, error pages>
-- **Network error handling:** <how API failures, timeouts, and offline states are handled>
-- **Fallback UI states:** <what users see when data fails to load or an action fails>
-- **Form validation approach:** <client-side validation strategy and how validation errors are displayed>
+- <error model used in this track>
+{% endif %}
 ```
 
-<!-- DOCUMENT: backend_spec -->
-```markdown
-# Backend Spec
-## Tech Stack
-- Framework: <e.g. Django REST Framework>
-- Database: <e.g. PostgreSQL>
-- Testing: <e.g. Pytest>
-## Data Models
-### [M001] <model name>
-- **Features:** [F001]
-- **Fields:** <field name: type, constraints>
-- **Relationships:** <FK/M2M to other models>
-## Services & Business Logic
-### [S001] <service name>
-- **Features:** [F001]
-- **Purpose:** <what it does>
-- **Inputs/Outputs:** <key interfaces>
-## Background Jobs
-### [J001] <job name> (if applicable)
-- **Trigger:** <what triggers it>
-- **Purpose:** <what it does>
-## Error Handling
-- **Error response schema:** <consistent JSON shape for all error responses, e.g. {"error": {"code": "...", "message": "...", "details": ...}}>
-- **Exception hierarchy:** <how application exceptions map to HTTP status codes>
-- **Validation approach:** <where and how inputs are validated, and how validation errors are returned>
-- **Logging strategy:** <what context is logged with errors — request ID, user ID, sanitised inputs>
-## Infrastructure
-- Database migrations strategy
-- Environment variables required
-- Third-party service credentials needed
-```
-
+{% endfor %}
+{% if tracks | selectattr("kind", "equalto", "api") | list %}
 <!-- DOCUMENT: api_contract -->
 ```markdown
 # API Contract
 ## Authentication
 <auth scheme>
 ## Error Response Schema
-<define the consistent error response shape used across all endpoints — every error response must follow this schema>
+<consistent JSON error shape used across all endpoints>
 ## Endpoints
 ### [E001] <METHOD> <path>
 - **Feature:** [F001]
 - **Request:** <schema or example>
 - **Response:** <schema or example>
-- **Errors:** <error codes and meanings, using the standard error response schema>
+- **Errors:** <error codes and meanings>
 ```
+{% endif %}
 
 Use the exact `<!-- DOCUMENT: name -->` markers shown above. Do not omit any marker.
-{% endif %}
