@@ -264,8 +264,13 @@ class TestRateLimitPauseHandling:
             exit_code=1,
         )
 
-        with pytest.raises(RateLimitPause) as exc_info:
-            await engine.run()
+        with patch("agentic_dev.orchestrator.engine.UsageApiClient") as mock_cls:
+            mock_instance = AsyncMock()
+            mock_instance.get_utilization = AsyncMock(return_value=None)
+            mock_cls.return_value = mock_instance
+
+            with pytest.raises(RateLimitPause) as exc_info:
+                await engine.run()
 
         # Phase preserved — NOT transitioned to FAILED
         assert state.phase == PipelinePhase.INPUT_PROCESSING
@@ -305,7 +310,13 @@ class TestRateLimitPauseHandling:
             new_callable=AsyncMock, return_value=False,
         ), patch(
             "agentic_dev.orchestrator.engine.commit", new_callable=AsyncMock,
-        ):
+        ), patch(
+            "agentic_dev.orchestrator.engine.UsageApiClient",
+        ) as mock_cls:
+            mock_instance = AsyncMock()
+            mock_instance.get_utilization = AsyncMock(return_value=None)
+            mock_cls.return_value = mock_instance
+
             with pytest.raises(RateLimitPause):
                 await engine.run()
 
