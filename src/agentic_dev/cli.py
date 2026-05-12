@@ -305,7 +305,6 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
         prompt_renderer=prompt_renderer,
         state_manager=state_manager,
         checkpoint_config=checkpoint_config,
-        directory_map=project_config.directory_map,
     )
 
     run_id = generate_run_id()

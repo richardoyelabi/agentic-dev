@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from agentic_dev.cli import (
     _run_engine_with_rate_limit_resume,
+    _run_pipeline,
     _sleep_for_rate_limit_reset,
     app,
 )
@@ -1109,3 +1110,59 @@ class TestSleepForRateLimitReset:
 
         # Clean up so later tests don't see a pre-set event
         shutdown_mod._shutdown_event = asyncio.Event()
+
+
+class TestRunPipelineEngineConstruction:
+    """Regression tests for `_run_pipeline`'s `PipelineEngine` construction.
+
+    The track-model refactor (commit 10f228f) removed `directory_map` from
+    `ProjectConfig` and dropped the matching parameter from
+    `PipelineEngine.__init__`. `_run_pipeline` previously passed
+    `directory_map=project_config.directory_map`, which raised
+    `AttributeError` against the new Pydantic model and crashed every
+    `agentic-dev resume` invocation. These tests pin the constructor contract.
+    """
+
+    def test_run_pipeline_does_not_pass_directory_map_kwarg(
+        self, project_with_state: Path,
+    ) -> None:
+        project_dir = project_with_state / "test-app"
+        state = StateManager(project_dir).load()
+
+        with patch(
+            "agentic_dev.orchestrator.engine.PipelineEngine"
+        ) as mock_engine_cls, patch(
+            "agentic_dev.cli._run_engine_with_rate_limit_resume"
+        ), patch("agentic_dev.cli.asyncio.run"):
+            _run_pipeline(project_dir, state)
+
+        assert mock_engine_cls.call_count == 1
+        _, kwargs = mock_engine_cls.call_args
+        assert "directory_map" not in kwargs, (
+            "PipelineEngine no longer accepts `directory_map` — kwarg must not be passed"
+        )
+
+    def test_run_pipeline_passes_expected_engine_kwargs(
+        self, project_with_state: Path,
+    ) -> None:
+        """Lock in the kwargs `_run_pipeline` is contracted to forward."""
+        project_dir = project_with_state / "test-app"
+        state = StateManager(project_dir).load()
+
+        with patch(
+            "agentic_dev.orchestrator.engine.PipelineEngine"
+        ) as mock_engine_cls, patch(
+            "agentic_dev.cli._run_engine_with_rate_limit_resume"
+        ), patch("agentic_dev.cli.asyncio.run"):
+            _run_pipeline(project_dir, state)
+
+        _, kwargs = mock_engine_cls.call_args
+        assert set(kwargs) == {
+            "project_dir",
+            "claude",
+            "registry",
+            "doc_store",
+            "prompt_renderer",
+            "state_manager",
+            "checkpoint_config",
+        }
