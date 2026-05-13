@@ -623,6 +623,51 @@ class TestUATPhase:
         assert "uat_prereqs" in injected_inputs
         assert injected_inputs["uat_prereqs"] == prereqs_content
 
+    @pytest.mark.asyncio
+    async def test_uat_passes_canonical_uat_report_key_to_qa(
+        self, engine, claude, doc_store, registry, prompt_renderer,
+    ) -> None:
+        """Regression: uat_qa.md.j2 references ``{{ uat_report }}``.
+
+        The engine writes the action agent's output to ``uat_report_<track>``,
+        but the QA agent's template uses the unqualified ``uat_report`` key.
+        ``run_qa_cycle`` injects the action output under ``qa_output_key`` —
+        the engine must pass ``"uat_report"`` so the QA template can resolve it
+        under Jinja's StrictUndefined.
+        """
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+
+        doc_store.exists.return_value = True
+        doc_store.read.return_value = "doc content"
+
+        def _agent_for(name: str) -> AgentDefinition:
+            agent = _make_agent(name, template=f"{name}.md.j2")
+            if name == "uat_qa":
+                agent.input_documents = ["features_request", "uat_report"]
+            return agent
+
+        registry.get = MagicMock(side_effect=_agent_for)
+        action_report = "# UAT Report\n## Overall Result: PASS"
+        claude.run.side_effect = [
+            _make_claude_result(action_report, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_uat(state)
+
+        uat_qa_render = next(
+            call for call in prompt_renderer.render_agent_prompt.call_args_list
+            if call.kwargs.get("template_name") == "uat_qa.md.j2"
+        )
+        injected_inputs = uat_qa_render.kwargs["input_documents"]
+        assert "uat_report" in injected_inputs, (
+            "QA must receive the action output under the canonical 'uat_report' key, "
+            "not the per-track 'uat_report_<track>' filename."
+        )
+        assert injected_inputs["uat_report"] == action_report
+
 
 class TestQACycleRetry:
     """Test the empty-output retry in QA cycle (used by UAT and input processing)."""

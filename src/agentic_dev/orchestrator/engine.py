@@ -762,6 +762,10 @@ class PipelineEngine:
                 qa_agent=self._registry.get("uat_qa"),
                 input_docs=input_docs,
                 output_doc_name=f"uat_report_{track.name}",
+                # uat_qa.md.j2 references ``{{ uat_report }}`` — feed the
+                # action agent's output under that canonical key, not the
+                # per-track filename.
+                qa_output_key="uat_report",
                 workspace=self._project_dir / track.path,
                 doc_store=self._doc_store,
                 prompt_renderer=self._prompt_renderer,
