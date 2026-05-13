@@ -736,6 +736,16 @@ class PipelineEngine:
                 and self._doc_store.exists("features")
             ):
                 input_docs["features_request"] = self._doc_store.read("features")
+            # Per-track alias: agents declare ``uat_prereqs``, engine writes it
+            # as ``uat_prereqs_<track.name>``. Inject the per-track doc under
+            # the generic name the agent expects.
+            prereqs_doc = f"uat_prereqs_{track.name}"
+            if (
+                "uat_prereqs" in agent_def.input_documents
+                and "uat_prereqs" not in input_docs
+                and self._doc_store.exists(prereqs_doc)
+            ):
+                input_docs["uat_prereqs"] = self._doc_store.read(prereqs_doc)
             # Track spec is the per-track input.
             if self._doc_store.exists(spec_doc):
                 input_docs[spec_doc] = self._doc_store.read(spec_doc)
