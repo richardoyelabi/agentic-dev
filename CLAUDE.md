@@ -67,13 +67,18 @@ ralph-style persistence:
 Treat `remediate` as the outer ralph loop and the per-agent QA correction
 cycle as the inner one.
 
-## Removed commands
+## Removed commands and features
 
 `adopt`, `sync`, and `integrate` have been removed. They existed only to
 reconcile the previous frontend/backend/docs split, which no longer exists.
 For an existing codebase, point `agentic-dev new` at it via `--path` and
 declare the tracks with `--track`. For drift handling, edit specs in
 `.agentic-dev/artifacts/` and re-run the pipeline.
+
+Document archiving (the old `docs/archive/cycle_N/` and `docs/archive/update_*/`
+directories) was removed along with the top-level `docs/` tree. The pipeline
+overwrites artifacts in place; per-cycle history is available via
+`.agentic-dev/history/state-*.json` snapshots and git on the project repo.
 
 ## Tech Stack
 

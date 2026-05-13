@@ -270,6 +270,51 @@ class ClaudeRunner:
         except (json.JSONDecodeError, ValueError):
             return None
 
+    @staticmethod
+    def _session_has_api_error(
+        session_id: str | None,
+        working_dir: Path,
+        claude_dir: Path | None = None,
+    ) -> bool:
+        """Detect transient Anthropic API errors (5xx) in the session JSONL.
+
+        When the Claude CLI hits an upstream API error mid-session, it exits
+        non-zero with an empty stderr; the error text is only persisted in the
+        session JSONL as a synthetic assistant message with
+        ``isApiErrorMessage: true`` and ``type: api_error``. Use this as the
+        signal to retry rather than failing the agent run.
+        """
+        if not session_id:
+            return False
+        if claude_dir is None:
+            claude_dir = Path.home() / ".claude"
+        encoded_path = str(working_dir).replace("/", "-")
+        jsonl_path = claude_dir / "projects" / encoded_path / f"{session_id}.jsonl"
+        if not jsonl_path.exists():
+            return False
+        try:
+            lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return False
+        # Scan only the tail — API errors land at the end of the session.
+        for line in reversed(lines[-20:]):
+            try:
+                entry = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if entry.get("isApiErrorMessage"):
+                return True
+            content = entry.get("message", {}).get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and "api_error" in (block.get("text") or "")
+                    ):
+                        return True
+        return False
+
     async def run(
         self,
         agent: AgentConfig,
@@ -346,16 +391,25 @@ class ClaudeRunner:
             if extracted_sid:
                 resume_session_id = extracted_sid
 
-            # Only retry rate limits — other errors raise immediately.
-            # Fallback: when stderr is empty or unrecognised, ask the usage
-            # API before giving up — the CLI has been observed to exit
-            # silently during 5-hour quota windows.
+            # Retry rate limits AND transient upstream API errors. Both surface
+            # as exit-1 with empty stderr; the API-error variant is only
+            # visible in the session JSONL as an ``isApiErrorMessage`` entry.
             rate_limit_detected = RateLimitDetector.is_rate_limit(stderr_text)
             rate_limit_from_usage_api = False
             if not rate_limit_detected:
                 rate_limit_from_usage_api = await self._usage_api_indicates_limit()
 
+            api_error_detected = False
             if not rate_limit_detected and not rate_limit_from_usage_api:
+                api_error_detected = self._session_has_api_error(
+                    resume_session_id, working_dir,
+                )
+
+            if (
+                not rate_limit_detected
+                and not rate_limit_from_usage_api
+                and not api_error_detected
+            ):
                 duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
                 emit(_event_log, AgentFailedEvent(
                     agent_name=agent.name,
@@ -376,6 +430,9 @@ class ClaudeRunner:
             # Exhausted retries — raise immediately
             if attempt >= self._max_retries:
                 duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+                exhaustion_label = (
+                    "transient API errors" if api_error_detected else "rate limit"
+                )
                 emit(_event_log, AgentFailedEvent(
                     agent_name=agent.name,
                     model=agent.model,
@@ -384,8 +441,20 @@ class ClaudeRunner:
                     error=stderr_text[:500],
                     sprint=sprint,
                     level="ERROR",
-                    message=f"Agent '{agent.name}' rate limited after {self._max_retries + 1} attempts",
+                    message=(
+                        f"Agent '{agent.name}' failed after {self._max_retries + 1} "
+                        f"attempts ({exhaustion_label})"
+                    ),
                 ))
+                if api_error_detected:
+                    raise AgentRunError(
+                        agent_name=agent.name,
+                        message=(
+                            f"Transient API errors after {self._max_retries + 1} "
+                            f"attempts; last exit code {exit_code}"
+                        ),
+                        exit_code=exit_code,
+                    )
                 raise RateLimitError(
                     agent_name=agent.name,
                     message=f"Rate limited after {self._max_retries + 1} attempts: {stderr_text}",
@@ -393,15 +462,22 @@ class ClaudeRunner:
                     exit_code=exit_code,
                 )
 
-            wait_result = await self._wait_strategy.determine_wait(
-                stderr_text, attempt, return_source=True,
-            )
-            assert isinstance(wait_result, tuple)
-            wait_seconds, wait_source = wait_result
+            if api_error_detected:
+                # Linear backoff for transient API errors; the upstream
+                # incident usually clears within a minute.
+                wait_seconds = 30.0 * (attempt + 1)
+                wait_source = "api_error_backoff"
+                retry_reason = "upstream_api_error"
+            else:
+                wait_result = await self._wait_strategy.determine_wait(
+                    stderr_text, attempt, return_source=True,
+                )
+                assert isinstance(wait_result, tuple)
+                wait_seconds, wait_source = wait_result
 
-            retry_reason = stderr_text[:200]
-            if rate_limit_from_usage_api and not stderr_text.strip():
-                retry_reason = "empty_stderr_usage_api_limited"
+                retry_reason = stderr_text[:200]
+                if rate_limit_from_usage_api and not stderr_text.strip():
+                    retry_reason = "empty_stderr_usage_api_limited"
 
             emit(_event_log, AgentRetryEvent(
                 agent_name=agent.name,
@@ -414,7 +490,8 @@ class ClaudeRunner:
                 will_resume_session=resume_session_id is not None,
                 sprint=sprint,
                 message=(
-                    f"Agent '{agent.name}' rate limited, waiting {wait_seconds:.0f}s "
+                    f"Agent '{agent.name}' retrying ({retry_reason}), "
+                    f"waiting {wait_seconds:.0f}s "
                     f"(attempt {attempt + 1}/{self._max_retries}, source={wait_source})"
                     + (f" [resuming session {resume_session_id}]" if resume_session_id else "")
                 ),

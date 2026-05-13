@@ -567,6 +567,107 @@ class TestUATPhase:
         write_calls = [c.args[0] for c in doc_store.write.call_args_list]
         assert "uat_report" in write_calls
 
+    @pytest.mark.asyncio
+    async def test_uat_aliases_per_track_prereqs_to_generic_input(
+        self, engine, claude, doc_store, registry, prompt_renderer,
+    ) -> None:
+        """Regression: agents declare ``uat_prereqs``; engine writes ``uat_prereqs_<track>``.
+
+        Without the per-track alias, the prereqs doc never reaches the agent
+        prompt, the UAT agent runs blind, and previous runs burned through
+        ``max_turns`` re-discovering the environment. The engine must inject
+        ``uat_prereqs_<track.name>`` under the generic ``uat_prereqs`` key.
+        """
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+
+        prereqs_content = "# UAT Prereqs\n**Agent:** uat_web\n**Overall:** PASS\n"
+        existing = {
+            "features", "frontend_spec", "uat_prereqs_frontend", "sprint_plan",
+        }
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in existing
+        doc_contents = {
+            "features": "# Features",
+            "frontend_spec": "# Frontend Spec",
+            "uat_prereqs_frontend": prereqs_content,
+            "sprint_plan": "# Sprint Plan",
+        }
+        doc_store.read.side_effect = lambda name: doc_contents.get(
+            name.replace(".md", ""), ""
+        )
+
+        def _agent_for(name: str) -> AgentDefinition:
+            agent = _make_agent(name, template=f"{name}.md.j2")
+            if name == "uat_web":
+                agent.input_documents = [
+                    "features_request", "frontend_spec", "backend_spec",
+                    "api_contract", "sprint_plan", "uat_prereqs",
+                ]
+            return agent
+
+        registry.get = MagicMock(side_effect=_agent_for)
+        claude.run.return_value = _make_claude_result(
+            "# UAT Report\n## Overall Result: PASS", cost=0.10,
+        )
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_uat(state)
+
+        # The render call for uat_web should have received uat_prereqs in input_documents,
+        # populated from the per-track ``uat_prereqs_frontend`` doc.
+        uat_web_render = next(
+            call for call in prompt_renderer.render_agent_prompt.call_args_list
+            if call.kwargs.get("template_name") == "uat_web.md.j2"
+        )
+        injected_inputs = uat_web_render.kwargs["input_documents"]
+        assert "uat_prereqs" in injected_inputs
+        assert injected_inputs["uat_prereqs"] == prereqs_content
+
+    @pytest.mark.asyncio
+    async def test_uat_passes_canonical_uat_report_key_to_qa(
+        self, engine, claude, doc_store, registry, prompt_renderer,
+    ) -> None:
+        """Regression: uat_qa.md.j2 references ``{{ uat_report }}``.
+
+        The engine writes the action agent's output to ``uat_report_<track>``,
+        but the QA agent's template uses the unqualified ``uat_report`` key.
+        ``run_qa_cycle`` injects the action output under ``qa_output_key`` —
+        the engine must pass ``"uat_report"`` so the QA template can resolve it
+        under Jinja's StrictUndefined.
+        """
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+
+        doc_store.exists.return_value = True
+        doc_store.read.return_value = "doc content"
+
+        def _agent_for(name: str) -> AgentDefinition:
+            agent = _make_agent(name, template=f"{name}.md.j2")
+            if name == "uat_qa":
+                agent.input_documents = ["features_request", "uat_report"]
+            return agent
+
+        registry.get = MagicMock(side_effect=_agent_for)
+        action_report = "# UAT Report\n## Overall Result: PASS"
+        claude.run.side_effect = [
+            _make_claude_result(action_report, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_uat(state)
+
+        uat_qa_render = next(
+            call for call in prompt_renderer.render_agent_prompt.call_args_list
+            if call.kwargs.get("template_name") == "uat_qa.md.j2"
+        )
+        injected_inputs = uat_qa_render.kwargs["input_documents"]
+        assert "uat_report" in injected_inputs, (
+            "QA must receive the action output under the canonical 'uat_report' key, "
+            "not the per-track 'uat_report_<track>' filename."
+        )
+        assert injected_inputs["uat_report"] == action_report
+
 
 class TestQACycleRetry:
     """Test the empty-output retry in QA cycle (used by UAT and input processing)."""

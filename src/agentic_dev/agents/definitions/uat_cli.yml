@@ -6,7 +6,7 @@ claude:
   permission_mode: bypassPermissions
   allowed_tools: [Read, Glob, Grep, Bash, WebFetch]
   max_budget_usd: 5.00
-  max_turns: 50
+  max_turns: 100
 prompt_template: uat_cli.md.j2
 input_documents: [features_request, frontend_spec, backend_spec, api_contract, sprint_plan, uat_prereqs]
 output_documents: [uat_report]
