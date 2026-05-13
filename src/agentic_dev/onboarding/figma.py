@@ -87,6 +87,7 @@ async def detect_design_changes(
     sources: list[AnnotatedSource],
     existing_spec: str,
     working_dir: Path,
+    existing_annotations: str = "",
 ) -> DesignChangeResult:
     """Detect design changes by comparing live Figma state against existing specs.
 
@@ -100,6 +101,10 @@ async def detect_design_changes(
         sources: Figma URLs with optional annotations.
         existing_spec: The current frontend_spec text to compare against.
         working_dir: Working directory for the agent.
+        existing_annotations: The previously persisted ``figma_annotations``
+            document, if any. When supplied, the agent additionally diffs
+            the current Figma annotations against this snapshot and reports
+            annotation drift as a class of design change.
 
     Returns:
         DesignChangeResult indicating whether changes were found and a summary.
@@ -128,6 +133,7 @@ async def detect_design_changes(
             "existing_spec": existing_spec,
             "figma_urls": figma_urls_block,
             "sentinel": NO_DESIGN_CHANGES_SENTINEL,
+            "existing_annotations": existing_annotations,
         },
     )
 

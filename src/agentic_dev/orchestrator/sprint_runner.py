@@ -213,6 +213,8 @@ class SprintRunner:
                     "to text-based design references."
                 )
                 ctx["figma_mcp_available"] = "false"
+        if self._doc_store.exists("figma_annotations"):
+            ctx["figma_annotations"] = self._doc_store.read("figma_annotations")
         return ctx
 
     async def _run_track(

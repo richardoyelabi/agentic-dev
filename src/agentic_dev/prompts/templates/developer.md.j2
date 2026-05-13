@@ -52,6 +52,14 @@ Figma MCP tools are not available. Use the design analyses in the track spec as 
 
 {{ figma_sources }}
 {% endif %}
+
+{% if figma_annotations is defined and figma_annotations %}
+## Designer Annotations
+
+The annotations below were left by designers on specific frames. **They are non-negotiable implementation constraints.** Read them before you implement the corresponding component and make sure your code satisfies every one.
+
+{{ figma_annotations }}
+{% endif %}
 {% endif %}
 
 # Constraints

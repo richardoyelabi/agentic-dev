@@ -533,6 +533,135 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         })
         assert "Figma Design Reference" not in result
 
+    def test_architect_renders_figma_annotations_when_provided(self, real_renderer):
+        """When figma_annotations is provided alongside figma_sources, the
+        Designer Annotations subsection renders inside the Figma block."""
+        result = real_renderer.render("architect.md.j2", {
+            "features": "# Features Request\n## Feature: [F001] Auth",
+            "structured_input": "# Structured Input\n- [F001] Auth",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+            "figma_annotations": (
+                "# Figma Annotations\n"
+                "## Source: https://figma.com/file/abc\n"
+                "- **Login button** (`12:34`): must be 44px tall for touch\n"
+            ),
+            "constraints": [],
+            "correction_mode": False,
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            ],
+        })
+        assert "Designer Annotations" in result
+        assert "44px tall for touch" in result
+        assert "authoritative design intent" in result
+
+    def test_architect_omits_annotations_section_when_absent(self, real_renderer):
+        """No annotations doc → no Designer Annotations subsection."""
+        result = real_renderer.render("architect.md.j2", {
+            "features": "# Features Request",
+            "structured_input": "# Structured Input",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+            "constraints": [],
+            "correction_mode": False,
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            ],
+        })
+        assert "Designer Annotations" not in result
+
+    def test_architect_qa_renders_figma_annotations_when_provided(self, real_renderer):
+        """Architect QA template renders the Designer Annotations block and
+        adds a rubric line for it."""
+        result = real_renderer.render("architect_qa.md.j2", {
+            "features": "# Features Request",
+            "structured_input": "# Structured Input",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/xyz",
+            "figma_mcp_available": "true",
+            "figma_annotations": (
+                "# Figma Annotations\n"
+                "- **Header** (`9:1`): use existing Modal component, do not redesign\n"
+            ),
+            "architecture": "# Frontend Spec\n## Pages",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            ],
+        })
+        assert "Designer Annotations" in result
+        assert "do not redesign" in result
+        assert "designer annotations addressed" in result.lower()
+
+    def test_developer_renders_figma_annotations_for_ui_track(self, real_renderer):
+        """Developer prompt surfaces Designer Annotations as implementation
+        constraints on UI tracks."""
+        result = real_renderer.render("developer.md.j2", {
+            "track_name": "web",
+            "track_kind": "web",
+            "track_spec": "# Web Spec\n## Pages",
+            "api_contract": "",
+            "sprint_scope": "Sprint 1",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+            "figma_annotations": (
+                "# Figma Annotations\n"
+                "- **Submit button** (`5:6`): disable while form is submitting\n"
+            ),
+            "constraints": [],
+            "correction_mode": False,
+        })
+        assert "Designer Annotations" in result
+        assert "disable while form is submitting" in result
+        assert "non-negotiable" in result
+
+    def test_developer_omits_figma_annotations_for_api_track(self, real_renderer):
+        """API tracks never see the Figma block, even if annotations are passed."""
+        result = real_renderer.render("developer.md.j2", {
+            "track_name": "api",
+            "track_kind": "api",
+            "track_spec": "# Api Spec\n## Endpoints",
+            "api_contract": "# API Contract",
+            "sprint_scope": "Sprint 1",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+            "figma_annotations": (
+                "# Figma Annotations\n"
+                "- **Submit button** (`5:6`): must be 44px tall\n"
+            ),
+            "constraints": [],
+            "correction_mode": False,
+        })
+        assert "Designer Annotations" not in result
+        assert "Figma Design Reference" not in result
+
+    def test_design_change_detection_renders_existing_annotations(self, real_renderer):
+        """When existing annotations are passed, the template renders the
+        diff section and asks the agent to call get_annotations."""
+        result = real_renderer.render("design_change_detection.md.j2", {
+            "existing_spec": "# Frontend Spec",
+            "figma_urls": "- https://figma.com/file/abc",
+            "sentinel": "NO_DESIGN_CHANGES",
+            "existing_annotations": (
+                "# Figma Annotations\n"
+                "- **Login button** (`12:34`): must be 44px tall\n"
+            ),
+        })
+        assert "Previously Persisted Designer Annotations" in result
+        assert "44px tall" in result
+        assert "get_annotations" in result
+        assert "## Annotations" in result
+
+    def test_design_change_detection_omits_annotations_when_empty(self, real_renderer):
+        """When existing annotations are empty, the diff section is omitted."""
+        result = real_renderer.render("design_change_detection.md.j2", {
+            "existing_spec": "# Frontend Spec",
+            "figma_urls": "- https://figma.com/file/abc",
+            "sentinel": "NO_DESIGN_CHANGES",
+            "existing_annotations": "",
+        })
+        assert "Previously Persisted Designer Annotations" not in result
+        assert "get_annotations" not in result
+
     def test_uat_web_receives_features_request(self, real_renderer):
         """engine.py aliases 'features' to 'features_request' for per-kind UAT agents."""
         result = real_renderer.render("uat_web.md.j2", {

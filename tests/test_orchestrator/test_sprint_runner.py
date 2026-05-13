@@ -94,6 +94,44 @@ def runner(claude, registry, doc_store, prompt_renderer, project_dir, fullstack_
     )
 
 
+class TestBuildSharedContext:
+    """Verify that the per-sprint shared context exposes Figma annotations."""
+
+    def test_figma_annotations_included_when_doc_exists(
+        self, claude, registry, prompt_renderer, project_dir, fullstack_tracks,
+    ) -> None:
+        doc_contents = {
+            "figma_annotations": (
+                "# Figma Annotations\n"
+                "- **Submit** (`1:2`): disable while form is submitting\n"
+            ),
+        }
+        store = MagicMock(spec=DocumentStore)
+        store.exists = MagicMock(side_effect=lambda name: name in doc_contents)
+        store.read = MagicMock(side_effect=lambda name: doc_contents.get(name, ""))
+
+        sprint_runner = SprintRunner(
+            claude=claude,
+            registry=registry,
+            doc_store=store,
+            prompt_renderer=prompt_renderer,
+            project_dir=project_dir,
+            tracks=fullstack_tracks,
+        )
+
+        ctx = sprint_runner._build_shared_context(sprint_state=None)
+
+        assert "figma_annotations" in ctx
+        assert "disable while form is submitting" in ctx["figma_annotations"]
+
+    def test_figma_annotations_omitted_when_doc_absent(
+        self, runner,
+    ) -> None:
+        ctx = runner._build_shared_context(sprint_state=None)
+
+        assert "figma_annotations" not in ctx
+
+
 @pytest.mark.asyncio
 async def test_sprint_runs_each_track_in_order(runner, claude, fullstack_tracks):
     """A sprint with two tracks runs dev+QA for each track."""

@@ -38,6 +38,14 @@ Figma MCP tools are not available. Proceed without direct design reference.
 
 {{ figma_sources }}
 {% endif %}
+
+{% if figma_annotations is defined and figma_annotations %}
+## Designer Annotations
+
+The following annotations were left by designers directly on the Figma frames. **Treat these as authoritative design intent** — they override anything you might otherwise infer from the visual design. Reflect each annotation in the appropriate part of the per-track spec (Pages, Shared Components, Behavior, or design tokens).
+
+{{ figma_annotations }}
+{% endif %}
 {% endif %}
 
 {% if change_request is defined and change_request %}

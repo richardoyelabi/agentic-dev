@@ -45,6 +45,8 @@ There is no top-level `docs/` directory. The relevant subpaths:
 - `.agentic-dev/artifacts/<track>_spec.md` — per-track architecture spec
 - `.agentic-dev/artifacts/api_contract.md` — emitted iff any track has `kind=api`
 - `.agentic-dev/artifacts/sprint_plan.md` — sprint plan with `Tracks in scope` lines
+- `.agentic-dev/artifacts/figma_sources.md` — Figma URLs and user-supplied labels (emitted iff `--from-figma`)
+- `.agentic-dev/artifacts/figma_annotations.md` — designer-authored annotations extracted from Figma at onboarding/update time (emitted iff `--from-figma` and the Figma MCP server returns annotations)
 - `.agentic-dev/artifacts/qa/<name>.md` — per-step QA reports
 - `.agentic-dev/artifacts/uat_report_<track>.md` — per-track UAT verdict
 - `.agentic-dev/artifacts/uat_report.md` — aggregated multi-track UAT report

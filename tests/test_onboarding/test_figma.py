@@ -156,6 +156,51 @@ class TestDetectDesignChanges:
 
     @pytest.mark.asyncio
     @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
+    async def test_existing_annotations_included_in_prompt(
+        self, mock_discover: MagicMock, tmp_path: Path,
+    ) -> None:
+        """When existing annotations are passed, they appear in the prompt
+        with instructions to diff against them."""
+        mock_discover.return_value = _figma_env()
+        mock_runner = _make_mock_runner(_make_claude_result(text="some changes"))
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
+        existing_annotations = (
+            "# Figma Annotations\n"
+            "## Source: https://www.figma.com/file/abc123\n"
+            "- **Button** (`123:45`): must be 44px tall for touch\n"
+        )
+
+        await detect_design_changes(
+            mock_runner,
+            sources,
+            "spec text",
+            tmp_path,
+            existing_annotations=existing_annotations,
+        )
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert "44px tall for touch" in prompt
+        assert "Annotations" in prompt
+        assert "get_annotations" in prompt
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
+    async def test_empty_existing_annotations_omits_annotation_section(
+        self, mock_discover: MagicMock, tmp_path: Path,
+    ) -> None:
+        """When no existing annotations are passed, the prompt does not include
+        the annotation-diff section."""
+        mock_discover.return_value = _figma_env()
+        mock_runner = _make_mock_runner(_make_claude_result(text="some changes"))
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
+
+        await detect_design_changes(mock_runner, sources, "spec text", tmp_path)
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert "Previously Persisted Designer Annotations" not in prompt
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
     async def test_propagates_agent_run_error(
         self, mock_discover: MagicMock, tmp_path: Path
     ) -> None:

@@ -25,6 +25,22 @@ from agentic_dev.state.models import PipelinePhase, SprintState, SprintStatus
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _bypass_figma_annotations_extractor(request):
+    """Bypass the Figma annotation extractor by default.
+
+    Without this, every CLI test that passes ``--from-figma`` would invoke a
+    real ``claude`` subprocess via the ClaudeRunner inside
+    ``_extract_and_persist_figma_annotations``. Tests that need to exercise
+    the extractor wiring opt out with ``@pytest.mark.no_bypass_figma_extractor``.
+    """
+    if "no_bypass_figma_extractor" in request.keywords:
+        yield
+        return
+    with patch("agentic_dev.cli._extract_and_persist_figma_annotations"):
+        yield
+
+
 @pytest.fixture
 def project_with_state(tmp_path: Path) -> Path:
     """Create a project directory with initialised state and config."""

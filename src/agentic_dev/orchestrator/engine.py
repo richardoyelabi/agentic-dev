@@ -353,6 +353,11 @@ class PipelineEngine:
             if self._doc_store.exists("figma_sources")
             else ""
         )
+        figma_annotations = (
+            self._doc_store.read("figma_annotations")
+            if self._doc_store.exists("figma_annotations")
+            else ""
+        )
         figma_mcp_available = "false"
         if figma_sources:
             try:
@@ -376,6 +381,7 @@ class PipelineEngine:
                 "features": features,
                 "figma_sources": figma_sources,
                 "figma_mcp_available": figma_mcp_available,
+                "figma_annotations": figma_annotations,
             },
             output_doc_name="architecture",
             workspace=self._project_dir,

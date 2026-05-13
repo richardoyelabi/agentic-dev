@@ -174,6 +174,48 @@ def _read_requirements_file(file_path: str) -> str:
     return content.strip()
 
 
+def _extract_and_persist_figma_annotations(
+    figma_sources: list,
+    project_dir: Path,
+    doc_store: DocumentStore,
+) -> None:
+    """Run the annotation extractor and persist its output.
+
+    Best-effort: failures are logged as warnings and the pipeline continues.
+    Annotations are advisory — missing them must never block onboarding or
+    an update cycle.
+    """
+    from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+    from agentic_dev.onboarding.figma_annotations import (  # noqa: WPS433
+        extract_figma_annotations,
+        write_figma_annotations,
+    )
+
+    console.print("[cyan]Extracting Figma annotations...[/cyan]")
+    log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
+    try:
+        result = asyncio.run(
+            extract_figma_annotations(
+                ClaudeRunner(log_dir=log_dir),
+                figma_sources,
+                project_dir,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — annotations are advisory
+        console.print(
+            f"[yellow]Could not extract Figma annotations ({exc}). "
+            "Continuing without them.[/yellow]"
+        )
+        return
+
+    write_figma_annotations(doc_store, result.text)
+    if doc_store.exists("figma_annotations"):
+        console.print(
+            "[green]Saved Figma annotations to "
+            ".agentic-dev/artifacts/figma_annotations.md[/green]"
+        )
+
+
 def _display_rate_limit_pause(pause: RateLimitPause) -> None:
     """Render a Rich banner describing the pending rate-limit pause."""
     detail = (
@@ -487,6 +529,7 @@ def new(
 
         if figma_sources:
             write_figma_sources(doc_store, figma_sources)
+            _extract_and_persist_figma_annotations(figma_sources, project_dir, doc_store)
 
         _run_pipeline(project_dir, state)
 
@@ -694,7 +737,16 @@ def update(
 
             write_figma_sources(doc_store, figma_sources)
 
-            # Detect design changes by comparing live Figma against existing specs
+            # Detect design changes by comparing live Figma against existing specs.
+            # Read the previously persisted annotations doc first so design-change
+            # detection can diff against it before we overwrite it with a fresh
+            # extraction below.
+            existing_annotations = (
+                doc_store.read("figma_annotations")
+                if doc_store.exists("figma_annotations")
+                else ""
+            )
+
             if doc_store.exists("frontend_spec"):
                 existing_spec = doc_store.read("frontend_spec")
                 log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
@@ -702,12 +754,20 @@ def update(
 
                 console.print("[cyan]Detecting design changes against existing specs...[/cyan]")
                 change_result = asyncio.run(
-                    detect_design_changes(figma_claude, figma_sources, existing_spec, project_dir)
+                    detect_design_changes(
+                        figma_claude,
+                        figma_sources,
+                        existing_spec,
+                        project_dir,
+                        existing_annotations=existing_annotations,
+                    )
                 )
                 if change_result.has_changes:
                     design_changes = change_result.summary
                 else:
                     console.print("[green]No design changes detected.[/green]")
+
+            _extract_and_persist_figma_annotations(figma_sources, project_dir, doc_store)
 
         if not change_input and not figma_sources:
             console.print("[bold red]No change description provided.[/bold red]")

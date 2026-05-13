@@ -34,6 +34,14 @@ Figma MCP tools are not available. Skip design verification.
 
 {{ figma_sources }}
 {% endif %}
+
+{% if figma_annotations is defined and figma_annotations %}
+## Designer Annotations
+
+The following annotations were left by designers directly on the Figma frames. They are authoritative design intent. Verify the per-track spec(s) address every annotation listed here.
+
+{{ figma_annotations }}
+{% endif %}
 {% endif %}
 
 # Input: Architecture
@@ -49,6 +57,9 @@ Figma MCP tools are not available. Skip design verification.
 5. **No obvious scaling issues?** — Data models support expected load. No N+1 query patterns. Pagination is specified where needed.
 {% if figma_sources is defined and figma_sources %}
 6. **Does it reflect the designs?** — Design tokens (colors, typography, spacing) are incorporated into the relevant UI track. Component names from Figma are referenced. Page/screen layouts match the designs.{% if figma_mcp_available == "true" %} Use Figma MCP tools to verify.{% endif %}
+{% if figma_annotations is defined and figma_annotations %}
+7. **Are designer annotations addressed?** — Every annotation listed in the Designer Annotations block is reflected somewhere in the per-track spec.
+{% endif %}
 {% endif %}
 
 # Output Format

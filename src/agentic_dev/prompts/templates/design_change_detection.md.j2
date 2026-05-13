@@ -16,6 +16,14 @@ Use the Figma MCP tools to inspect the current design files listed below. Compar
 
 {{ existing_spec }}
 
+{% if existing_annotations is defined and existing_annotations %}
+# Previously Persisted Designer Annotations
+
+The following annotations were extracted from these Figma files on the last cycle. Compare against the current state and report any added, removed, or changed annotations.
+
+{{ existing_annotations }}
+{% endif %}
+
 # How to Detect Changes
 
 1. Use Figma MCP tools to inspect each design file — pages, components, design tokens, navigation structure.
@@ -24,7 +32,10 @@ Use the Figma MCP tools to inspect the current design files listed below. Compar
    - **Components:** Are there new, removed, or visually changed components?
    - **Design Tokens:** Have colors, typography, spacing, or other tokens changed?
    - **Navigation:** Has the navigation structure or user flow changed?
-3. Only report differences that represent actual design intent changes.
+{% if existing_annotations is defined and existing_annotations %}3. Also call `get_annotations` for each Figma file and diff the result against the "Previously Persisted Designer Annotations" block above. Report annotations that were added, removed, or whose text changed. Ignore re-orderings and pure status-marker changes.
+4. Only report differences that represent actual design intent changes.
+{% else %}3. Only report differences that represent actual design intent changes.
+{% endif %}
 
 # Constraints
 
@@ -57,6 +68,9 @@ If there **are** design changes, output:
 
 ## Navigation
 - <changes to navigation or user flows>
+
+## Annotations
+- <added/removed/changed designer annotation: frame name, old → new>
 ```
 
 Omit any section that has no changes.

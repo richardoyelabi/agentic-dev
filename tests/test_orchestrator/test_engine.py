@@ -1917,6 +1917,77 @@ class TestArchitecturePhase:
     """
 
     @pytest.mark.asyncio
+    async def test_architect_receives_figma_annotations_when_present(
+        self, engine, state_manager, claude, doc_store, prompt_renderer,
+    ):
+        """When the project has a ``figma_annotations`` doc, the engine
+        threads it into the architect's ``input_docs`` so the rendered
+        prompt includes the designer-intent block."""
+        tracks = [Track(name="web", path="client", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.ARCHITECTURE, tracks=tracks)
+        state_manager.load = MagicMock(return_value=state)
+
+        doc_contents = {
+            "features": "# Features",
+            "structured_input": "# Structured Input",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_annotations": (
+                "# Figma Annotations\n"
+                "- **Login** (`1:2`): must be 44px tall\n"
+            ),
+        }
+        doc_store.exists = MagicMock(side_effect=lambda name: name in doc_contents)
+        doc_store.read = MagicMock(side_effect=lambda name: doc_contents.get(name, ""))
+
+        architect_output = "<!-- DOCUMENT: web_spec -->\n# Web Spec\n## Track Kind\nweb\n"
+        claude.run.side_effect = [
+            _make_claude_result(architect_output, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.05),
+        ]
+        doc_store.write = MagicMock()
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_architecture(state)
+
+        action_call = prompt_renderer.render_agent_prompt.call_args_list[0]
+        input_docs = action_call.kwargs["input_documents"]
+        assert input_docs.get("figma_annotations", "").strip().startswith(
+            "# Figma Annotations"
+        )
+        assert "44px tall" in input_docs["figma_annotations"]
+
+    @pytest.mark.asyncio
+    async def test_architect_input_docs_omits_annotations_when_doc_absent(
+        self, engine, state_manager, claude, doc_store, prompt_renderer,
+    ):
+        """When ``figma_annotations`` is not present, the architect still
+        receives the key but it is an empty string so the template skips
+        the block."""
+        tracks = [Track(name="web", path="client", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.ARCHITECTURE, tracks=tracks)
+        state_manager.load = MagicMock(return_value=state)
+
+        doc_store.exists = MagicMock(return_value=False)
+        doc_store.read = MagicMock(return_value="doc content")
+
+        claude.run.side_effect = [
+            _make_claude_result(
+                "<!-- DOCUMENT: web_spec -->\n# Web Spec\n## Track Kind\nweb\n",
+                cost=0.10,
+            ),
+            _make_claude_result("APPROVED", cost=0.05),
+        ]
+        doc_store.write = MagicMock()
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_architecture(state)
+
+        input_docs = prompt_renderer.render_agent_prompt.call_args_list[0].kwargs[
+            "input_documents"
+        ]
+        assert input_docs.get("figma_annotations", "") == ""
+
+    @pytest.mark.asyncio
     async def test_run_architecture_writes_per_track_specs_for_non_default_names(
         self, engine, state_manager, claude, doc_store,
     ):

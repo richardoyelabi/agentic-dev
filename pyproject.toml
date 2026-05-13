@@ -43,6 +43,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "e2e: end-to-end tests that make real Claude API calls (deselect with '-m \"not e2e\"')",
+    "no_bypass_figma_extractor: opt-out of the autouse fixture that mocks the Figma annotation extractor",
 ]
 
 [tool.ruff]
