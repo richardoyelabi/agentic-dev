@@ -71,7 +71,6 @@ async def analyze_codebase(
         model="sonnet",
         permission_mode="plan",
         allowed_tools=["Read", "Glob", "Grep"],
-        max_turns=30,
         use_bare_mode=True,
         mcp_config=None,
         system_prompt=None,

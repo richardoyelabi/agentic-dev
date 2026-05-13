@@ -33,8 +33,6 @@ STATE_LOCK_FILE = ".state.lock"
 DOCS_LOCK_FILE = ".docs.lock"
 SESSIONS_LOCK_FILE = ".sessions.lock"
 
-DEFAULT_MAX_TURNS = 50
-
 MODELS = {
     "opus": "claude-opus-4-6",
     "sonnet": "claude-sonnet-4-6",

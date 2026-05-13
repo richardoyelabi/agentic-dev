@@ -38,7 +38,7 @@ Boot the Electron app in dev mode, attach Playwright via CDP, and drive the real
 1. **Boot the app.** Start the Electron app in dev mode with remote debugging enabled (`--remote-debugging-port=...` or the framework's dev command).
 2. **Attach Playwright.** Connect Playwright MCP to the CDP endpoint. Enumerate windows; the main application window is the primary target.
 3. **Drive user flows.** For each AC, navigate, click, fill, and assert. Exercise IPC flows (menu actions, tray interactions) where features require them.
-4. **Capture artifacts.** Screenshots, DOM snapshots, and IPC transcripts under `.agentic-dev/uat/<run_id>/evidence/<track>/`.
+4. **Capture artifacts.** The engine has already created the evidence directory at `.agentic-dev/uat/{{ run_id }}/evidence/{{ track_name }}/`. Save screenshots, DOM snapshots, and IPC transcripts directly into that exact directory — do not create or nest a new subdirectory inside it.
 
 **If Playwright MCP or Node are unavailable (per prereqs):** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 

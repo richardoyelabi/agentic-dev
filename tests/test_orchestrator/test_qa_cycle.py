@@ -23,7 +23,6 @@ def _make_agent(name: str, template: str = "tpl.md.j2") -> AgentDefinition:
             model="sonnet",
             permission_mode="plan",
             allowed_tools=["Read"],
-            max_budget_usd=1.0,
         ),
         prompt_template=template,
         input_documents=["input.md"],
@@ -1433,6 +1432,72 @@ async def test_content_markers_no_session_id_skips_recovery(
     assert result.output == "Summary without markers."
 
 
+@pytest.mark.asyncio
+async def test_correction_recovers_full_report_when_terminal_text_is_ack(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """Correction round: a short ack like 'Issues resolved' must NOT clobber
+    the full report when the session JSONL holds the structured document.
+
+    This guards the false-PASS invariant for UAT reports. The action agent's
+    terminal correction message is often a one-line acknowledgement while the
+    real corrected report lives in an earlier assistant message of the
+    resumed session. The cycle must run content-marker recovery on the
+    correction round (mirroring the initial-run recovery) and persist the
+    recovered text, not the ack, under the canonical output key.
+    """
+    full_report = (
+        "# UAT Report\n\n## Overall Result: PASS\n\n"
+        "### [AC-001] login works\n- **Result:** PASS\n"
+    )
+
+    claude.run.side_effect = [
+        _make_claude_result(full_report, cost=0.10),
+        _make_claude_result("ISSUES_FOUND: tweak evidence wording", cost=0.05),
+        _make_claude_result("Both QA issues resolved.", cost=0.20),
+        _make_claude_result("APPROVED", cost=0.08),
+    ]
+
+    corrected_report = (
+        "# UAT Report\n\n## Overall Result: PASS\n\n"
+        "### [AC-001] login works\n- **Result:** PASS\n"
+        "  - reworded evidence per QA feedback\n"
+    )
+
+    with patch.object(
+        ClaudeRunner,
+        "_recover_longest_from_session",
+        return_value=corrected_report,
+    ):
+        result = await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="uat_report_web",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            content_markers=["# UAT Report", "## Overall Result"],
+        )
+
+    output_writes = [
+        call for call in doc_store.write.call_args_list
+        if call[0][0] == "uat_report_web"
+    ]
+    assert len(output_writes) == 2, (
+        f"expected initial+corrected writes, got {output_writes!r}"
+    )
+    final_written = output_writes[-1][0][1]
+    assert "## Overall Result" in final_written, (
+        "Correction overwrote the report with the ack text — the validator's "
+        "structural rules cannot trigger without an Overall Result line. "
+        f"Got: {final_written!r}"
+    )
+    assert final_written == corrected_report
+    assert result.output == corrected_report
+
+
 # ---------------------------------------------------------------------------
 # skip_action_output_in_qa (R5)
 # ---------------------------------------------------------------------------
@@ -1534,96 +1599,3 @@ async def test_skip_action_output_also_applies_to_re_review(
     assert "sprint_1_backend" not in re_review_input_docs
 
 
-# ---------------------------------------------------------------------------
-# Budget enforcement (R7)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_budget_warning_emitted_when_cost_exceeds_budget(
-    claude, action_agent, qa_agent, doc_store, prompt_renderer
-):
-    """A BudgetWarningEvent should be emitted when cost exceeds max_budget_usd."""
-    action_agent.claude.max_budget_usd = 0.10
-    claude.run.side_effect = [
-        _make_claude_result("output", cost=0.50),
-        _make_claude_result("APPROVED", cost=0.05),
-    ]
-
-    with patch("agentic_dev.orchestrator.qa_cycle.emit") as mock_emit:
-        await run_qa_cycle(
-            claude=claude,
-            action_agent=action_agent,
-            qa_agent=qa_agent,
-            input_docs={"input.md": "reqs"},
-            output_doc_name="out.md",
-            workspace=Path("/tmp/ws"),
-            doc_store=doc_store,
-            prompt_renderer=prompt_renderer,
-        )
-
-        budget_warnings = [
-            c for c in mock_emit.call_args_list
-            if hasattr(c[0][1], "event_type") and c[0][1].event_type == "budget_warning"
-        ]
-        assert len(budget_warnings) == 1
-        event = budget_warnings[0][0][1]
-        assert event.agent_name == "action_agent"
-        assert event.cost_usd == 0.50
-        assert event.max_budget_usd == 0.10
-
-
-@pytest.mark.asyncio
-async def test_no_budget_warning_when_cost_within_budget(
-    claude, action_agent, qa_agent, doc_store, prompt_renderer
-):
-    """No BudgetWarningEvent when cost is within max_budget_usd."""
-    action_agent.claude.max_budget_usd = 5.00
-    claude.run.side_effect = [
-        _make_claude_result("output", cost=0.50),
-        _make_claude_result("APPROVED", cost=0.05),
-    ]
-
-    with patch("agentic_dev.orchestrator.qa_cycle.emit") as mock_emit:
-        await run_qa_cycle(
-            claude=claude,
-            action_agent=action_agent,
-            qa_agent=qa_agent,
-            input_docs={"input.md": "reqs"},
-            output_doc_name="out.md",
-            workspace=Path("/tmp/ws"),
-            doc_store=doc_store,
-            prompt_renderer=prompt_renderer,
-        )
-
-        budget_warnings = [
-            c for c in mock_emit.call_args_list
-            if hasattr(c[0][1], "event_type") and c[0][1].event_type == "budget_warning"
-        ]
-        assert len(budget_warnings) == 0
-
-
-@pytest.mark.asyncio
-async def test_budget_warning_does_not_stop_execution(
-    claude, action_agent, qa_agent, doc_store, prompt_renderer
-):
-    """Budget warning is informational — execution continues normally."""
-    action_agent.claude.max_budget_usd = 0.01
-    claude.run.side_effect = [
-        _make_claude_result("output", cost=0.50),
-        _make_claude_result("APPROVED", cost=0.05),
-    ]
-
-    result = await run_qa_cycle(
-        claude=claude,
-        action_agent=action_agent,
-        qa_agent=qa_agent,
-        input_docs={"input.md": "reqs"},
-        output_doc_name="out.md",
-        workspace=Path("/tmp/ws"),
-        doc_store=doc_store,
-        prompt_renderer=prompt_renderer,
-    )
-
-    assert result.output == "output"
-    assert result.action_cost == 0.50

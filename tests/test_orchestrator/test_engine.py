@@ -39,7 +39,6 @@ def _make_agent(name: str, template: str = "tpl.md.j2") -> AgentDefinition:
             model="sonnet",
             permission_mode="plan",
             allowed_tools=["Read"],
-            max_budget_usd=1.0,
         ),
         prompt_template=template,
         input_documents=["input.md"],
@@ -574,9 +573,9 @@ class TestUATPhase:
         """Regression: agents declare ``uat_prereqs``; engine writes ``uat_prereqs_<track>``.
 
         Without the per-track alias, the prereqs doc never reaches the agent
-        prompt, the UAT agent runs blind, and previous runs burned through
-        ``max_turns`` re-discovering the environment. The engine must inject
-        ``uat_prereqs_<track.name>`` under the generic ``uat_prereqs`` key.
+        prompt and the UAT agent runs blind, re-discovering the environment.
+        The engine must inject ``uat_prereqs_<track.name>`` under the generic
+        ``uat_prereqs`` key.
         """
         tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
         state = _make_state(PipelinePhase.UAT, tracks=tracks)
@@ -1905,3 +1904,65 @@ class TestRestoreUnchangedSpecs:
             await engine._restore_unchanged_specs({"backend_spec": "content"})
 
         engine._doc_store.write.assert_not_called()
+
+
+class TestArchitecturePhase:
+    """Tests for the architecture phase with arbitrary track names.
+
+    Regression guard for the bug where ``architect.yml`` hardcoded
+    ``output_documents: [frontend_spec, backend_spec, api_contract]`` and
+    biased the model toward those names. The splitter actually expects
+    ``<track.name>_spec`` per declared track, so non-default track names
+    like ``web``/``api`` must round-trip end-to-end.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_architecture_writes_per_track_specs_for_non_default_names(
+        self, engine, state_manager, claude, doc_store,
+    ):
+        """With tracks ``web`` and ``api``, the engine must write ``web_spec`` and ``api_spec``."""
+        tracks = [
+            Track(name="web", path="client", kind="web", uat_kind="web"),
+            Track(name="api", path="server", kind="api", uat_kind="api"),
+        ]
+        state = _make_state(PipelinePhase.ARCHITECTURE, tracks=tracks)
+        state_manager.load = MagicMock(return_value=state)
+
+        web_section = "# Web Spec\n## Track Kind\nweb\n"
+        api_section = "# Api Spec\n## Track Kind\napi\n"
+        contract_section = "# API Contract\n## Endpoints\n- GET /things"
+        architect_output = (
+            "<!-- DOCUMENT: web_spec -->\n"
+            f"{web_section}\n"
+            "<!-- DOCUMENT: api_spec -->\n"
+            f"{api_section}\n"
+            "<!-- DOCUMENT: api_contract -->\n"
+            f"{contract_section}\n"
+        )
+
+        claude.run.side_effect = [
+            _make_claude_result(architect_output, cost=0.20),
+            _make_claude_result("APPROVED", cost=0.05),
+        ]
+
+        written: dict[str, str] = {}
+        doc_store.write = MagicMock(
+            side_effect=lambda name, content: written.update({name: content})
+        )
+        doc_store.exists.return_value = False
+        doc_store.read.return_value = "input doc"
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_architecture(state)
+
+        assert "web_spec" in written, (
+            f"Expected per-track 'web_spec' to be written; got keys: {sorted(written)}"
+        )
+        assert "api_spec" in written, (
+            f"Expected per-track 'api_spec' to be written; got keys: {sorted(written)}"
+        )
+        assert "api_contract" in written
+        assert "frontend_spec" not in written
+        assert "backend_spec" not in written
+        assert "Web Spec" in written["web_spec"]
+        assert "Api Spec" in written["api_spec"]

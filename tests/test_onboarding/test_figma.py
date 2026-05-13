@@ -102,7 +102,6 @@ class TestDetectDesignChanges:
         assert config.name == "design_change_detection"
         assert config.model == "opus"
         assert config.allowed_tools == []
-        assert config.max_turns == 15
         assert config.use_bare_mode is True
 
     @pytest.mark.asyncio

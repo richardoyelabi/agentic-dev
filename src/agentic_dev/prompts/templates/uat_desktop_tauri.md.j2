@@ -38,7 +38,7 @@ Tauri uses the OS-native webview (WebKitGTK / WebView2 / WKWebView), which Playw
 1. **Start tauri-driver.** Run `tauri-driver` to expose a WebDriver endpoint for the Tauri app.
 2. **Build and launch the app.** Build in dev mode and launch under tauri-driver.
 3. **Drive user flows.** For each AC, use WebDriver commands via a client script (e.g. `selenium`/`webdriverio` via `Bash`) to navigate, click, and assert.
-4. **Capture artifacts.** WebDriver session logs, screenshots, and (if available) Tauri backend logs under `.agentic-dev/uat/<run_id>/evidence/<track>/`.
+4. **Capture artifacts.** The engine has already created the evidence directory at `.agentic-dev/uat/{{ run_id }}/evidence/{{ track_name }}/`. Save WebDriver session logs, screenshots, and (if available) Tauri backend logs directly into that exact directory — do not create or nest a new subdirectory inside it.
 
 **If `tauri-driver` is unavailable (per prereqs):** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 

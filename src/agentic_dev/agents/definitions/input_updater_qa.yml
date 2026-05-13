@@ -5,8 +5,6 @@ claude:
   model: opus
   permission_mode: bypassPermissions
   allowed_tools: []
-  max_turns: 5
-  max_budget_usd: 1.00
 prompt_template: input_updater_qa.md.j2
 input_documents: [structured_input, change_request, merged_output]
 output_documents: [input_updater_qa_report]

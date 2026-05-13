@@ -116,7 +116,6 @@ async def run_spec_diff(
         model="opus",
         permission_mode="bypassPermissions",
         allowed_tools=[],
-        max_turns=5,
         use_bare_mode=True,
         mcp_config=None,
         system_prompt=None,

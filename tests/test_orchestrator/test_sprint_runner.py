@@ -25,7 +25,6 @@ def _make_agent(name: str, template: str = "tpl.md.j2") -> AgentDefinition:
             model="sonnet",
             permission_mode="plan",
             allowed_tools=["Read"],
-            max_budget_usd=1.0,
         ),
         prompt_template=template,
         input_documents=["input.md"],

@@ -13,7 +13,6 @@ from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import (
     AgentEmptyRetryEvent,
-    BudgetWarningEvent,
     ContentMarkerRecoveryEvent,
     QACycleStartEvent,
     QACycleVerdictEvent,
@@ -34,6 +33,57 @@ _SESSION_CORRECTION_PROMPT = (
 )
 
 ISSUES_FOUND_MARKER = "ISSUES_FOUND"
+
+
+def _recover_if_markers_missing(
+    text: str,
+    session_id: str | None,
+    workspace: Path,
+    content_markers: list[str] | None,
+    action_agent_name: str,
+    sprint: int | None,
+) -> str:
+    """Return ``text``, or a longer assistant message from the session JSONL.
+
+    When ``content_markers`` are configured and ``text`` does not contain all
+    of them, scan the resumed session for the longest assistant message and
+    substitute it if it satisfies the markers. This handles two related
+    failure modes:
+
+    1. The CLI ``result`` captured a short trailing summary while the real
+       document lives in an earlier assistant message (initial run).
+    2. A session-continuation correction returned a one-line acknowledgement
+       while the corrected document lives in an earlier assistant message of
+       the resumed session (correction round).
+
+    Returns ``text`` unchanged when there are no markers, no session id, the
+    text already contains every marker, or recovery did not yield a better
+    candidate.
+    """
+    if not content_markers or not session_id:
+        return text
+    if all(m in text for m in content_markers):
+        return text
+
+    recovered = ClaudeRunner._recover_longest_from_session(session_id, workspace)
+    if not recovered.strip():
+        return text
+    if not all(m in recovered for m in content_markers):
+        return text
+
+    emit(_event_log, ContentMarkerRecoveryEvent(
+        action_agent=action_agent_name,
+        session_id=session_id,
+        original_length=len(text),
+        recovered_length=len(recovered),
+        sprint=sprint,
+        message=(
+            f"Content-marker recovery for {action_agent_name}: "
+            f"replaced {len(text)} chars with "
+            f"{len(recovered)} chars from session {session_id}"
+        ),
+    ))
+    return recovered
 
 
 async def _run_with_empty_retry(
@@ -123,27 +173,6 @@ class QACycleResult:
             + self.correction_cost
             + self.re_review_cost
         )
-
-
-def _check_budget(
-    agent_name: str,
-    cost_usd: float,
-    max_budget_usd: float,
-    sprint: int | None = None,
-) -> None:
-    """Emit a warning if cost exceeds the agent's budget."""
-    if cost_usd > max_budget_usd:
-        emit(_event_log, BudgetWarningEvent(
-            agent_name=agent_name,
-            cost_usd=cost_usd,
-            max_budget_usd=max_budget_usd,
-            sprint=sprint,
-            level="WARNING",
-            message=(
-                f"Agent '{agent_name}' exceeded budget: "
-                f"${cost_usd:.4f} > ${max_budget_usd:.2f}"
-            ),
-        ))
 
 
 async def _run_qa_review(
@@ -279,39 +308,17 @@ async def run_qa_cycle(
         action_cost = action_result.cost_usd
         action_session_id = action_result.session_id
 
-        # Content-marker recovery: if the result doesn't contain expected
-        # markers, the real document may be in an earlier session message.
-        if (
-            content_markers
-            and action_session_id
-            and not all(m in action_output_text for m in content_markers)
-        ):
-            recovered = ClaudeRunner._recover_longest_from_session(
-                action_session_id, workspace,
-            )
-            if recovered.strip() and all(
-                m in recovered for m in content_markers
-            ):
-                emit(_event_log, ContentMarkerRecoveryEvent(
-                    action_agent=action_agent.name,
-                    session_id=action_session_id,
-                    original_length=len(action_output_text),
-                    recovered_length=len(recovered),
-                    sprint=sprint,
-                    message=(
-                        f"Content-marker recovery for {action_agent.name}: "
-                        f"replaced {len(action_output_text)} chars with "
-                        f"{len(recovered)} chars from session {action_session_id}"
-                    ),
-                ))
-                action_output_text = recovered
-
-        # 2. Save the action output and check budget
-        doc_store.write(output_doc_name, action_output_text)
-        _check_budget(
-            action_agent.name, action_cost,
-            action_agent.claude.max_budget_usd, sprint,
+        action_output_text = _recover_if_markers_missing(
+            text=action_output_text,
+            session_id=action_session_id,
+            workspace=workspace,
+            content_markers=content_markers,
+            action_agent_name=action_agent.name,
+            sprint=sprint,
         )
+
+        # 2. Save the action output
+        doc_store.write(output_doc_name, action_output_text)
 
         if on_substep is not None:
             on_substep("qa")
@@ -395,10 +402,26 @@ async def run_qa_cycle(
         )
 
         latest_output = correction_result.text
-        doc_store.write(output_doc_name, latest_output)
         # Update session ID for potential subsequent correction rounds
         if correction_result.session_id:
             action_session_id = correction_result.session_id
+
+        # Content-marker recovery on corrections too. When the action agent
+        # is resumed via session continuation, its terminal text is often a
+        # short acknowledgement ("Issues resolved") while the actual
+        # corrected document lives in an earlier assistant message of the
+        # resumed session. Persisting the ack would silently clobber the
+        # structural document — bypassing downstream validators (e.g. the
+        # UAT false-PASS gate) that key off section headers.
+        latest_output = _recover_if_markers_missing(
+            text=latest_output,
+            session_id=action_session_id,
+            workspace=workspace,
+            content_markers=content_markers,
+            action_agent_name=action_agent.name,
+            sprint=sprint,
+        )
+        doc_store.write(output_doc_name, latest_output)
 
         emit(_event_log, QACycleCorrectionEvent(
             action_agent=action_agent.name,

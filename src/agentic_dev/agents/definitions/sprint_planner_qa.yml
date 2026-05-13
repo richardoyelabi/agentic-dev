@@ -5,8 +5,6 @@ claude:
   model: sonnet
   permission_mode: bypassPermissions
   allowed_tools: []
-  max_turns: 5
-  max_budget_usd: 1.00
 prompt_template: sprint_planner_qa.md.j2
 input_documents: [features_request, sprint_plan]
 output_documents: [sprint_planner_qa_report]

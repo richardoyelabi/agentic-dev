@@ -5,8 +5,6 @@ claude:
   model: opus
   permission_mode: bypassPermissions
   allowed_tools: [Read, Glob, Grep, Bash, WebFetch]
-  max_budget_usd: 5.00
-  max_turns: 100
 prompt_template: uat_mobile.md.j2
 input_documents: [features_request, frontend_spec, backend_spec, api_contract, sprint_plan, uat_prereqs]
 output_documents: [uat_report]
@@ -15,5 +13,5 @@ constraints:
   - "Test every acceptance criterion from the features request"
   - "Drive via Maestro when available; fall back to project's integration_test (Flutter) or detox/Expo runner"
   - "Require a running emulator/simulator; do not fabricate device interactions"
-  - "Capture Maestro run outputs and screenshots under .agentic-dev/uat/<run_id>/evidence/<track>/"
+  - "Capture Maestro run outputs and screenshots under the engine-provided evidence directory shown in Runtime Verification (do not invent a subdirectory)"
   - "Include pass/fail status and concrete evidence per AC; vague language will be flagged"

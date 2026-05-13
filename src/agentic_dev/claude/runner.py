@@ -12,7 +12,7 @@ from agentic_dev.claude.rate_limiter import (
     UsageApiClient,
     WaitStrategy,
 )
-from agentic_dev.config import DEFAULT_MAX_TURNS, MODELS
+from agentic_dev.config import MODELS
 from agentic_dev.exceptions import AgentRunError, RateLimitError
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
@@ -37,7 +37,6 @@ class AgentConfig(Protocol):
     model: str
     permission_mode: str
     allowed_tools: list[str]
-    max_turns: int
     use_bare_mode: bool
     mcp_config: Path | None
     system_prompt: str | None
@@ -125,7 +124,6 @@ class ClaudeRunner:
         using ``-p -`` (read prompt from stdin).
         """
         model = self._resolve_model(agent.model)
-        max_turns = agent.max_turns or DEFAULT_MAX_TURNS
 
         cmd: list[str] = ["claude", "-p", "-"]
 
@@ -137,8 +135,6 @@ class ClaudeRunner:
                 model,
                 "--permission-mode",
                 agent.permission_mode,
-                "--max-turns",
-                str(max_turns),
             ]
         )
 

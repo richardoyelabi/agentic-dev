@@ -20,7 +20,6 @@ class FakeAgentConfig:
     model: str = "sonnet"
     permission_mode: str = "plan"
     allowed_tools: list[str] | None = None
-    max_turns: int = 50
     use_bare_mode: bool = False
     mcp_config: Path | None = None
     system_prompt: str | None = None
@@ -45,7 +44,7 @@ class TestBuildCommand:
         assert cmd[cmd.index("--output-format") + 1] == "json"
         assert cmd[cmd.index("--model") + 1] == "claude-sonnet-4-6"
         assert cmd[cmd.index("--permission-mode") + 1] == "plan"
-        assert cmd[cmd.index("--max-turns") + 1] == "50"
+        assert "--max-turns" not in cmd
 
     def test_opus_model_resolution(self, tmp_path: Path):
         runner = ClaudeRunner()

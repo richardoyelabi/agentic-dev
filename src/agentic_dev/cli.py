@@ -354,12 +354,16 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
         )
     except AgenticDevError as exc:
         duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+        try:
+            failed_phase = str(state_manager.load().phase)
+        except Exception:
+            failed_phase = str(state.phase)
         emit(_event_log, PipelineFailedEvent(
             error=str(exc),
-            failed_at_phase=str(state.phase),
+            failed_at_phase=failed_phase,
             traceback=traceback.format_exc(),
             level="ERROR",
-            message=f"Pipeline failed at {state.phase}: {exc}",
+            message=f"Pipeline failed at {failed_phase}: {exc}",
         ))
         teardown_logging()
         _display_error(exc)
@@ -414,6 +418,10 @@ def new(
         state = state_mgr.create_initial(app_name)
         state.tracks = declared_tracks
         state_mgr.save(state)
+
+        from agentic_dev.config import register_project  # noqa: WPS433
+
+        register_project(app_name, project_dir)
 
         # Save default checkpoint config
         _save_config(project_dir, CheckpointConfig())
@@ -472,11 +480,10 @@ def new(
             console.print("[bold red]No requirements provided. Aborting.[/bold red]")
             raise typer.Exit(code=1)
 
-        # Save user input to docs/
         doc_store = DocumentStore(project_dir)
         if user_input:
             doc_store.write("user_input", user_input)
-            console.print("[green]Saved requirements to docs/user_input.md[/green]")
+            console.print("[green]Saved requirements to .agentic-dev/artifacts/user_input.md[/green]")
 
         if figma_sources:
             write_figma_sources(doc_store, figma_sources)

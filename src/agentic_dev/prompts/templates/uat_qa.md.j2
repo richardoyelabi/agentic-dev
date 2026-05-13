@@ -52,7 +52,7 @@ Evaluate against these five criteria:
 
 Use your tools to verify a sample of claims from the UAT report:
 
-- If the report claims `Verification mode: runtime` and references artifact paths under `.agentic-dev/uat/<run_id>/evidence/<track>/`, use `Read` or `Glob` to confirm those files actually exist. **Runtime claims without artifacts are false-PASS; flag them.**
+- If the report claims `Verification mode: runtime` and references artifact paths under `.agentic-dev/uat/{{ run_id }}/evidence/{{ track_name }}/`, use `Read` or `Glob` to confirm those files actually exist. **Runtime claims without artifacts are false-PASS; flag them.**
 - If the report references specific files, endpoints, or commands, use `Read`/`Grep` to confirm they exist.
 - Flag vague evidence ("functionality works correctly", "behaviour as expected") — runtime PASS requires specific observations.
 - Flag any AC where `Verification mode: runtime` is claimed but `Driver: none` is reported (internal inconsistency).

@@ -79,7 +79,6 @@ class TestAgentRegistry:
         assert agent.team == "design_architecture"
         assert agent.claude.model == "sonnet"
         assert agent.claude.allowed_tools == ["Read", "Glob", "Grep"]
-        assert agent.claude.max_turns == 15
         assert agent.input_documents == ["frontend_spec", "figma_sources"]
         assert agent.output_documents == ["design_changes"]
         assert agent.qa_agent is None

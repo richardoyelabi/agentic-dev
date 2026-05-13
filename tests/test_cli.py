@@ -294,6 +294,29 @@ class TestNewCommand:
 
         assert result.exit_code == 1
 
+    @patch("agentic_dev.cli._run_pipeline")
+    def test_registers_project_in_global_registry(
+        self, mock_run_pipeline, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The new command should register the project in the global registry."""
+        registry_file = tmp_path / "registry.json"
+        monkeypatch.setattr("agentic_dev.config.REGISTRY_FILE", registry_file)
+        monkeypatch.setattr("agentic_dev.config.GLOBAL_REGISTRY_DIR", tmp_path)
+
+        result = runner.invoke(
+            app,
+            ["new", "my-app", "--path", str(tmp_path)],
+            input="Build a todo app\n\n\n",
+        )
+
+        assert result.exit_code == 0, result.output
+
+        from agentic_dev.config import load_registry
+
+        registry = load_registry()
+        assert "my-app" in registry
+        assert registry["my-app"] == str((tmp_path / "my-app").resolve())
+
 
 class TestNewCommandFigma:
     """Tests for --from-figma in the new command."""
@@ -1166,3 +1189,119 @@ class TestRunPipelineEngineConstruction:
             "state_manager",
             "checkpoint_config",
         }
+
+
+class TestRunPipelineFailureEvent:
+    """Regression tests for the `pipeline_failed` event's `failed_at_phase`.
+
+    The CLI's `except AgenticDevError` handler previously sourced
+    `failed_at_phase` from the stale in-memory `state` argument, which
+    reflects the *initial* phase when `_run_pipeline` was called. The
+    engine persists state on every transition, so the on-disk copy is the
+    authoritative source for the phase at the time of failure.
+    """
+
+    def test_failure_event_reflects_on_disk_phase_not_initial(
+        self, project_with_state: Path,
+    ) -> None:
+        from agentic_dev.exceptions import AgenticDevError
+
+        project_dir = project_with_state / "test-app"
+        state_mgr = StateManager(project_dir)
+        initial_state = state_mgr.load()
+        assert initial_state.phase == PipelinePhase.IDLE
+
+        def advance_then_fail(*_args, **_kwargs):
+            advanced = state_mgr.load()
+            advanced.phase = PipelinePhase.UAT
+            state_mgr.save(advanced)
+            raise AgenticDevError("Agent 'uat_web' failed")
+
+        captured_events: list = []
+
+        def capture_emit(_logger, event):
+            captured_events.append(event)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.PipelineEngine"
+        ), patch(
+            "agentic_dev.cli._run_engine_with_rate_limit_resume"
+        ), patch(
+            "agentic_dev.cli.asyncio.run",
+            side_effect=advance_then_fail,
+        ), patch(
+            "agentic_dev.logging.emit",
+            side_effect=capture_emit,
+        ):
+            with pytest.raises(Exception):
+                _run_pipeline(project_dir, initial_state)
+
+        failed_events = [
+            ev for ev in captured_events
+            if getattr(ev, "event_type", "") == "pipeline_failed"
+        ]
+        assert len(failed_events) == 1, (
+            f"Expected exactly one pipeline_failed event, got {failed_events}"
+        )
+        failed = failed_events[0]
+        assert failed.failed_at_phase == str(PipelinePhase.UAT), (
+            f"failed_at_phase should reflect the on-disk phase (UAT), "
+            f"got {failed.failed_at_phase!r}"
+        )
+
+    def test_failure_event_falls_back_to_in_memory_phase_when_load_fails(
+        self, project_with_state: Path,
+    ) -> None:
+        """If re-loading state fails, the handler must still emit the event
+        using the stale in-memory phase so the error isn't lost."""
+        from agentic_dev.exceptions import AgenticDevError, StateError
+
+        project_dir = project_with_state / "test-app"
+        initial_state = StateManager(project_dir).load()
+
+        captured_events: list = []
+
+        def capture_emit(_logger, event):
+            captured_events.append(event)
+
+        # Force the in-handler reload to raise; the engine call still raises
+        # AgenticDevError. The handler must fall back to the in-memory phase.
+        original_load = StateManager.load
+        call_count = {"n": 0}
+
+        def maybe_failing_load(self):
+            call_count["n"] += 1
+            # First call: the initial load done inside the test setup is
+            # already past. _run_pipeline's reload should be the next call,
+            # so fail it. Other calls (e.g. from the engine before failure)
+            # should succeed.
+            if call_count["n"] >= 2:
+                raise StateError("corrupt state")
+            return original_load(self)
+
+        def just_fail(*_args, **_kwargs):
+            raise AgenticDevError("Agent 'arch' failed")
+
+        with patch(
+            "agentic_dev.orchestrator.engine.PipelineEngine"
+        ), patch(
+            "agentic_dev.cli._run_engine_with_rate_limit_resume"
+        ), patch(
+            "agentic_dev.cli.asyncio.run",
+            side_effect=just_fail,
+        ), patch(
+            "agentic_dev.state.manager.StateManager.load",
+            new=maybe_failing_load,
+        ), patch(
+            "agentic_dev.logging.emit",
+            side_effect=capture_emit,
+        ):
+            with pytest.raises(Exception):
+                _run_pipeline(project_dir, initial_state)
+
+        failed_events = [
+            ev for ev in captured_events
+            if getattr(ev, "event_type", "") == "pipeline_failed"
+        ]
+        assert len(failed_events) == 1
+        assert failed_events[0].failed_at_phase == str(initial_state.phase)

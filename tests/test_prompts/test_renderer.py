@@ -252,6 +252,8 @@ AGENT_TEMPLATES = {
         "sprint_plan": "# Sprint Plan",
         "uat_prereqs": "# UAT Prereqs",
         "constraints": ["Test every AC"],
+        "run_id": "20260513_123456",
+        "track_name": "web",
     },
     "uat_cli.md.j2": {
         "features_request": "# Features Request",
@@ -261,6 +263,8 @@ AGENT_TEMPLATES = {
         "sprint_plan": "# Sprint Plan",
         "uat_prereqs": "# UAT Prereqs",
         "constraints": ["Test every AC"],
+        "run_id": "20260513_123456",
+        "track_name": "cli",
     },
     "uat_desktop_electron.md.j2": {
         "features_request": "# Features Request",
@@ -270,6 +274,8 @@ AGENT_TEMPLATES = {
         "sprint_plan": "# Sprint Plan",
         "uat_prereqs": "# UAT Prereqs",
         "constraints": ["Test every AC"],
+        "run_id": "20260513_123456",
+        "track_name": "desktop",
     },
     "uat_desktop_tauri.md.j2": {
         "features_request": "# Features Request",
@@ -279,6 +285,8 @@ AGENT_TEMPLATES = {
         "sprint_plan": "# Sprint Plan",
         "uat_prereqs": "# UAT Prereqs",
         "constraints": ["Test every AC"],
+        "run_id": "20260513_123456",
+        "track_name": "desktop",
     },
     "uat_mobile.md.j2": {
         "features_request": "# Features Request",
@@ -288,6 +296,8 @@ AGENT_TEMPLATES = {
         "sprint_plan": "# Sprint Plan",
         "uat_prereqs": "# UAT Prereqs",
         "constraints": ["Test every AC"],
+        "run_id": "20260513_123456",
+        "track_name": "mobile",
     },
     "uat_api.md.j2": {
         "features_request": "# Features Request",
@@ -296,6 +306,8 @@ AGENT_TEMPLATES = {
         "sprint_plan": "# Sprint Plan",
         "uat_prereqs": "# UAT Prereqs",
         "constraints": ["Test every AC"],
+        "run_id": "20260513_123456",
+        "track_name": "api",
     },
 }
 
@@ -531,6 +543,8 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "sprint_plan": "sprint plan",
             "uat_prereqs": "prereqs",
             "constraints": ["x"],
+            "run_id": "20260513_123456",
+            "track_name": "web",
         })
         assert self.MARKER in result
 
@@ -776,6 +790,46 @@ class TestUATRuntimeVerification:
         assert "UAT Report" in result
         assert "Verification mode" in result
         assert "Artifacts" in result
+
+
+class TestUATRunIdInterpolation:
+    """Per-kind UAT templates must interpolate the engine-supplied ``run_id``
+    and ``track_name`` into the evidence directory path so the agent writes
+    artifacts directly into the engine-managed dir instead of inventing its
+    own (e.g. ``run_001/``).
+    """
+
+    UAT_TEMPLATES_WITH_EVIDENCE_DIR = [
+        "uat_web.md.j2",
+        "uat_cli.md.j2",
+        "uat_desktop_electron.md.j2",
+        "uat_desktop_tauri.md.j2",
+        "uat_mobile.md.j2",
+        "uat_api.md.j2",
+    ]
+
+    @pytest.mark.parametrize(
+        "template_name",
+        UAT_TEMPLATES_WITH_EVIDENCE_DIR,
+    )
+    def test_uat_template_interpolates_run_id(self, real_renderer, template_name):
+        run_id = "2026-05-13T12-34-56Z"
+        ctx = {**AGENT_TEMPLATES[template_name], "run_id": run_id, "track_name": "demo"}
+        result = real_renderer.render(template_name, ctx)
+        expected_dir = f".agentic-dev/uat/{run_id}/evidence/demo/"
+        assert expected_dir in result, (
+            f"{template_name} did not interpolate run_id/track_name into the "
+            f"evidence path. Expected '{expected_dir}' in output."
+        )
+        assert "<run_id>" not in result, (
+            f"{template_name} still contains the literal '<run_id>' placeholder."
+        )
+        assert "<track>" not in result, (
+            f"{template_name} still contains the literal '<track>' placeholder."
+        )
+        assert "run_001" not in result, (
+            f"{template_name} still references the agent-invented 'run_001' dir."
+        )
 
 
 class TestIntegrationTemplatePartials:

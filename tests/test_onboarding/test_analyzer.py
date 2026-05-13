@@ -47,7 +47,6 @@ class TestAnalyzeCodebase:
         assert config.model == "sonnet"
         assert config.permission_mode == "plan"
         assert config.allowed_tools == ["Read", "Glob", "Grep"]
-        assert config.max_turns == 30
         assert config.use_bare_mode is True
         assert config.mcp_config is None
         assert config.system_prompt is None

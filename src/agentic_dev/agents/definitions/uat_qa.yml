@@ -5,8 +5,6 @@ claude:
   model: opus
   permission_mode: bypassPermissions
   allowed_tools: [Read, Glob, Grep]
-  max_turns: 10
-  max_budget_usd: 2.00
 prompt_template: uat_qa.md.j2
 input_documents: [features_request, uat_report]
 output_documents: [uat_qa_report]
@@ -17,4 +15,4 @@ constraints:
   - "Flag false-PASS sentinels: runtime mode without artifacts; Driver=none with overall PASS in uat_mode: full"
   - "Check for missing acceptance criteria not covered by the report"
   - "Check that cross-feature interactions were tested"
-  - "Spot-check artifact paths actually exist under .agentic-dev/uat/<run_id>/evidence/<track>/"
+  - "Spot-check artifact paths actually exist under the engine-provided evidence directory shown in Spot-Check Instructions"

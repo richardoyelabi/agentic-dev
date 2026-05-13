@@ -11,8 +11,6 @@ claude:
     - Bash
     - WebFetch
     - "mcp__plugin_playwright_playwright__*"
-  max_budget_usd: 5.00
-  max_turns: 100
 prompt_template: uat_desktop_electron.md.j2
 input_documents: [features_request, frontend_spec, backend_spec, api_contract, sprint_plan, uat_prereqs]
 output_documents: [uat_report]
@@ -20,6 +18,6 @@ qa_agent: uat_qa
 constraints:
   - "Test every acceptance criterion from the features request"
   - "Boot the Electron app in dev mode and attach Playwright via the CDP endpoint"
-  - "Drive real UI flows; capture screenshots and transcripts under .agentic-dev/uat/<run_id>/evidence/<track>/"
+  - "Drive real UI flows; capture screenshots and transcripts under the engine-provided evidence directory shown in Runtime Verification (do not invent a subdirectory)"
   - "Exercise IPC between main and renderer where features depend on it"
   - "Include pass/fail status and concrete evidence per AC; vague language will be flagged"

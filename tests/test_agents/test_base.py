@@ -14,29 +14,24 @@ class TestClaudeConfig:
             model="sonnet",
             permission_mode="plan",
             allowed_tools=["Read", "Glob"],
-            max_budget_usd=1.00,
         )
         assert config.use_bare_mode is True
-        assert config.max_turns == 50
 
     def test_override_defaults(self):
         config = ClaudeConfig(
             model="opus",
             permission_mode="bypassPermissions",
             allowed_tools=["Bash", "Read"],
-            max_budget_usd=5.00,
             use_bare_mode=False,
-            max_turns=100,
         )
         assert config.use_bare_mode is False
-        assert config.max_turns == 100
 
     def test_missing_required_field(self):
         with pytest.raises(ValidationError):
             ClaudeConfig(
                 model="sonnet",
                 permission_mode="plan",
-                # missing allowed_tools and max_budget_usd
+                # missing allowed_tools
             )
 
 
@@ -52,7 +47,6 @@ class TestAgentDefinition:
                 model="sonnet",
                 permission_mode="plan",
                 allowed_tools=["Read", "Glob"],
-                max_budget_usd=1.00,
             ),
             prompt_template="test.md.j2",
             input_documents=["doc_a"],
@@ -75,7 +69,6 @@ class TestAgentDefinition:
                 model="sonnet",
                 permission_mode="plan",
                 allowed_tools=["Read"],
-                max_budget_usd=0.50,
             ),
             prompt_template="minimal.md.j2",
             input_documents=["input"],
@@ -101,7 +94,6 @@ class TestAgentDefinition:
                 model="sonnet",
                 permission_mode="plan",
                 allowed_tools=["Read"],
-                max_budget_usd=1.00,
             ),
             prompt_template="no_qa.md.j2",
             input_documents=["input"],
@@ -118,9 +110,7 @@ class TestAgentDefinition:
                 model="opus",
                 permission_mode="bypassPermissions",
                 allowed_tools=["Bash", "Read", "Write"],
-                max_budget_usd=5.00,
                 use_bare_mode=False,
-                max_turns=100,
             ),
             prompt_template="full.md.j2",
             input_documents=["spec", "contract"],

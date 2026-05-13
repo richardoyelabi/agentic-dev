@@ -38,7 +38,7 @@ For each acceptance criterion, drive the real app on a booted emulator or simula
 1. **Confirm a device is running.** `adb devices` or `xcrun simctl list devices booted` must show at least one non-web device. If not, fall back to spec-tracing and mark ACs as skipped.
 2. **Install and launch the app.** Build the app for the booted device in dev mode.
 3. **Drive flows.** For each AC, author a Maestro flow (or the project's integration_test) and execute it via `Bash`. Capture the run output.
-4. **Capture artifacts.** Maestro run logs and screenshots under `.agentic-dev/uat/<run_id>/evidence/<track>/`.
+4. **Capture artifacts.** The engine has already created the evidence directory at `.agentic-dev/uat/{{ run_id }}/evidence/{{ track_name }}/`. Save Maestro run logs and screenshots directly into that exact directory — do not create or nest a new subdirectory inside it.
 
 **If no device is running or the runner is unavailable:** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 

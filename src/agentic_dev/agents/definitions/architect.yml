@@ -1,15 +1,12 @@
 name: architect
-description: "Produces Frontend Spec, Backend Spec, and API Contract"
+description: "Produces one spec per declared track plus an API contract when any track has kind=api"
 team: design_architecture
 claude:
   model: opus
   permission_mode: bypassPermissions
   allowed_tools: []
-  max_turns: 5
-  max_budget_usd: 3.00
 prompt_template: architect.md.j2
 input_documents: [features_request, structured_input]
-output_documents: [frontend_spec, backend_spec, api_contract]
 qa_agent: architect_qa
 constraints:
   - "Prioritize minimalism: simplest solution that solves the problem"

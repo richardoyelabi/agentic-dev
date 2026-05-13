@@ -756,6 +756,16 @@ class PipelineEngine:
             extra_context["frontend_kind"] = track.uat_kind or track.kind
             extra_context["run_id"] = run_id
 
+            evidence_dir = (
+                self._project_dir
+                / ".agentic-dev"
+                / "uat"
+                / run_id
+                / "evidence"
+                / track.name
+            )
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+
             result = await run_qa_cycle(
                 claude=self._claude,
                 action_agent=agent_def,
@@ -771,6 +781,12 @@ class PipelineEngine:
                 prompt_renderer=self._prompt_renderer,
                 session_id=None,
                 extra_context=extra_context,
+                # Guard against the action agent (initial run or
+                # session-continuation correction) emitting only a short
+                # acknowledgement as its terminal text. The structural
+                # validator below keys off these headers; if they are
+                # missing, the false-PASS invariant is bypassed.
+                content_markers=["# UAT Report", "## Overall Result"],
             )
             total_cost += result.total_cost
             raw_report = self._doc_store.read(f"uat_report_{track.name}")

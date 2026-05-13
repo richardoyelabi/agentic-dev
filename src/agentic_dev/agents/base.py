@@ -9,9 +9,7 @@ class ClaudeConfig(BaseModel):
     model: str
     permission_mode: str
     allowed_tools: list[str]
-    max_budget_usd: float
     use_bare_mode: bool = True
-    max_turns: int = 50
 
 
 class AgentDefinition(BaseModel):

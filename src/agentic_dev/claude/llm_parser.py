@@ -35,7 +35,6 @@ class _ParserAgentConfig:
     model: str = "haiku"
     permission_mode: str = "default"
     allowed_tools: list[str] = field(default_factory=list)
-    max_turns: int = 1
     use_bare_mode: bool = True
     mcp_config: Path | None = None
     system_prompt: str | None = None
