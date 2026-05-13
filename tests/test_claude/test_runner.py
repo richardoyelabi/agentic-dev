@@ -651,6 +651,120 @@ class TestRetry:
         assert call_count == 3  # 1 initial + 2 retries
 
 
+class TestSessionApiErrorDetection:
+    """Tests for ClaudeRunner._session_has_api_error and the resulting retry path.
+
+    Upstream Anthropic 5xx errors surface as exit-1 with empty stderr; the
+    error text only lives in the session JSONL as a synthetic assistant
+    message marked ``isApiErrorMessage: true``. The runner must detect this
+    and retry transparently rather than failing the agent.
+    """
+
+    @staticmethod
+    def _write_jsonl(
+        tmp_path: Path,
+        session_id: str,
+        entries: list[dict],
+    ) -> Path:
+        encoded = str(tmp_path).replace("/", "-")
+        sessions_dir = tmp_path / ".claude" / "projects" / encoded
+        sessions_dir.mkdir(parents=True)
+        jsonl_path = sessions_dir / f"{session_id}.jsonl"
+        jsonl_path.write_text(
+            "\n".join(json.dumps(e) for e in entries), encoding="utf-8"
+        )
+        return jsonl_path
+
+    def test_detects_api_error_message_marker(self, tmp_path: Path):
+        self._write_jsonl(
+            tmp_path, "sess-1",
+            [
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}},
+                {
+                    "type": "assistant",
+                    "isApiErrorMessage": True,
+                    "message": {
+                        "content": [{
+                            "type": "text",
+                            "text": "API Error: {\"type\":\"error\",\"error\":{\"type\":\"api_error\"}}",
+                        }],
+                    },
+                },
+            ],
+        )
+        assert ClaudeRunner._session_has_api_error(
+            "sess-1", tmp_path, claude_dir=tmp_path / ".claude",
+        ) is True
+
+    def test_returns_false_for_clean_session(self, tmp_path: Path):
+        self._write_jsonl(
+            tmp_path, "sess-2",
+            [
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": "result"}]}},
+            ],
+        )
+        assert ClaudeRunner._session_has_api_error(
+            "sess-2", tmp_path, claude_dir=tmp_path / ".claude",
+        ) is False
+
+    def test_returns_false_when_session_id_missing(self, tmp_path: Path):
+        assert ClaudeRunner._session_has_api_error(
+            None, tmp_path, claude_dir=tmp_path / ".claude",
+        ) is False
+
+    async def test_run_retries_on_transient_api_error_then_succeeds(
+        self, tmp_path: Path,
+    ):
+        """First exit-1 with empty stderr + API error in session → retry → success."""
+        runner = ClaudeRunner(max_retries=3, enable_usage_api=False)
+        agent = FakeAgentConfig()
+
+        fail_proc = TestRun._make_mock_process(
+            json.dumps({"session_id": "sess-api-err"}),
+            returncode=1, stderr="",
+        )
+        success_proc = TestRun._make_mock_process(
+            json.dumps({"result": "ok", "total_cost_usd": 0.1}),
+        )
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return fail_proc if call_count == 1 else success_proc
+
+        with patch.object(
+            ClaudeRunner, "_session_has_api_error", return_value=True,
+        ), patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "ok"
+        assert call_count == 2
+
+    async def test_run_exhausts_retries_raises_agent_run_error_on_api_error(
+        self, tmp_path: Path,
+    ):
+        """Exhausted retries on API errors raise AgentRunError (not RateLimitError)."""
+        runner = ClaudeRunner(max_retries=1, enable_usage_api=False)
+        agent = FakeAgentConfig(name="feature_analyst_qa")
+        fail_proc = TestRun._make_mock_process(
+            json.dumps({"session_id": "sess-x"}), returncode=1, stderr="",
+        )
+
+        with patch.object(
+            ClaudeRunner, "_session_has_api_error", return_value=True,
+        ), patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=fail_proc,
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(AgentRunError, match="Transient API errors"):
+                await runner.run(agent, "prompt", tmp_path)
+
+
 class TestUsageApiFallback:
     """Empty-stderr / unrecognised-error fallback via the usage API.
 
