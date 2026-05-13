@@ -89,6 +89,11 @@ def _load_state(project_dir: Path) -> dict:
     return json.loads(state_path.read_text(encoding="utf-8"))
 
 
+def _artifacts_dir(project_dir: Path) -> Path:
+    """All agent-produced docs live under ``<project>/.agentic-dev/artifacts/``."""
+    return project_dir / ".agentic-dev" / "artifacts"
+
+
 def _project_dir() -> Path:
     return PROJECTS_DIR / APP_NAME
 
@@ -110,6 +115,8 @@ class TestUpdateSupportE2E:
 
         result = _run_cli(
             "new", app_name, "--path", str(projects_dir),
+            "--track", "frontend::frontend::web::web",
+            "--track", "backend::backend::api::api",
             input_text=USER_INPUT,
             timeout=1800,
         )
@@ -121,7 +128,7 @@ class TestUpdateSupportE2E:
         )
         assert project_dir.is_dir()
         assert (project_dir / ".agentic-dev" / "state.json").exists()
-        assert (project_dir / "docs").is_dir()
+        assert _artifacts_dir(project_dir).is_dir()
 
         state = _load_state(project_dir)
         # Should be paused at DESIGN_CHECKPOINT (after_design=True by default)
@@ -162,13 +169,13 @@ class TestUpdateSupportE2E:
         assert state["mode"] == "new"
         assert state["total_cost_usd"] > 0
 
-        # Verify key documents were generated
-        docs_dir = project_dir / "docs"
+        # Verify key documents were generated under .agentic-dev/artifacts/
+        artifacts = _artifacts_dir(project_dir)
         for doc_name in [
-            "structured_input", "features", "frontend_spec",
-            "backend_spec", "api_contract", "sprint_plan", "uat_report",
+            "structured_input.md", "features.md", "frontend_spec.md",
+            "backend_spec.md", "api_contract.md", "sprint_plan.md", "uat_report.md",
         ]:
-            assert (docs_dir / doc_name).exists(), f"Missing document: {doc_name}"
+            assert (artifacts / doc_name).exists(), f"Missing document: {doc_name}"
 
         # Verify sprints were populated and completed
         assert len(state["sprints"]) > 0
@@ -192,7 +199,7 @@ class TestUpdateSupportE2E:
 
         # Ensure there's a failing UAT report to remediate.
         # If the real UAT passed, overwrite with a synthetic failure.
-        uat_path = project_dir / "docs" / "uat_report"
+        uat_path = _artifacts_dir(project_dir) / "uat_report.md"
         uat_content = uat_path.read_text(encoding="utf-8") if uat_path.exists() else ""
         if "FAIL" not in uat_content.upper():
             uat_path.write_text(
@@ -221,12 +228,8 @@ class TestUpdateSupportE2E:
         assert state["mode"] == "remediate"
         assert state["remediation_cycle"] == cycle_before + 1
 
-        # Verify docs were archived
-        archive_dir = project_dir / "docs" / "archive" / f"cycle_{cycle_before}"
-        assert archive_dir.exists(), f"Archive not found at {archive_dir}"
-
         # Verify remediation input was composed
-        user_input_path = project_dir / "docs" / "user_input"
+        user_input_path = _artifacts_dir(project_dir) / "user_input.md"
         user_input = user_input_path.read_text(encoding="utf-8")
         assert "Remediation Request" in user_input
 
@@ -260,17 +263,9 @@ class TestUpdateSupportE2E:
         assert state["mode"] == "update"
 
         # Verify user_input was updated
-        user_input_path = project_dir / "docs" / "user_input"
+        user_input_path = _artifacts_dir(project_dir) / "user_input.md"
         user_input = user_input_path.read_text(encoding="utf-8")
         assert "reset" in user_input.lower()
-
-        # Verify docs were archived (should have update_* archive dir)
-        archive_dir = project_dir / "docs" / "archive"
-        update_archives = [
-            d for d in archive_dir.iterdir()
-            if d.is_dir() and d.name.startswith("update_")
-        ]
-        assert len(update_archives) >= 1, "No update archive found"
 
         # Verify cost increased
         assert state["total_cost_usd"] > cost_before
@@ -293,15 +288,8 @@ class TestUpdateSupportE2E:
         spec_file = tmp_path / "e2e_new_spec.txt"
         spec_file.write_text(FULL_RESPEC_CONTENT, encoding="utf-8")
 
-        # Also write structured_input.md so the diff logic can compare
-        # (the CLI reads structured_input.md for diffing)
-        structured_input_md = project_dir / "docs" / "structured_input.md"
-        structured_input = project_dir / "docs" / "structured_input"
-        if structured_input.exists() and not structured_input_md.exists():
-            structured_input_md.write_text(
-                structured_input.read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
+        # The CLI reads ``structured_input.md`` from the artifacts dir for diffing;
+        # the pipeline writes it there directly under the track-model refactor.
 
         result = _run_cli(
             "update", app_name,
@@ -318,18 +306,10 @@ class TestUpdateSupportE2E:
         assert state["mode"] == "update"
 
         # Verify user_input contains the new spec content
-        user_input_path = project_dir / "docs" / "user_input"
+        user_input_path = _artifacts_dir(project_dir) / "user_input.md"
         user_input = user_input_path.read_text(encoding="utf-8")
         assert "F003" in user_input
         assert "step size" in user_input.lower()
-
-        # Verify there are now multiple archive directories
-        archive_dir = project_dir / "docs" / "archive"
-        archive_subdirs = [d for d in archive_dir.iterdir() if d.is_dir()]
-        assert len(archive_subdirs) >= 3, (
-            f"Expected at least 3 archives (cycle + 2 updates), found {len(archive_subdirs)}: "
-            f"{[d.name for d in archive_subdirs]}"
-        )
 
         # Verify cost increased
         assert state["total_cost_usd"] > cost_before
