@@ -649,6 +649,136 @@ class TestInputProcessorOnboardingGuidance:
         assert "{{" not in result
 
 
+class TestFigmaAnnotationsPromptSections:
+    """Verify architect/architect_qa/developer/design_change_detection templates
+    render the Designer Annotations block when ``figma_annotations`` is in context.
+
+    All blocks are guarded so the absence of ``figma_annotations`` leaves
+    existing output unchanged.
+    """
+
+    _SAMPLE_ANNOTATIONS = (
+        "# Figma Annotations\n"
+        "- **Hero** (`12:34`): primary button must be 44px tall"
+    )
+
+    def _architect_ctx(self, **extra):
+        ctx = {
+            "features": "# Features Request\n## Feature: [F001] Auth",
+            "structured_input": "# Structured Input\n- [F001] Auth",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+            "constraints": [],
+            "correction_mode": False,
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            ],
+        }
+        ctx.update(extra)
+        return ctx
+
+    def test_architect_renders_annotations_when_provided(self, real_renderer):
+        result = real_renderer.render(
+            "architect.md.j2",
+            self._architect_ctx(figma_annotations=self._SAMPLE_ANNOTATIONS),
+        )
+        assert "Designer Annotations" in result
+        assert "must be 44px tall" in result
+        assert "authoritative design intent" in result
+
+    def test_architect_omits_annotations_when_absent(self, real_renderer):
+        result = real_renderer.render(
+            "architect.md.j2", self._architect_ctx(),
+        )
+        assert "Designer Annotations" not in result
+
+    def test_architect_omits_annotations_when_no_figma_sources(
+        self, real_renderer,
+    ):
+        """Annotations are only meaningful with figma_sources present."""
+        ctx = self._architect_ctx(figma_annotations=self._SAMPLE_ANNOTATIONS)
+        del ctx["figma_sources"]
+        del ctx["figma_mcp_available"]
+        result = real_renderer.render("architect.md.j2", ctx)
+        assert "Designer Annotations" not in result
+
+    def test_architect_qa_renders_annotations_when_provided(self, real_renderer):
+        result = real_renderer.render("architect_qa.md.j2", {
+            "features": "# Features Request",
+            "structured_input": "# Structured Input",
+            "architecture": "# Web Spec\n## Pages",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/xyz",
+            "figma_mcp_available": "true",
+            "figma_annotations": self._SAMPLE_ANNOTATIONS,
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            ],
+        })
+        assert "Designer Annotations" in result
+        assert "must be 44px tall" in result
+        # Also adds a QA checklist item
+        assert "designer annotations addressed" in result.lower()
+
+    def test_architect_qa_omits_annotations_when_absent(self, real_renderer):
+        result = real_renderer.render("architect_qa.md.j2", {
+            "features": "# Features Request",
+            "structured_input": "# Structured Input",
+            "architecture": "# Web Spec\n## Pages",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/xyz",
+            "figma_mcp_available": "true",
+            "tracks": [
+                {"name": "web", "path": "web", "kind": "web", "uat_kind": "web"},
+            ],
+        })
+        assert "Designer Annotations" not in result
+        assert "designer annotations addressed" not in result.lower()
+
+    def test_developer_renders_annotations_when_provided(self, real_renderer):
+        ctx = {
+            **AGENT_TEMPLATES["developer.md.j2"],
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+            "figma_annotations": self._SAMPLE_ANNOTATIONS,
+        }
+        result = real_renderer.render("developer.md.j2", ctx)
+        assert "Designer Annotations" in result
+        assert "must be 44px tall" in result
+        assert "non-negotiable implementation constraints" in result
+
+    def test_developer_omits_annotations_when_absent(self, real_renderer):
+        ctx = {
+            **AGENT_TEMPLATES["developer.md.j2"],
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_mcp_available": "true",
+        }
+        result = real_renderer.render("developer.md.j2", ctx)
+        assert "Designer Annotations" not in result
+
+    def test_design_change_detection_renders_existing_annotations(
+        self, real_renderer,
+    ):
+        result = real_renderer.render("design_change_detection.md.j2", {
+            "existing_spec": "# Frontend Spec",
+            "figma_urls": "- https://figma.com/file/abc",
+            "sentinel": "NO_DESIGN_CHANGES",
+            "existing_annotations": self._SAMPLE_ANNOTATIONS,
+        })
+        assert "Previously Persisted Designer Annotations" in result
+        assert "must be 44px tall" in result
+        # Detection instructions reference the annotation diff step
+        assert "get_annotations" in result
+
+    def test_design_change_detection_omits_annotations_section_by_default(
+        self, real_renderer,
+    ):
+        result = real_renderer.render("design_change_detection.md.j2", {
+            "existing_spec": "# Frontend Spec",
+            "figma_urls": "- https://figma.com/file/abc",
+            "sentinel": "NO_DESIGN_CHANGES",
+        })
+        assert "Previously Persisted Designer Annotations" not in result
+
+
 class TestFigmaPromptSections:
     """Verify frontend templates include Figma sections when figma_sources is provided."""
 

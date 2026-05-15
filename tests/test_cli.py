@@ -474,6 +474,349 @@ class TestWorkCommandOnboarding:
         assert "no requirements provided" in result.output.lower()
 
 
+class TestWorkCommandFigma:
+    """First-run plumbing for ``--from-figma`` (parse, persist, extract)."""
+
+    def _seed(self, tmp_path: Path) -> Path:
+        project = tmp_path / "figma-app"
+        project.mkdir()
+        (project / "agentic-dev.yaml").write_text(
+            "tracks:\n  - name: app\n    path: .\n    kind: web\n    uat_kind: web\n",
+            encoding="utf-8",
+        )
+        return project
+
+    def test_first_run_persists_figma_sources_with_labels(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = self._seed(tmp_path)
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._run_pipeline"), patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available"
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+            new=AsyncMock(return_value=_claude_result("# Figma Annotations\n- ok")),
+        ):
+            result = runner.invoke(app, [
+                "work", "build it",
+                "--from-figma", "https://figma.com/file/abc::Admin dashboard",
+                "--from-figma", "https://figma.com/file/xyz",
+            ])
+
+        assert result.exit_code == 0, result.output
+        artifacts = project / AGENTIC_DEV_METADATA_DIR / "artifacts"
+        sources_path = artifacts / "figma_sources.md"
+        assert sources_path.is_file()
+        body = sources_path.read_text()
+        assert "https://figma.com/file/abc" in body
+        assert "Admin dashboard" in body
+        assert "https://figma.com/file/xyz" in body
+
+    def test_first_run_writes_figma_annotations_doc(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = self._seed(tmp_path)
+        monkeypatch.chdir(project)
+
+        extract_mock = AsyncMock(
+            return_value=_claude_result(
+                "# Figma Annotations\n- **Hero** (`12:34`): 44px tall"
+            )
+        )
+
+        with patch("agentic_dev.cli._run_pipeline"), patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available"
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+            extract_mock,
+        ):
+            result = runner.invoke(app, [
+                "work", "build it",
+                "--from-figma", "https://figma.com/file/abc::Main",
+            ])
+
+        assert result.exit_code == 0, result.output
+        extract_mock.assert_awaited_once()
+        annotations_path = (
+            project / AGENTIC_DEV_METADATA_DIR / "artifacts" / "figma_annotations.md"
+        )
+        assert annotations_path.is_file()
+        assert "44px tall" in annotations_path.read_text()
+
+    def test_first_run_exits_when_figma_mcp_unavailable(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from agentic_dev.onboarding.figma import FigmaMCPNotConfigured
+
+        project = self._seed(tmp_path)
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._run_pipeline") as run_mock, patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available",
+            side_effect=FigmaMCPNotConfigured(),
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+        ) as extract_mock:
+            result = runner.invoke(app, [
+                "work", "build it",
+                "--from-figma", "https://figma.com/file/abc",
+            ])
+
+        assert result.exit_code == 1
+        assert "figma" in result.output.lower()
+        extract_mock.assert_not_called()
+        run_mock.assert_not_called()
+
+    def test_first_run_extractor_failure_is_advisory(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Extractor exceptions must not block the pipeline — annotations are advisory."""
+        project = self._seed(tmp_path)
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._run_pipeline") as run_mock, patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available"
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+            side_effect=RuntimeError("extractor died"),
+        ):
+            result = runner.invoke(app, [
+                "work", "build it",
+                "--from-figma", "https://figma.com/file/abc",
+            ])
+
+        assert result.exit_code == 0, result.output
+        run_mock.assert_called_once()
+        annotations_path = (
+            project / AGENTIC_DEV_METADATA_DIR / "artifacts" / "figma_annotations.md"
+        )
+        assert not annotations_path.exists()
+
+    def test_first_run_only_figma_no_prompt_succeeds(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A figma URL by itself is enough — no text prompt required."""
+        project = self._seed(tmp_path)
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._run_pipeline") as run_mock, patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available"
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+            new=AsyncMock(return_value=_claude_result("# Figma Annotations\n- ok")),
+        ):
+            result = runner.invoke(app, [
+                "work",
+                "--from-figma", "https://figma.com/file/abc",
+            ])
+
+        assert result.exit_code == 0, result.output
+        run_mock.assert_called_once()
+
+
+class TestWorkCommandFigmaUpdate:
+    """Subsequent ``work --from-figma`` calls drive an update cycle with design-change detection."""
+
+    def _seed_complete_with_ui_track(self, tmp_path: Path) -> Path:
+        from agentic_dev.config import ProjectConfig, save_project_config
+        from agentic_dev.tracks import Track
+        from agentic_dev.workspace.manager import ensure_scaffold
+
+        project = tmp_path / "complete-figma"
+        ensure_scaffold(project)
+        tracks = [Track(name="web", path="web", kind="web", uat_kind="web")]
+        save_project_config(
+            project, ProjectConfig(app_name="complete-figma", tracks=tracks)
+        )
+        sm = StateManager(project)
+        state = sm.create_initial("complete-figma")
+        state.tracks = tracks
+        state.phase = PipelinePhase.COMPLETE
+        sm.save(state)
+
+        artifacts = project / AGENTIC_DEV_METADATA_DIR / "artifacts"
+        (artifacts / "web_spec.md").write_text(
+            "# Web Spec\n## Pages\n- /home\n", encoding="utf-8"
+        )
+        (artifacts / "figma_annotations.md").write_text(
+            "# Figma Annotations\n- **Hero** (`12:34`): 44px tall (PRIOR)\n",
+            encoding="utf-8",
+        )
+        return project
+
+    def test_update_with_figma_detects_changes_and_refreshes_annotations(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from agentic_dev.onboarding.figma import DesignChangeResult
+
+        project = self._seed_complete_with_ui_track(tmp_path)
+        monkeypatch.chdir(project)
+
+        detect_mock = AsyncMock(
+            return_value=DesignChangeResult(
+                has_changes=True,
+                summary="Hero height changed: 44px → 56px",
+            )
+        )
+        extract_mock = AsyncMock(
+            return_value=_claude_result(
+                "# Figma Annotations\n- **Hero** (`12:34`): 56px tall (NEW)\n"
+            )
+        )
+
+        with patch(
+            "agentic_dev.cli._start_update_cycle",
+        ) as update_mock, patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available"
+        ), patch(
+            "agentic_dev.onboarding.figma.detect_design_changes", detect_mock
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+            extract_mock,
+        ):
+            result = runner.invoke(app, [
+                "work", "tighten copy",
+                "--from-figma", "https://figma.com/file/abc::Main",
+            ])
+
+        assert result.exit_code == 0, result.output
+        # The detector must have seen the prior annotations, not the new ones.
+        kwargs = detect_mock.await_args.kwargs
+        assert "PRIOR" in kwargs["existing_annotations"]
+        assert "NEW" not in kwargs["existing_annotations"]
+
+        # The figma_annotations doc is overwritten with the fresh extraction.
+        annotations_path = (
+            project / AGENTIC_DEV_METADATA_DIR / "artifacts" / "figma_annotations.md"
+        )
+        body = annotations_path.read_text()
+        assert "NEW" in body
+        assert "PRIOR" not in body
+
+        # The design change summary is threaded into the update cycle.
+        update_mock.assert_called_once()
+        update_kwargs = update_mock.call_args.kwargs
+        assert update_kwargs["design_changes"] == "Hero height changed: 44px → 56px"
+
+    def test_update_with_figma_skips_design_changes_when_none(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from agentic_dev.onboarding.figma import DesignChangeResult
+
+        project = self._seed_complete_with_ui_track(tmp_path)
+        monkeypatch.chdir(project)
+
+        detect_mock = AsyncMock(
+            return_value=DesignChangeResult(has_changes=False, summary="")
+        )
+        extract_mock = AsyncMock(
+            return_value=_claude_result("# Figma Annotations\n- Hero: 44px\n")
+        )
+
+        with patch(
+            "agentic_dev.cli._start_update_cycle",
+        ) as update_mock, patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available"
+        ), patch(
+            "agentic_dev.onboarding.figma.detect_design_changes", detect_mock
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+            extract_mock,
+        ):
+            result = runner.invoke(app, [
+                "work", "tighten copy",
+                "--from-figma", "https://figma.com/file/abc::Main",
+            ])
+
+        assert result.exit_code == 0, result.output
+        update_mock.assert_called_once()
+        # design_changes is either missing or None when nothing changed.
+        update_kwargs = update_mock.call_args.kwargs
+        assert not update_kwargs.get("design_changes")
+
+    def test_update_with_figma_exits_when_mcp_unavailable(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from agentic_dev.onboarding.figma import FigmaMCPNotConfigured
+
+        project = self._seed_complete_with_ui_track(tmp_path)
+        monkeypatch.chdir(project)
+
+        with patch(
+            "agentic_dev.cli._start_update_cycle"
+        ) as update_mock, patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available",
+            side_effect=FigmaMCPNotConfigured(),
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+        ) as extract_mock:
+            result = runner.invoke(app, [
+                "work", "tighten copy",
+                "--from-figma", "https://figma.com/file/abc",
+            ])
+
+        assert result.exit_code == 1
+        update_mock.assert_not_called()
+        extract_mock.assert_not_called()
+
+    def test_update_with_figma_only_no_prompt_succeeds(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Design-only update (figma URLs, no text) is valid."""
+        from agentic_dev.onboarding.figma import DesignChangeResult
+
+        project = self._seed_complete_with_ui_track(tmp_path)
+        monkeypatch.chdir(project)
+
+        detect_mock = AsyncMock(
+            return_value=DesignChangeResult(
+                has_changes=True, summary="Tokens changed"
+            )
+        )
+        extract_mock = AsyncMock(
+            return_value=_claude_result("# Figma Annotations\n- fresh\n")
+        )
+
+        with patch(
+            "agentic_dev.cli._start_update_cycle"
+        ) as update_mock, patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available"
+        ), patch(
+            "agentic_dev.onboarding.figma.detect_design_changes", detect_mock
+        ), patch(
+            "agentic_dev.onboarding.figma_annotations.extract_figma_annotations",
+            extract_mock,
+        ):
+            result = runner.invoke(app, [
+                "work",
+                "--from-figma", "https://figma.com/file/abc",
+            ])
+
+        assert result.exit_code == 0, result.output
+        update_mock.assert_called_once()
+
+
 class TestWorkCommandDispatch:
     """State-transition behaviour on subsequent ``agentic-dev work`` calls."""
 

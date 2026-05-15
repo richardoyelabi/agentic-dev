@@ -315,3 +315,28 @@ async def test_sprint_state_status_complete_after_run(claude, registry, doc_stor
         sprint_number=1, sprint_scope="auth", sprint_state=sprint_state,
     )
     assert sprint_state.status == SprintStatus.COMPLETE
+
+
+class TestSharedContextFigmaAnnotations:
+    """`_build_shared_context` must thread `figma_annotations` into the developer
+    context dict when the doc store has the document."""
+
+    def test_figma_annotations_threaded_when_doc_exists(self, runner, doc_store):
+        doc_store.exists.side_effect = lambda name: name == "figma_annotations"
+        doc_store.read.side_effect = lambda name: (
+            "# Figma Annotations\n- Hero: 44px tall"
+            if name == "figma_annotations"
+            else f"content of {name}"
+        )
+
+        ctx = runner._build_shared_context(sprint_state=None)
+
+        assert "figma_annotations" in ctx
+        assert "44px tall" in ctx["figma_annotations"]
+
+    def test_figma_annotations_absent_when_doc_missing(self, runner, doc_store):
+        doc_store.exists.side_effect = lambda name: False
+
+        ctx = runner._build_shared_context(sprint_state=None)
+
+        assert "figma_annotations" not in ctx

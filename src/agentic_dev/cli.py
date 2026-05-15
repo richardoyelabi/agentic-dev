@@ -909,10 +909,149 @@ def _detect_project_environment(
         secrets_path.write_text(report.secrets_env_template, encoding="utf-8")
 
 
+def _extract_and_persist_figma_annotations(
+    figma_sources: list,
+    project_dir: Path,
+    doc_store: DocumentStore,
+) -> None:
+    """Run the annotation extractor and persist its output.
+
+    Best-effort: failures are logged as warnings and the pipeline continues.
+    Annotations are advisory — missing them must never block onboarding or
+    an update cycle.
+    """
+    from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+    from agentic_dev.onboarding.figma_annotations import (  # noqa: WPS433
+        extract_figma_annotations,
+        write_figma_annotations,
+    )
+
+    console.print("[cyan]Extracting Figma annotations...[/cyan]")
+    log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        result = asyncio.run(
+            extract_figma_annotations(
+                ClaudeRunner(log_dir=log_dir),
+                figma_sources,
+                project_dir,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — annotations are advisory
+        console.print(
+            f"[yellow]Could not extract Figma annotations ({exc}). "
+            "Continuing without them.[/yellow]"
+        )
+        return
+
+    write_figma_annotations(doc_store, result.text)
+    if doc_store.exists("figma_annotations"):
+        console.print(
+            "[green]Saved Figma annotations to "
+            ".agentic-dev/artifacts/figma_annotations.md[/green]"
+        )
+
+
+def _persist_figma_inputs(
+    figma_sources: list,
+    project_dir: Path,
+    doc_store: DocumentStore,
+) -> None:
+    """Validate Figma MCP, persist sources, and run the annotation extractor.
+
+    Raises ``FigmaMCPNotConfigured`` (an ``AgenticDevError``) when no Figma
+    MCP server is configured — the caller is expected to surface this as a
+    user-facing exit.
+    """
+    from agentic_dev.onboarding.figma import (  # noqa: WPS433
+        check_figma_mcp_available,
+        write_figma_sources,
+    )
+
+    if not figma_sources:
+        return
+
+    check_figma_mcp_available()
+    write_figma_sources(doc_store, figma_sources)
+    _extract_and_persist_figma_annotations(figma_sources, project_dir, doc_store)
+
+
+def _update_figma_inputs(
+    figma_sources: list,
+    project_dir: Path,
+    doc_store: DocumentStore,
+    tracks: list,
+) -> str | None:
+    """Update-cycle Figma handling: validate, persist, detect changes, refresh.
+
+    Mirrors :func:`_persist_figma_inputs` but additionally diffs the new
+    Figma state against the existing per-track specs and the previously
+    extracted annotations. Returns the design-change summary (or ``None``
+    when nothing changed) for the caller to thread into the update cycle.
+
+    Raises ``FigmaMCPNotConfigured`` when no Figma MCP server is configured.
+    """
+    from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+    from agentic_dev.onboarding.figma import (  # noqa: WPS433
+        check_figma_mcp_available,
+        detect_design_changes,
+        write_figma_sources,
+    )
+
+    if not figma_sources:
+        return None
+
+    check_figma_mcp_available()
+    write_figma_sources(doc_store, figma_sources)
+
+    existing_annotations = (
+        doc_store.read("figma_annotations")
+        if doc_store.exists("figma_annotations")
+        else ""
+    )
+
+    ui_spec_chunks: list[str] = []
+    for track in tracks:
+        if track.kind not in ("web", "desktop", "mobile"):
+            continue
+        spec_name = f"{track.name}_spec"
+        if doc_store.exists(spec_name):
+            ui_spec_chunks.append(
+                f"## {track.name} ({track.kind})\n\n{doc_store.read(spec_name)}"
+            )
+
+    design_changes: str | None = None
+    if ui_spec_chunks:
+        log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
+        log_dir.mkdir(parents=True, exist_ok=True)
+        figma_claude = ClaudeRunner(log_dir=log_dir)
+        console.print(
+            "[cyan]Detecting design changes against existing specs...[/cyan]"
+        )
+        change_result = asyncio.run(
+            detect_design_changes(
+                figma_claude,
+                figma_sources,
+                "\n\n".join(ui_spec_chunks),
+                project_dir,
+                existing_annotations=existing_annotations,
+            )
+        )
+        if change_result.has_changes:
+            design_changes = change_result.summary
+        else:
+            console.print("[green]No design changes detected.[/green]")
+
+    _extract_and_persist_figma_annotations(figma_sources, project_dir, doc_store)
+
+    return design_changes
+
+
 def _onboard_in_place(
     project_dir: Path,
     user_input: str,
     rediscover: bool = False,
+    figma_sources: list | None = None,
 ) -> PipelineState:
     """First-run onboarding: discover tracks, scaffold ``.agentic-dev/``, persist state."""
     from agentic_dev.config import (  # noqa: WPS433
@@ -938,6 +1077,8 @@ def _onboard_in_place(
     _detect_project_environment(project_dir, tracks, doc_store)
     if user_input:
         doc_store.write("user_input", user_input)
+
+    _persist_figma_inputs(figma_sources or [], project_dir, doc_store)
 
     return state
 
@@ -978,13 +1119,17 @@ def work(
     from agentic_dev.config import resolve_project_dir  # noqa: WPS433
 
     try:
+        from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
+
         project_dir = resolve_project_dir(Path.cwd())
         change_input = _collect_work_input(prompt, from_file)
+
+        figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
 
         is_first_run = not (project_dir / AGENTIC_DEV_METADATA_DIR).is_dir()
 
         if is_first_run:
-            if not change_input and not from_figma:
+            if not change_input and not figma_sources:
                 console.print(
                     "[bold red]No requirements provided. Pass a prompt, "
                     "--from-file, or --from-figma.[/bold red]"
@@ -992,7 +1137,10 @@ def work(
                 raise typer.Exit(code=1)
             console.print(f"[green]Working on project at {project_dir}[/green]")
             state = _onboard_in_place(
-                project_dir, change_input, rediscover=rediscover
+                project_dir,
+                change_input,
+                rediscover=rediscover,
+                figma_sources=figma_sources,
             )
             _run_pipeline(project_dir, state)
             return
@@ -1001,9 +1149,21 @@ def work(
         state = state_mgr.load()
 
         if state.phase == PipelinePhase.COMPLETE:
+            if not change_input and not figma_sources:
+                console.print(
+                    "[bold red]No change description provided. Pass a prompt, "
+                    "--from-file, or --from-figma.[/bold red]"
+                )
+                raise typer.Exit(code=1)
             console.print(
                 f"[cyan]Project at {project_dir} is COMPLETE — "
                 "enqueuing the new prompt as an update.[/cyan]"
+            )
+            design_changes = _update_figma_inputs(
+                figma_sources,
+                project_dir,
+                DocumentStore(project_dir),
+                state.tracks,
             )
             _start_update_cycle(
                 project_dir=project_dir,
@@ -1013,6 +1173,7 @@ def work(
                 mode="update",
                 restart_phase=PipelinePhase.FEATURE_ANALYSIS,
                 is_targeted=True,
+                design_changes=design_changes,
             )
             return
 

@@ -2072,3 +2072,79 @@ class TestArchitectureExistingCodeAnalyses:
             await engine._run_architecture(state)
 
         assert "existing_code_analyses" not in captured["extra_context"]
+
+
+class TestArchitectureFigmaAnnotations:
+    """`_run_architecture` must thread `figma_annotations` into `input_docs` when present."""
+
+    @pytest.mark.asyncio
+    async def test_figma_annotations_passed_to_qa_cycle_when_present(
+        self, engine, doc_store
+    ):
+        from agentic_dev.tracks import Track
+
+        state = _make_state(PipelinePhase.ARCHITECTURE)
+        state.tracks = [Track(name="web", path="web", kind="web", uat_kind="web")]
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {
+            "features", "structured_input", "figma_sources", "figma_annotations",
+        }
+        doc_store.read.side_effect = lambda name: {
+            "features": "# Features",
+            "structured_input": "# Structured",
+            "figma_sources": "# Figma Sources\n- URL: https://figma.com/file/abc",
+            "figma_annotations": "# Figma Annotations\n- **Hero**: 44px tall",
+        }.get(name.replace(".md", ""), "")
+
+        captured: dict = {}
+
+        async def fake_qa_cycle(**kwargs):
+            captured.update(kwargs)
+            return type(
+                "R", (),
+                {"output": "<!-- DOCUMENT: web_spec -->\n# Web Spec", "total_cost": 0.0},
+            )()
+
+        with patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=fake_qa_cycle,
+        ), patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_architecture(state)
+
+        assert "figma_annotations" in captured["input_docs"]
+        assert "44px tall" in captured["input_docs"]["figma_annotations"]
+
+    @pytest.mark.asyncio
+    async def test_figma_annotations_absent_when_doc_missing(
+        self, engine, doc_store
+    ):
+        from agentic_dev.tracks import Track
+
+        state = _make_state(PipelinePhase.ARCHITECTURE)
+        state.tracks = [Track(name="web", path="web", kind="web", uat_kind="web")]
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {
+            "features", "structured_input",
+        }
+        doc_store.read.side_effect = lambda name: {
+            "features": "# Features",
+            "structured_input": "# Structured",
+        }.get(name.replace(".md", ""), "")
+
+        captured: dict = {}
+
+        async def fake_qa_cycle(**kwargs):
+            captured.update(kwargs)
+            return type(
+                "R", (),
+                {"output": "<!-- DOCUMENT: web_spec -->\n# Web Spec", "total_cost": 0.0},
+            )()
+
+        with patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=fake_qa_cycle,
+        ), patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_architecture(state)
+
+        # When the doc doesn't exist the key may be present-but-empty or absent;
+        # either way the architect must not see meaningful annotations content.
+        annotations = captured["input_docs"].get("figma_annotations", "")
+        assert not annotations

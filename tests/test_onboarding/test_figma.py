@@ -170,3 +170,38 @@ class TestDetectDesignChanges:
 
         with pytest.raises(AgentRunError, match="design_change_detection"):
             await detect_design_changes(mock_runner, sources, "spec text", tmp_path)
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
+    async def test_existing_annotations_thread_into_prompt(
+        self, mock_discover: MagicMock, tmp_path: Path
+    ) -> None:
+        """When existing_annotations is provided, it must appear in the prompt."""
+        mock_discover.return_value = _figma_env()
+        mock_runner = _make_mock_runner(_make_claude_result(text="some changes"))
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
+        prior = "# Figma Annotations\n- **Hero** (`12:34`): must be 44px"
+
+        await detect_design_changes(
+            mock_runner, sources, "spec text", tmp_path,
+            existing_annotations=prior,
+        )
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert "must be 44px" in prompt
+        assert "Previously Persisted Designer Annotations" in prompt
+
+    @pytest.mark.asyncio
+    @patch("agentic_dev.onboarding.figma.discover_mcp_servers")
+    async def test_omits_existing_annotations_block_when_absent(
+        self, mock_discover: MagicMock, tmp_path: Path
+    ) -> None:
+        """Default behavior: no existing_annotations means no extra block."""
+        mock_discover.return_value = _figma_env()
+        mock_runner = _make_mock_runner(_make_claude_result(text="some changes"))
+        sources = [AnnotatedSource(value=SAMPLE_FIGMA_URL)]
+
+        await detect_design_changes(mock_runner, sources, "spec text", tmp_path)
+
+        prompt = mock_runner.run.call_args.kwargs["prompt"]
+        assert "Previously Persisted Designer Annotations" not in prompt
