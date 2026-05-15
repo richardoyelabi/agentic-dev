@@ -53,6 +53,16 @@ If any probe is missing, follow the fallback guidance in the Runtime Verificatio
 
 **If Playwright MCP is unavailable (per prereqs):** do not fabricate runtime evidence. Set `Verification mode: skipped` and `Driver: none` for affected ACs. The validator will force FAIL; that is the correct outcome.
 
+# Backgrounded-process pattern
+
+For dev servers, build watchers, or any command that does not return on its own:
+
+1. **Start.** Use `Bash` with `run_in_background: true`. Record the returned shell id and output-file path.
+2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on a regex for the readiness line (`Local:`, `ready in`, `Listening on`, `Serving on`, etc.). Do **not** use bare `sleep` loops.
+3. **Poll only as a fallback.** If `Monitor` is unavailable, run a bounded `curl --max-time 2 http://localhost:PORT/health` loop, max 30 attempts × 2s.
+4. **Tear down.** At the end of the run, terminate the process via `pkill -f '<command-fragment>'` through `Bash`.
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
+
 # Constraints
 
 {% for c in constraints %}

@@ -9,6 +9,7 @@ claude:
     - Glob
     - Grep
     - Bash
+    - Monitor
     - WebFetch
     - "mcp__plugin_playwright_playwright__*"
   max_budget_usd: 5.00

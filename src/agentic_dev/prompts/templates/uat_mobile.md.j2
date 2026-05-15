@@ -42,6 +42,16 @@ For each acceptance criterion, drive the real app on a booted emulator or simula
 
 **If no device is running or the runner is unavailable:** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 
+# Backgrounded-process pattern
+
+For Metro / Flutter dev servers, long-running Maestro flows, or any backend service the app depends on:
+
+1. **Start.** Use `Bash` with `run_in_background: true`. Record the returned shell id and output-file path.
+2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on the readiness line (`Welcome to Metro`, `Flutter run key commands`, `Maestro session ready`, etc.). Do **not** use bare `sleep` loops.
+3. **Poll only as a fallback.** If `Monitor` is unavailable, probe with a bounded health check (e.g. `curl --max-time 2 http://localhost:8081/status` for Metro), max 30 × 2s.
+4. **Tear down.** At the end of the run, terminate the process via `pkill -f '<command-fragment>'` through `Bash`.
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
+
 # Constraints
 
 {% for c in constraints %}

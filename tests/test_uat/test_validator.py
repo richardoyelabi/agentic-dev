@@ -51,6 +51,27 @@ class TestValidatorPassesGoodReport:
         assert result == report
         assert "Validator Override" not in result
 
+    def test_runtime_pass_with_monitor_style_artifacts_unchanged(self):
+        """Server-log artifacts from the backgrounded-process pattern satisfy
+        the same structural rules as screenshots — the validator is agnostic
+        about how the artifacts were captured."""
+        report = _report(
+            overall="PASS",
+            acs=[{
+                "result": "PASS",
+                "mode": "runtime",
+                "driver": "playwright",
+                "evidence": ["clicked submit; saw success toast"],
+                "artifacts": [
+                    ".agentic-dev/uat/run_1/evidence/web/ac_01.png",
+                    ".agentic-dev/uat/run_1/evidence/web/server.log",
+                ],
+            }],
+        )
+        result = validate_uat_report(report, uat_mode="full")
+        assert result == report
+        assert "Validator Override" not in result
+
     def test_fail_report_in_full_mode_unchanged(self):
         """A FAIL report has nothing to override; pass through unchanged."""
         report = _report(

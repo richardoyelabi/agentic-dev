@@ -810,6 +810,42 @@ class TestUATRuntimeVerification:
         assert "Artifacts" in result
 
 
+class TestUATBackgroundedProcessPattern:
+    """Runtime-driven UAT templates must document the backgrounded-process pattern.
+
+    Guards the prompt section against silent deletion. ``Monitor`` + ``run_in_background``
+    + ``pkill -f`` are the three primitives the agent is told to compose, so the
+    rendered output must contain all three.
+    """
+
+    @pytest.mark.parametrize(
+        "template_name",
+        [
+            "uat_web.md.j2",
+            "uat_desktop_electron.md.j2",
+            "uat_desktop_tauri.md.j2",
+            "uat_mobile.md.j2",
+        ],
+    )
+    def test_template_includes_backgrounded_process_pattern(
+        self, real_renderer, template_name
+    ):
+        result = real_renderer.render(template_name, AGENT_TEMPLATES[template_name])
+        assert "Backgrounded-process pattern" in result
+        assert "run_in_background" in result
+        assert "Monitor" in result
+        assert "pkill -f" in result
+
+    @pytest.mark.parametrize(
+        "template_name",
+        ["uat_api.md.j2", "uat_cli.md.j2"],
+    )
+    def test_one_shot_uat_templates_omit_pattern(self, real_renderer, template_name):
+        """API and CLI UAT do not boot long-lived servers; the pattern is noise there."""
+        result = real_renderer.render(template_name, AGENT_TEMPLATES[template_name])
+        assert "Backgrounded-process pattern" not in result
+
+
 class TestIntegrationTemplatePartials:
     """Verify integration template includes sprint context and update context."""
 

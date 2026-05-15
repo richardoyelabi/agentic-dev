@@ -42,6 +42,16 @@ Boot the Electron app in dev mode, attach Playwright via CDP, and drive the real
 
 **If Playwright MCP or Node are unavailable (per prereqs):** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 
+# Backgrounded-process pattern
+
+For the Electron dev server, the renderer build watcher, or any backend service the app depends on:
+
+1. **Start.** Use `Bash` with `run_in_background: true`. Record the returned shell id and output-file path.
+2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on the framework's ready line (`webpack compiled`, `vite ready`, `Listening on`, the CDP port banner, etc.). Do **not** use bare `sleep` loops.
+3. **Poll only as a fallback.** If `Monitor` is unavailable, probe the CDP endpoint with `curl --max-time 2 http://localhost:<port>/json/version` in a bounded loop (max 30 × 2s).
+4. **Tear down.** At the end of the run, terminate the process via `pkill -f '<command-fragment>'` through `Bash`.
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
+
 # Constraints
 
 {% for c in constraints %}

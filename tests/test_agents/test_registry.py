@@ -74,6 +74,23 @@ class TestAgentRegistry:
         agents = registry.list_by_team("nonexistent_team")
         assert agents == []
 
+    def test_uat_runtime_agents_allow_monitor(self, registry: AgentRegistry):
+        """Runtime UAT agents that boot long-running processes need ``Monitor``
+        to wake on readiness lines without bare ``sleep`` loops."""
+        for name in (
+            "uat_web",
+            "uat_desktop_electron",
+            "uat_desktop_tauri",
+            "uat_mobile",
+        ):
+            assert "Monitor" in registry.get(name).claude.allowed_tools, (
+                f"{name} is missing the Monitor tool"
+            )
+        for name in ("uat_api", "uat_cli", "uat_qa"):
+            assert "Monitor" not in registry.get(name).claude.allowed_tools, (
+                f"{name} should not expose Monitor — no long-running servers"
+            )
+
     def test_design_change_detection_agent_loaded(self, registry: AgentRegistry):
         agent = registry.get("design_change_detection")
         assert agent.team == "design_architecture"
