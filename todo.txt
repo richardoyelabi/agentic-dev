@@ -1,3 +1,4 @@
+- remove fsm to allow for work with and without agentic-dev without lock in?
 - make products more production ready - convo already started with claude
 - does architect (and designer) have access to codebase? they should
 - replace markdown api contracts with something more standardized using dtos and open specifications
