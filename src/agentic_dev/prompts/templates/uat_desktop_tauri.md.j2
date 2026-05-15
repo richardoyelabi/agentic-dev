@@ -33,7 +33,9 @@ Tauri uses the OS-native webview (WebKitGTK / WebView2 / WKWebView), which Playw
 
 {{ uat_prereqs }}
 
-{% endif %}# Runtime Verification
+{% endif %}{% include "_partials/uat_bootstrap.md.j2" %}
+
+# Runtime Verification
 
 1. **Start tauri-driver.** Run `tauri-driver` to expose a WebDriver endpoint for the Tauri app.
 2. **Build and launch the app.** Build in dev mode and launch under tauri-driver.

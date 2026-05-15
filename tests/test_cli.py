@@ -301,6 +301,8 @@ class TestWorkCommandOnboarding:
         with patch("agentic_dev.cli._run_pipeline") as mock_run, patch(
             "agentic_dev.cli._analyze_existing_tracks"
         ) as mock_analyse, patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
             "agentic_dev.discovery.agent.discover_tracks"
         ) as mock_discover:
             result = runner.invoke(app, ["work", "do the thing"])
@@ -332,6 +334,8 @@ class TestWorkCommandOnboarding:
 
         with patch("agentic_dev.cli._run_pipeline") as mock_run, patch(
             "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.cli._detect_project_environment"
         ), patch(
             "agentic_dev.discovery.discover_tracks", discover_mock
         ):
@@ -367,6 +371,8 @@ class TestWorkCommandOnboarding:
         )
 
         with patch("agentic_dev.cli._run_pipeline"), patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
             "agentic_dev.onboarding.analyzer.analyze_codebases", analyse_mock
         ):
             result = runner.invoke(app, ["work", "add referrals"])
@@ -398,6 +404,8 @@ class TestWorkCommandOnboarding:
         analyse_mock = AsyncMock(return_value=[])
 
         with patch("agentic_dev.cli._run_pipeline"), patch(
+            "agentic_dev.cli._detect_project_environment"
+        ), patch(
             "agentic_dev.onboarding.analyzer.analyze_codebases", analyse_mock
         ):
             result = runner.invoke(app, ["work", "build a todo app"])
@@ -406,6 +414,47 @@ class TestWorkCommandOnboarding:
         analyse_mock.assert_not_called()
         artifacts = project / AGENTIC_DEV_METADATA_DIR / "artifacts"
         assert not (artifacts / "existing_code_analyses.md").exists()
+
+    def test_first_run_writes_bootstrap_env_and_secrets_artifacts(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from agentic_dev.onboarding.environment import EnvironmentReport
+
+        project = tmp_path / "env-aware"
+        project.mkdir()
+        (project / "backend").mkdir()
+        (project / "backend" / "main.py").write_text("# fastapi\n")
+        (project / "agentic-dev.yaml").write_text(
+            "tracks:\n"
+            "  - name: backend\n    path: backend\n    kind: api\n    uat_kind: api\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(project)
+
+        detect_mock = AsyncMock(
+            return_value=EnvironmentReport(
+                bootstrap_md="# Bootstrap\n## backend\n- Install: pip install\n",
+                env_requirements_md="# Env\n- DJANGO_SECRET_KEY (auto)\n",
+                secrets_env_template="DJANGO_SECRET_KEY=abc\n",
+            )
+        )
+
+        with patch("agentic_dev.cli._run_pipeline"), patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.onboarding.environment.detect_environment", detect_mock
+        ):
+            result = runner.invoke(app, ["work", "add referrals"])
+
+        assert result.exit_code == 0, result.output
+        detect_mock.assert_awaited_once()
+
+        artifacts = project / AGENTIC_DEV_METADATA_DIR / "artifacts"
+        assert (artifacts / "bootstrap.md").read_text().startswith("# Bootstrap")
+        assert "DJANGO_SECRET_KEY" in (artifacts / "env_requirements.md").read_text()
+
+        secrets_file = project / AGENTIC_DEV_METADATA_DIR / "secrets.env"
+        assert secrets_file.read_text() == "DJANGO_SECRET_KEY=abc\n"
 
     def test_first_run_without_requirements_fails(
         self, tmp_path: Path, monkeypatch
@@ -532,6 +581,63 @@ class TestCwdCommandsResolveProject:
         result = runner.invoke(app, command)
         assert result.exit_code == 1
         assert "no agentic-dev project found" in result.output.lower()
+
+
+class TestDisplayCheckpoint:
+    """``_display_checkpoint`` surfaces unfilled secrets when paused at UAT."""
+
+    def test_displays_secrets_guidance_when_uat_pause_and_unfilled(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from rich.console import Console
+
+        from agentic_dev.cli import _display_checkpoint
+        from agentic_dev.state.models import PipelineState
+
+        project = tmp_path / "p"
+        project.mkdir()
+        (project / AGENTIC_DEV_METADATA_DIR).mkdir()
+        (project / AGENTIC_DEV_METADATA_DIR / "secrets.env").write_text(
+            "AGORA_APP_ID=<FILL ME: from console>\n"
+            "RESEND_API_KEY=<FILL ME>\n"
+        )
+
+        captured = Console(record=True, width=120)
+        monkeypatch.setattr("agentic_dev.cli.console", captured)
+
+        state = PipelineState(project_name="p", phase=PipelinePhase.UAT)
+        _display_checkpoint(state, project)
+
+        text = captured.export_text()
+        assert "secrets.env" in text
+        assert "AGORA_APP_ID" in text
+        assert "RESEND_API_KEY" in text
+        assert "agentic-dev resume" in text
+
+    def test_displays_default_checkpoint_when_secrets_filled(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from rich.console import Console
+
+        from agentic_dev.cli import _display_checkpoint
+        from agentic_dev.state.models import PipelineState
+
+        project = tmp_path / "p"
+        project.mkdir()
+        (project / AGENTIC_DEV_METADATA_DIR).mkdir()
+        (project / AGENTIC_DEV_METADATA_DIR / "secrets.env").write_text(
+            "AGORA_APP_ID=abc123\n"
+        )
+
+        captured = Console(record=True, width=120)
+        monkeypatch.setattr("agentic_dev.cli.console", captured)
+
+        state = PipelineState(project_name="p", phase=PipelinePhase.DESIGN_CHECKPOINT)
+        _display_checkpoint(state, project)
+
+        text = captured.export_text()
+        assert "secrets.env" not in text
+        assert "Documents produced" in text
 
 
 class TestStatusCommand:

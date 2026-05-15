@@ -551,7 +551,9 @@ class TestUATPhase:
         """UAT runs once per UAT-capable track and aggregates the report."""
         state = _make_state(PipelinePhase.UAT)
         state_manager.load = MagicMock(return_value=state)
-        doc_store.exists = MagicMock(return_value=True)
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name.replace(".md", "") != "env_requirements"
+        )
         doc_store.read = MagicMock(return_value="spec content")
         claude.run.side_effect = [
             _make_claude_result("uat backend\n## Overall Result: PASS", cost=0.20),
@@ -624,6 +626,83 @@ class TestUATPhase:
         assert injected_inputs["uat_prereqs"] == prereqs_content
 
     @pytest.mark.asyncio
+    async def test_uat_passes_bootstrap_and_env_requirements_to_agent(
+        self, engine, claude, doc_store, registry, prompt_renderer,
+    ) -> None:
+        """Bootstrap + env_requirements docs reach the per-track UAT agent."""
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+
+        existing = {"frontend_spec", "bootstrap", "sprint_plan", "features"}
+        doc_store.exists.side_effect = (
+            lambda name: name.replace(".md", "") in existing
+        )
+        doc_contents = {
+            "frontend_spec": "# Frontend Spec",
+            "bootstrap": "## frontend\n- Install: yarn install\n",
+            "env_requirements": "# Env\n- NEXT_PUBLIC_BASE_URL (auto)\n",
+            "sprint_plan": "# Sprint Plan",
+            "features": "# Features",
+        }
+        doc_store.read.side_effect = lambda name: doc_contents.get(
+            name.replace(".md", ""), ""
+        )
+
+        def _agent_for(name: str) -> AgentDefinition:
+            agent = _make_agent(name, template=f"{name}.md.j2")
+            if name == "uat_web":
+                agent.input_documents = [
+                    "features_request", "frontend_spec", "sprint_plan",
+                    "bootstrap", "env_requirements",
+                ]
+            return agent
+
+        registry.get = MagicMock(side_effect=_agent_for)
+        claude.run.return_value = _make_claude_result(
+            "# UAT Report\n## Overall Result: PASS", cost=0.10,
+        )
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_uat(state)
+
+        uat_render = next(
+            call for call in prompt_renderer.render_agent_prompt.call_args_list
+            if call.kwargs.get("template_name") == "uat_web.md.j2"
+        )
+        injected_inputs = uat_render.kwargs["input_documents"]
+        assert "bootstrap" in injected_inputs
+        assert "yarn install" in injected_inputs["bootstrap"]
+
+    @pytest.mark.asyncio
+    async def test_uat_pauses_when_secrets_unfilled(
+        self, engine, claude, doc_store, registry, project_dir,
+    ) -> None:
+        """If env_requirements exists and secrets.env has placeholders, pause."""
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+
+        project_dir.mkdir(parents=True, exist_ok=True)
+        import subprocess
+        subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
+        (project_dir / ".gitignore").write_text(".agentic-dev/secrets.env\n")
+        meta = project_dir / ".agentic-dev"
+        meta.mkdir()
+        (meta / "secrets.env").write_text("AGORA_APP_ID=<FILL ME: console>\n")
+
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name.replace(".md", "") == "env_requirements"
+        )
+        doc_store.read = MagicMock(return_value="# Env\n- AGORA_APP_ID (human)\n")
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            with pytest.raises(CheckpointPause) as excinfo:
+                await engine._run_uat(state)
+
+        assert excinfo.value.phase == PipelinePhase.UAT
+        # The per-track UAT agent must NOT have been dispatched.
+        claude.run.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_uat_passes_canonical_uat_report_key_to_qa(
         self, engine, claude, doc_store, registry, prompt_renderer,
     ) -> None:
@@ -648,6 +727,9 @@ class TestUATPhase:
             return agent
 
         registry.get = MagicMock(side_effect=_agent_for)
+        doc_store.exists.side_effect = (
+            lambda name: name.replace(".md", "") != "env_requirements"
+        )
         action_report = "# UAT Report\n## Overall Result: PASS"
         claude.run.side_effect = [
             _make_claude_result(action_report, cost=0.20),
@@ -679,7 +761,9 @@ class TestQACycleRetry:
         """When the action agent returns empty once, the QA cycle retries and succeeds."""
         state = _make_state(PipelinePhase.UAT)
         state_manager.load = MagicMock(return_value=state)
-        doc_store.exists = MagicMock(return_value=True)
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name.replace(".md", "") != "env_requirements"
+        )
         doc_store.read = MagicMock(return_value="spec content")
         claude.run.side_effect = [
             _make_claude_result("", cost=0.01),       # backend UAT: empty — triggers retry
@@ -702,7 +786,9 @@ class TestQACycleRetry:
         """When both the initial and retry calls return empty, AgentRunError is raised."""
         state = _make_state(PipelinePhase.UAT)
         state_manager.load = MagicMock(return_value=state)
-        doc_store.exists = MagicMock(return_value=True)
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name.replace(".md", "") != "env_requirements"
+        )
         doc_store.read = MagicMock(return_value="spec content")
         claude.run.side_effect = [
             _make_claude_result("", cost=0.01),

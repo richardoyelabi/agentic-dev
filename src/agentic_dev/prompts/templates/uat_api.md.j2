@@ -29,7 +29,9 @@ Start the backend, hit every endpoint the acceptance criteria reference, and rec
 
 {{ uat_prereqs }}
 
-{% endif %}# Runtime Verification
+{% endif %}{% include "_partials/uat_bootstrap.md.j2" %}
+
+# Runtime Verification
 
 1. **Start the backend.** Use `Bash` to boot the backend dev server. Wait for a health check to succeed.
 2. **Exercise each endpoint.** For each AC, send the appropriate HTTP request(s) via `curl` or a `python -c "import httpx; ..."` one-liner. Cover the happy path plus at least one error path (auth, validation, or not-found) per endpoint.

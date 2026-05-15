@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agentic_dev.exceptions import WorkspaceError
+from agentic_dev.workspace.gitignore import BLOCK_START
 from agentic_dev.workspace.manager import ensure_scaffold
 
 
@@ -75,3 +76,28 @@ class TestEnsureScaffold:
         project_root = tmp_path / "brand-new"
         ensure_scaffold(project_root, fresh=True)
         assert (project_root / ".agentic-dev").is_dir()
+
+    def test_writes_managed_gitignore_block_in_git_repo(
+        self, tmp_path: Path
+    ) -> None:
+        project_root = tmp_path / "git-project"
+        project_root.mkdir()
+        (project_root / ".git").mkdir()
+
+        ensure_scaffold(project_root)
+
+        gitignore = project_root / ".gitignore"
+        assert gitignore.exists()
+        contents = gitignore.read_text()
+        assert BLOCK_START in contents
+        assert ".agentic-dev/" in contents
+        assert ".omc/" in contents
+        assert ".agentic-dev/secrets.env" in contents
+
+    def test_no_gitignore_when_not_git_repo(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "non-git"
+        project_root.mkdir()
+
+        ensure_scaffold(project_root)
+
+        assert not (project_root / ".gitignore").exists()

@@ -48,6 +48,31 @@ app = typer.Typer(
 
 def _display_checkpoint(state: PipelineState, project_dir: Path) -> None:
     """Display a Rich panel when the pipeline pauses at a checkpoint."""
+    from agentic_dev.onboarding.secrets import parse_secrets_template  # noqa: WPS433
+
+    secrets_path = project_dir / AGENTIC_DEV_METADATA_DIR / "secrets.env"
+    if state.phase == PipelinePhase.UAT:
+        secrets_state = parse_secrets_template(secrets_path)
+        if secrets_state.has_unfilled_required():
+            unfilled = "\n".join(
+                f"  - {key}" for key in secrets_state.unfilled_required
+            )
+            panel_content = (
+                f"[bold]Project:[/bold] {state.project_name}\n"
+                f"[bold]Phase:[/bold] {state.phase}\n\n"
+                "[bold]Action required:[/bold] Fill the human-required secrets in\n"
+                f"  [cyan].agentic-dev/secrets.env[/cyan]\n\n"
+                f"[bold]Unfilled keys:[/bold]\n{unfilled}\n\n"
+                "Then resume the pipeline:\n"
+                "  [green]agentic-dev resume[/green]"
+            )
+            console.print(Panel(
+                panel_content,
+                title="UAT Paused — Secrets Required",
+                border_style="yellow",
+            ))
+            return
+
     doc_store = DocumentStore(project_dir)
     docs = doc_store.list_documents()
     docs_text = "\n".join(f"  - {d}" for d in docs) if docs else "  (none)"
@@ -860,6 +885,30 @@ def _analyze_existing_tracks(project_dir: Path, tracks: list, doc_store: Documen
     doc_store.write("existing_code_analyses", "\n\n---\n\n".join(combined))
 
 
+def _detect_project_environment(
+    project_dir: Path, tracks: list, doc_store: DocumentStore
+) -> None:
+    """Run the environment detector and persist bootstrap.md + secrets template."""
+    from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+    from agentic_dev.onboarding.environment import (  # noqa: WPS433
+        detect_environment,
+    )
+
+    log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+    claude = ClaudeRunner(log_dir=log_dir)
+
+    console.print("[cyan]Detecting bootstrap commands and env requirements...[/cyan]")
+    report = asyncio.run(detect_environment(claude, project_dir, tracks))
+
+    doc_store.write("bootstrap", report.bootstrap_md)
+    doc_store.write("env_requirements", report.env_requirements_md)
+
+    secrets_path = project_dir / AGENTIC_DEV_METADATA_DIR / "secrets.env"
+    if not secrets_path.exists():
+        secrets_path.write_text(report.secrets_env_template, encoding="utf-8")
+
+
 def _onboard_in_place(
     project_dir: Path,
     user_input: str,
@@ -886,6 +935,7 @@ def _onboard_in_place(
 
     doc_store = DocumentStore(project_dir)
     _analyze_existing_tracks(project_dir, tracks, doc_store)
+    _detect_project_environment(project_dir, tracks, doc_store)
     if user_input:
         doc_store.write("user_input", user_input)
 

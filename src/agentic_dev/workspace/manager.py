@@ -16,6 +16,9 @@ from agentic_dev.config import (
 )
 from agentic_dev.exceptions import WorkspaceError
 from agentic_dev.workspace.git import init_repo_sync
+from agentic_dev.workspace.gitignore import ensure_managed_gitignore
+
+_GITIGNORE_ENTRIES = [".agentic-dev/", ".omc/", ".agentic-dev/secrets.env"]
 
 
 def ensure_scaffold(project_root: Path, fresh: bool = False) -> Path:
@@ -39,6 +42,7 @@ def ensure_scaffold(project_root: Path, fresh: bool = False) -> Path:
             raise WorkspaceError(
                 f"Project already initialised at {project_root}"
             )
+        ensure_managed_gitignore(project_root, _GITIGNORE_ENTRIES)
         return project_root
 
     metadata_dir.mkdir()
@@ -50,5 +54,7 @@ def ensure_scaffold(project_root: Path, fresh: bool = False) -> Path:
     artifacts_dir.mkdir()
     (artifacts_dir / "qa").mkdir()
     init_repo_sync(artifacts_dir)
+
+    ensure_managed_gitignore(project_root, _GITIGNORE_ENTRIES)
 
     return project_root

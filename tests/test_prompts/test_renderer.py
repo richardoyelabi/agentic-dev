@@ -566,6 +566,40 @@ class TestTemplateVariablesMatchOrchestratorKeys:
         })
         assert self.MARKER in result
 
+    def test_uat_web_renders_bootstrap_section_when_provided(
+        self, real_renderer
+    ):
+        result = real_renderer.render("uat_web.md.j2", {
+            "features_request": "features",
+            "frontend_spec": "spec",
+            "backend_spec": "spec",
+            "api_contract": "contract",
+            "sprint_plan": "plan",
+            "uat_prereqs": "prereqs",
+            "bootstrap": "## frontend\n- UAT: docker compose up\n",
+            "env_requirements": "## frontend\n- NEXT_PUBLIC_BASE_URL (auto)\n",
+            "constraints": ["x"],
+        })
+        assert "## Bootstrap" in result
+        assert "docker compose up" in result
+        assert "## Environment" in result
+        assert "NEXT_PUBLIC_BASE_URL" in result
+        assert "Use canonical commands first" in result
+
+    def test_uat_web_omits_bootstrap_section_when_absent(self, real_renderer):
+        """Backwards compatibility: legacy projects without bootstrap docs render unchanged."""
+        result = real_renderer.render("uat_web.md.j2", {
+            "features_request": "features",
+            "frontend_spec": "spec",
+            "backend_spec": "spec",
+            "api_contract": "contract",
+            "sprint_plan": "plan",
+            "uat_prereqs": "prereqs",
+            "constraints": ["x"],
+        })
+        assert "## Bootstrap" not in result
+        assert "## Environment" not in result
+
 
 class TestInputProcessorOnboardingGuidance:
     """Verify the Input Processor template includes guidance for handling onboarding context."""

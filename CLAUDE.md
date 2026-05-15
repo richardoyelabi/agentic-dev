@@ -70,6 +70,37 @@ are concatenated into `existing_code_analyses.md`, which the architect reads
 to reverse-engineer specs that reflect what's already there rather than
 designing from scratch.
 
+## Zero-config bootstrap
+
+Onboarding writes `.agentic-dev/` and adds a managed `# >>> agentic-dev managed >>>`
+block to the project's `.gitignore` so the metadata directory and
+`.agentic-dev/secrets.env` are excluded from commits automatically (no-op
+when the project is not a git repo). Removing the closing marker is treated
+as an explicit opt-out and the block is never re-added.
+
+A sibling onboarding step runs `detect_environment` alongside the analyser.
+It reads root + per-track build manifests (Makefile, docker-compose*.yml,
+package.json scripts, pyproject.toml, .env*, READMEs, scripts/) and produces
+three cross-track artifacts:
+
+- `.agentic-dev/artifacts/bootstrap.md` — canonical install/run/test/UAT
+  commands per track, in preference order: docker compose > Makefile >
+  package.json scripts > raw commands. Used by the engine (synchronous
+  pre-install before each UAT run via `uat/preinstall.py`) and read by
+  every UAT agent.
+- `.agentic-dev/artifacts/env_requirements.md` — env vars classified as
+  **auto** (deterministic safe defaults), **mock** (mock service shipped
+  in-repo), or **human** (real credentials required).
+- `.agentic-dev/secrets.env` — gitignored skeleton with auto/mock values
+  pre-filled and human-required values written as `KEY=<FILL ME: hint>`
+  placeholders.
+
+Before UAT dispatches per-track agents, `uat/secrets_gate.py` parses
+`secrets.env`. If any placeholders remain, the engine raises
+`CheckpointPause(phase=UAT)` and `_display_checkpoint` tells the user
+exactly which keys to fill. The gate also refuses to run if `secrets.env`
+is not gitignored (defensive against the managed block being deleted).
+
 ## Artifact layout
 
 All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
@@ -79,11 +110,15 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/artifacts/sprint_plan.md` — sprint plan with `Tracks in scope:` lines
 - `.agentic-dev/artifacts/track_<name>_analysis.md` — per-track existing-code analysis
 - `.agentic-dev/artifacts/existing_code_analyses.md` — concatenated input for the architect
+- `.agentic-dev/artifacts/bootstrap.md` — canonical install/run/test/UAT commands per track
+- `.agentic-dev/artifacts/env_requirements.md` — env vars classified as auto/mock/human
 - `.agentic-dev/artifacts/figma_sources.md` — Figma URLs and user-supplied labels
 - `.agentic-dev/artifacts/qa/<name>.md` — per-step QA reports
 - `.agentic-dev/artifacts/uat_report_<track>.md` — per-track UAT verdict
 - `.agentic-dev/artifacts/uat_report.md` — aggregated multi-track UAT report
 - `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots, transcripts
+- `.agentic-dev/uat/<run_id>/install_<track>.log` — synchronous pre-install logs
+- `.agentic-dev/secrets.env` — gitignored secrets template (auto/mock pre-filled, human placeholders)
 - `.agentic-dev/state.json` — pipeline state
 - `.agentic-dev/config.json` — project config (tracks, checkpoint, autonomy)
 

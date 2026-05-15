@@ -44,7 +44,9 @@ If any probe is missing, follow the fallback guidance in the Runtime Verificatio
 
 {{ design_changes }}
 
-{% endif %}# Runtime Verification
+{% endif %}{% include "_partials/uat_bootstrap.md.j2" %}
+
+# Runtime Verification
 
 1. **Start the application.** Start the backend (if present) and the frontend dev server via `Bash`. Wait until both are responding.
 2. **Drive user flows.** For each acceptance criterion, use Playwright MCP to navigate, click, fill forms, and assert visible outcomes. One browser interaction per assertion — no shortcuts through API calls.

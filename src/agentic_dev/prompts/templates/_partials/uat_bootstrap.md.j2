@@ -1,0 +1,24 @@
+{% if bootstrap is defined and bootstrap %}## Bootstrap
+
+`bootstrap.md` declares the canonical install/run/test/UAT commands for this
+project. Prefer these over ad-hoc construction. Order of preference:
+docker compose > Makefile target > package.json script > raw command.
+
+{{ bootstrap }}
+
+{% endif %}{% if env_requirements is defined and env_requirements %}## Environment
+
+`env_requirements.md` lists every variable the project reads, classified as
+**auto** (safe default exists), **mock** (mock service shipped), or **human**
+(real credential required). Human-required values live in
+`.agentic-dev/secrets.env` and are loaded into your process environment
+before you are dispatched.
+
+{{ env_requirements }}
+
+{% endif %}**Use canonical commands first.** When you start servers or run
+the application, prefer the command from `bootstrap.md` (typically
+`docker compose -f docker-compose.e2e.yml up -d` for web-stack projects
+with an e2e compose file). For long-running builds, redirect output to a
+file and watch it for a readiness regex — never stream raw build logs into
+your context.

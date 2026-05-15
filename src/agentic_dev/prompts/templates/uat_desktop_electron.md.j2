@@ -33,7 +33,9 @@ Boot the Electron app in dev mode, attach Playwright via CDP, and drive the real
 
 {{ uat_prereqs }}
 
-{% endif %}# Runtime Verification
+{% endif %}{% include "_partials/uat_bootstrap.md.j2" %}
+
+# Runtime Verification
 
 1. **Boot the app.** Start the Electron app in dev mode with remote debugging enabled (`--remote-debugging-port=...` or the framework's dev command).
 2. **Attach Playwright.** Connect Playwright MCP to the CDP endpoint. Enumerate windows; the main application window is the primary target.

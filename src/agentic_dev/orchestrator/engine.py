@@ -686,10 +686,12 @@ class PipelineEngine:
             _read_desktop_framework,
             pick_uat_agent,
         )
+        from agentic_dev.uat.preinstall import preinstall_for_uat
         from agentic_dev.uat.prereqs import (
             check_prereqs,
             render_doc as render_prereqs_doc,
         )
+        from agentic_dev.uat.secrets_gate import check_secrets_gate
         from agentic_dev.uat.validator import validate_uat_report
 
         tracks = self._resolve_tracks(state)
@@ -703,6 +705,14 @@ class PipelineEngine:
             )
             await self._commit_docs_changes("docs: UAT report (no UAT tracks)")
             return advance_phase(state, PipelinePhase.UAT_QA)
+
+        check_secrets_gate(self._project_dir, self._doc_store)
+        preinstall_for_uat(
+            project_dir=self._project_dir,
+            run_id=run_id,
+            tracks=uat_tracks,
+            doc_store=self._doc_store,
+        )
 
         cfg = load_project_config(self._project_dir)
         per_track_reports: dict[str, str] = {}
