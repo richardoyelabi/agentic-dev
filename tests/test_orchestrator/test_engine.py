@@ -1905,3 +1905,84 @@ class TestRestoreUnchangedSpecs:
             await engine._restore_unchanged_specs({"backend_spec": "content"})
 
         engine._doc_store.write.assert_not_called()
+
+
+class TestArchitectureExistingCodeAnalyses:
+    """Tests that ``_run_architecture`` forwards in-place adoption context."""
+
+    @pytest.mark.asyncio
+    async def test_existing_code_analyses_flow_through_to_extra_context(
+        self, engine, doc_store
+    ):
+        from agentic_dev.tracks import Track
+
+        state = _make_state(PipelinePhase.ARCHITECTURE)
+        state.tracks = [Track(name="web", path="web", kind="web", uat_kind="web")]
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {
+            "features", "structured_input", "existing_code_analyses",
+        }
+        doc_store.read.side_effect = lambda name: {
+            "features": "# Features",
+            "structured_input": "# Structured",
+            "existing_code_analyses": "## api (api)\n\nFastAPI app...",
+        }.get(name.replace(".md", ""), "")
+
+        captured: dict = {}
+
+        async def fake_qa_cycle(**kwargs):
+            captured.update(kwargs)
+            return type(
+                "R",
+                (),
+                {
+                    "output": "<!-- DOCUMENT: web_spec -->\n# Web Spec\nstuff",
+                    "total_cost": 0.0,
+                },
+            )()
+
+        with patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=fake_qa_cycle,
+        ), patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_architecture(state)
+
+        assert "existing_code_analyses" in captured["extra_context"]
+        assert "FastAPI app" in captured["extra_context"]["existing_code_analyses"]
+
+    @pytest.mark.asyncio
+    async def test_existing_code_analyses_absent_when_doc_missing(
+        self, engine, doc_store
+    ):
+        from agentic_dev.tracks import Track
+
+        state = _make_state(PipelinePhase.ARCHITECTURE)
+        state.tracks = [Track(name="web", path="web", kind="web", uat_kind="web")]
+        # No ``existing_code_analyses`` document exists for greenfield projects.
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in {
+            "features", "structured_input",
+        }
+        doc_store.read.side_effect = lambda name: {
+            "features": "# Features",
+            "structured_input": "# Structured",
+        }.get(name.replace(".md", ""), "")
+
+        captured: dict = {}
+
+        async def fake_qa_cycle(**kwargs):
+            captured.update(kwargs)
+            return type(
+                "R",
+                (),
+                {
+                    "output": "<!-- DOCUMENT: web_spec -->\n# Web Spec",
+                    "total_cost": 0.0,
+                },
+            )()
+
+        with patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=fake_qa_cycle,
+        ), patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_architecture(state)
+
+        assert "existing_code_analyses" not in captured["extra_context"]

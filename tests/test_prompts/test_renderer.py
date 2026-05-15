@@ -364,6 +364,38 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "likely still using 'features_request'"
         )
 
+    def test_architect_includes_existing_code_analyses_when_present(
+        self, real_renderer
+    ):
+        """When ``existing_code_analyses`` is in context, the reverse-engineer block renders."""
+        result = real_renderer.render("architect.md.j2", {
+            "features": "Features: x",
+            "structured_input": "structured input content",
+            "constraints": [],
+            "correction_mode": False,
+            "tracks": [
+                {"name": "api", "path": "api", "kind": "api", "uat_kind": "api"},
+            ],
+            "existing_code_analyses": f"## api (api)\n\n{self.MARKER}",
+        })
+        assert "Existing code in tracks" in result
+        assert "Reverse-engineer" in result
+        assert self.MARKER in result
+
+    def test_architect_omits_existing_code_block_when_absent(self, real_renderer):
+        """The reverse-engineer block must not render for greenfield projects."""
+        result = real_renderer.render("architect.md.j2", {
+            "features": "Features: x",
+            "structured_input": "structured input content",
+            "constraints": [],
+            "correction_mode": False,
+            "tracks": [
+                {"name": "app", "path": ".", "kind": "web", "uat_kind": "web"},
+            ],
+        })
+        assert "Existing code in tracks" not in result
+        assert "Reverse-engineer" not in result
+
     def test_architect_qa_receives_features_and_architecture(self, real_renderer):
         """engine.py passes 'features' and qa_cycle adds 'architecture' output."""
         result = real_renderer.render("architect_qa.md.j2", {

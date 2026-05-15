@@ -1,408 +1,148 @@
 # User Guide
 
+agentic-dev is a deterministic pipeline you point at any project. Plan →
+architecture → sprints with QA → UAT. The tool figures out the project
+structure; you describe what you want done.
+
 ## Prerequisites
 
 1. Python 3.12+
-2. Claude Code CLI installed and authenticated (`claude --version` should work)
+2. Claude Code CLI installed and authenticated (`claude --version` works)
 3. Install agentic-dev: `pip install -e ".[dev]"`
 
-## Creating a New Project
+## The primary command: `agentic-dev work`
+
+`cd` into any project directory and tell it what you want:
 
 ```bash
-agentic-dev new my-app
+cd /path/to/my/project
+agentic-dev work "add a referrals feature where users earn credits"
 ```
 
-You'll be prompted to describe your application. Be as detailed as you want — the Input Processor will normalize and structure your requirements.
-
-If your requirements are in a file (especially useful for long documents with blank lines, which would otherwise truncate interactive input), pass it with `--from-file`:
-
-```bash
-agentic-dev new my-app --from-file requirements.md
-```
-
-You can also specify preferences:
-- Tech stack: "Use Next.js for frontend, Django REST Framework for backend"
-- Database: "Use PostgreSQL with Supabase"
-- Deployment: "Deploy frontend on Vercel, backend on AWS"
-- UI/UX: "Minimalist design, dark mode support"
-
-### Choosing the frontend kind
-
-The agency supports four user-facing surfaces: `web`, `cli`, `desktop`, and `mobile`. The Input Processor normally infers the kind from your description ("build a CLI tool that…" → `cli`, "React Native app for…" → `mobile`). You can also force it explicitly:
-
-```bash
-agentic-dev new my-tool --frontend-kind cli
-agentic-dev new my-app  --frontend-kind mobile
-```
-
-The chosen kind shapes three things:
-
-1. **Architect** — `frontend_spec` is structured per kind (commands for CLI, screens + navigation for mobile, windows + IPC for desktop, pages + routes for web).
-2. **Developers & QA** — prompt constraints adapt per kind (e.g. CLI dev requires non-interactive mode; mobile dev handles platform lifecycle).
-3. **UAT** — a kind-specific UAT agent drives the running product (Playwright for web / Electron, `tauri-driver` for Tauri, Maestro for mobile, subprocess for CLI, `httpx`/`curl` for backend-only).
-
-For desktop, the architect also picks the framework (`electron` or `tauri`) and records it as a `desktop_framework` header in `frontend_spec`; the engine reads this to select the correct UAT driver.
-
-### Referencing Existing Sources
-
-You can reference existing codebases and Figma designs to give the agency context before it generates your new project's specifications. Both flags are optional and additive — they enrich the agency's understanding but don't replace your requirements. The existing sources are analyzed read-only; nothing about them is changed or managed.
-
-> **`new --from-codebase` vs `adopt`:** The `--from-codebase` flag uses an existing codebase as **reference context** for building a new project in a new directory. The existing codebase is not modified or managed — it only informs the specs. If you want agentic-dev to manage an existing project in-place, use [`adopt`](#adopting-an-existing-project) instead.
-
-#### Annotation Syntax
-
-Both `--from-codebase` and `--from-figma` support an optional annotation using `::` as a separator:
-
-```
---from-codebase /path/to/project::Frontend React app
---from-figma "https://figma.com/file/abc::Admin dashboard"
-```
-
-The annotation helps the agency understand what each source represents. It splits on the first `::` only, so URLs or annotations containing `::` are handled safely. If you don't need an annotation, just pass the path or URL directly.
-
-#### From an Existing Codebase
-
-```bash
-agentic-dev new my-app --from-codebase /path/to/existing/project
-```
-
-A read-only Claude agent analyzes the codebase (using only Read, Glob, and Grep tools) and produces a **Codebase Analysis** document containing:
-
-- **Tech Stack** — detected frameworks, languages, and database
-- **Architecture** — discovered routes/endpoints, data models, and UI components
-- **Patterns & Conventions** — coding patterns, naming conventions, project structure
-- **Dependencies** — key dependencies and their purposes
-- **Notes** — anything notable that would help in planning changes
-
-The detected tech stack is used as defaults when generating specifications. Your explicit preferences (e.g., "use PostgreSQL") always take priority over what is detected.
-
-#### From Figma Designs
-
-```bash
-agentic-dev new my-app --from-figma "https://figma.com/file/..."
-```
-
-A Claude agent with Figma MCP tools extracts design information and produces a **Design Analysis** document containing:
-
-- **Pages** — layout structure and components per page
-- **Components** — purpose, variants, and configurable properties
-- **Design Tokens** — color palette, typography, and spacing scale
-- **Navigation** — navigation structure and user flows
-
-**Prerequisite:** The Figma MCP server must be configured in your Claude Code environment. The CLI checks your Claude Code settings before starting and shows setup instructions if Figma is not found:
-
-- **Option 1:** Run `claude mcp add figma` to configure the Figma MCP server
-- **Option 2:** Use Claude Code's authentication UI to connect Figma (supports OAuth)
-
-See https://docs.anthropic.com/en/docs/claude-code/mcp for details.
-
-Design analyses are passed to the Architect agent, which incorporates design tokens, component names, page layouts, and navigation flows into the Frontend Spec.
-
-#### Combining Multiple Sources
-
-Both flags are repeatable. You can reference multiple codebases and Figma files in a single command — they are analyzed concurrently:
-
-```bash
-agentic-dev new my-app \
-  --from-codebase /path/frontend::"Frontend React app" \
-  --from-codebase /path/backend::"Backend API" \
-  --from-figma "https://figma.com/file/abc::Main UI" \
-  --from-figma "https://figma.com/file/xyz::Design system"
-```
-
-You can also combine reference sources with your own requirements. Describe what you want to build at the prompt, and the agency will merge your intent with the analysis of existing sources.
-
-#### How Results Flow Through the Pipeline
-
-Text and design are **parallel input channels** — they are stored and processed independently, not merged together.
-
-1. Each source is analyzed concurrently by a dedicated Claude agent
-2. Codebase analyses are appended to your requirements text and saved as `docs/user_input.md`; the **Input Processor** merges detected tech stack, features, and patterns with your stated preferences
-3. Figma analyses are saved as `docs/design_analyses.md` — a separate document that flows directly to the **Architect** for frontend specification
-4. Figma URLs are saved as `docs/figma_sources.md` and passed to frontend agents during sprinting, giving the **Frontend Developer** and **Frontend QA** direct Figma MCP access for pixel-accurate implementation
-
-## The Design Phase
-
-After submitting your requirements, the agency runs the design phase:
-
-1. **Input Processor** normalizes your input (reviewed by QA)
-2. **Feature Analyst** expands it into detailed features (reviewed by QA)
-3. **Architect** produces Frontend Spec, Backend Spec, and API Contract (reviewed by QA)
-4. **Sprint Planner** breaks features into sprints (reviewed by QA)
-
-By default, the pipeline **pauses after design** so you can review the documents at `~/projects/my-app/docs/`.
-
-## Reviewing Documents
-
-After the design phase pauses, review:
-- `docs/features_request.md` — Are all features captured correctly?
-- `docs/api_contract.md` — Does the API design make sense?
-- `docs/frontend_spec.md` — Is the UI architecture right?
-- `docs/backend_spec.md` — Are the data models correct?
-- `docs/sprint_plan.md` — Is the sprint decomposition reasonable?
-
-## Resuming the Pipeline
-
-```bash
-# Resume as-is
-agentic-dev resume my-app
-
-# Resume with feedback
-agentic-dev resume my-app --feedback "Use Supabase instead of raw PostgreSQL"
-```
-
-## Monitoring Progress
-
-```bash
-agentic-dev status my-app
-agentic-dev cost my-app
-agentic-dev logs my-app --agent backend_developer --sprint 1
-```
-
-## Updating an Existing Project
-
-Use `update` when you want to make **intentional changes** — adding features, modifying behavior, or re-specifying requirements. The project must be in `COMPLETE` state (i.e., at least one full pipeline run has finished).
-
-The command determines which pipeline phase to restart from based on what changed, and re-runs the pipeline.
-
-> **`update` vs `sync`:** `update` is for changes you want to make. If you've edited code manually and need to bring specs back in line (or vice versa), use [`sync`](#syncing-code-and-specs) instead — it detects drift and lets you choose how to resolve it.
-
-```bash
-# Interactive — you'll be prompted to type or paste your change description
-agentic-dev update my-app
-
-# From a file — read change description from a file (handles long docs with blank lines)
-agentic-dev update my-app --from-file changes.md
-
-# Full re-specification — replace requirements entirely from a file
-agentic-dev update my-app --full-spec requirements-v2.txt
-
-# Design update — import updated Figma designs (compatible with all options above)
-agentic-dev update my-app --from-figma "https://figma.com/file/..."
-
-# Combined — update text requirements and designs together
-agentic-dev update my-app --from-file changes.md --from-figma "https://figma.com/file/..."
-```
-
-`--from-file` and `--full-spec` are mutually exclusive — use one or the other. `--full-spec` additionally triggers a `spec_diff` agent that compares old vs new structured input and produces a human-readable `spec_changes` summary for all downstream agents.
-
-`--from-figma` is a **parallel design channel** — it is compatible with all text options. When provided, the pipeline reads the old design analyses before archiving, runs the new Figma analysis, then invokes the `design_diff` agent to produce a `design_changes` summary. This summary flows to every downstream agent, including UAT. Text and design changes are always independent: you can update either or both in a single `update` run.
-
-## Adopting an Existing Project
-
-Use `adopt` when you have an existing codebase that you want agentic-dev to manage. It works **in-place** — no new directory is created. Specialized agents read the actual code and reverse-engineer the full spec suite (`frontend_spec.md`, `backend_spec.md`, `api_contract.md`, `features.md`), making the project a first-class citizen.
-
-> **`adopt` vs `new --from-codebase`:** `adopt` makes agentic-dev manage your existing project where it lives. `new --from-codebase` creates a separate new project that merely uses the existing code as reference context — the original project is untouched and unmanaged.
-
-```bash
-# Basic adoption
-agentic-dev adopt /path/to/my-project
-
-# With explicit directory mapping
-agentic-dev adopt /path/to/my-project --frontend client --backend server
-
-# With Figma designs
-agentic-dev adopt /path/to/my-project --from-figma "https://figma.com/file/abc::Main UI"
-
-# Adopt and extend with new requirements
-agentic-dev adopt /path/to/my-project --extend "Add an admin dashboard"
-```
-
-Adoption creates `.agentic-dev/` and `docs/` in-place, detects the directory structure (or uses your explicit `--frontend`/`--backend` overrides), then runs specialized agents to produce `frontend_spec.md`, `backend_spec.md`, `api_contract.md`, `features.md`, and `structured_input.md`.
-
-After adoption, you can use all standard commands (`update`, `resume`, `sync`, `integrate`, `status`, `cost`) on the adopted project.
-
-When `--extend` is used, adoption feeds into the standard pipeline: the Input Processor receives the extracted specs plus your new requirements, and the pipeline pauses at the design checkpoint for review before building.
-
-## Syncing Code and Specs
-
-Use `sync` when code and specs have drifted apart — for example, after manual code edits, direct spec modifications, or Figma design updates. It is **diagnostic**: it compares the current state of code against specs, reports what's misaligned, and lets you choose how to resolve each item.
-
-> **`sync` vs `update`:** `sync` answers "what's out of alignment?" and helps you fix it. `update` answers "I want this changed" and re-runs the pipeline. If you manually edited backend code and want specs to reflect that, use `sync`. If you want to add a new feature, use [`update`](#updating-an-existing-project).
-
-```bash
-# Full interactive sync
-agentic-dev sync my-app
-
-# Code is truth — update specs to match code
-agentic-dev sync my-app --from code
-
-# Specs are truth — queue code changes to match specs
-agentic-dev sync my-app --from specs
-
-# Check a specific area
-agentic-dev sync my-app --scope api
-
-# Check-only mode (no changes, just report)
-agentic-dev sync my-app --check
-```
-
-In interactive mode, each drift item is presented and you choose how to resolve it:
-- **to_spec** — update the spec document to match code reality
-- **to_code** — queue a code change (apply later with `agentic-dev update --from-sync`)
-- **ignore** — mark as intentional divergence (won't appear again)
-- **defer** — skip for now, will reappear on next sync
-
-## Integrating Third-Party Services After Completion
-
-If you ran a pipeline without MCP services configured (e.g. Stripe, GitHub), the integration agent operated in SDK-only mode. The `integrate` command lets you configure the services and rerun just the integration stages — no need to re-run the full pipeline.
-
-```bash
-# Configure your MCP servers first
-claude mcp add stripe
-claude mcp add github
-
-# Rerun integration for all qualifying sprints
-agentic-dev integrate my-app
-
-# Target a specific sprint
-agentic-dev integrate my-app --sprint 2
-
-# Rerun even if integration was already completed
-agentic-dev integrate my-app --force
-
-# Skip confirmation
-agentic-dev integrate my-app --yes
-```
-
-The command:
-1. Validates the project is in COMPLETE or ADOPTED state
-2. Identifies sprints that have integration services but haven't been properly integrated
-3. Checks that all required MCP servers are configured in Claude Code (blocks if not ready)
-4. Runs the integration + integration QA cycle for each qualifying sprint
-
-Sprints that crashed mid-integration (e.g. due to a network error) are automatically resumed from where they left off. Sprints that already completed integration are skipped unless `--force` is used.
-
-## Runtime-Driven UAT
-
-UAT is not just spec-tracing — a per-kind UAT agent drives the running product and records evidence per acceptance criterion.
-
-### What runs under the hood
-
-Before the UAT agent starts, the engine:
-
-1. Probes the environment for the driver tools your project needs (e.g. `npx`, `maestro`, `tauri-driver`, Playwright MCP, `flutter devices`).
-2. Writes a `uat_prereqs` document the UAT agent reads.
-3. Creates `.agentic-dev/uat_artifacts/<run_id>/` where the agent saves screenshots, subprocess transcripts, Maestro logs, WebDriver sessions, or HTTP traces.
-4. Picks the correct UAT agent from `(ProjectType, FrontendKind, desktop_framework)`.
-
-### The false-PASS gate
-
-A code-level validator rejects reports that claim PASS without real runtime evidence. Under the default `uat_mode: full`, a PASS is forced to FAIL when:
-
-- No AC was verified at runtime
-- A runtime PASS AC has no artifact paths
-- Every AC reports `Driver: none`
-- Any PASS AC lacks concrete `Evidence:` bullets
-
-When triggered, the report is rewritten with a `## Validator Override` section explaining which rule failed, so the remediation loop sees an accurate verdict.
-
-### `uat_mode: spec_only` for CI environments
-
-If your CI (or local sandbox) legitimately cannot run driver tools, you can revert UAT to the legacy spec-tracing behaviour by editing `.agentic-dev/config.json`:
-
-```json
-{
-  "app_name": "my-app",
-  "uat_mode": "spec_only"
-}
-```
-
-In `spec_only`, the false-PASS rules other than "every PASS AC needs Evidence" are suspended. A clear warning is emitted at pipeline start whenever `spec_only` is active. Use this sparingly — it defeats the main purpose of runtime UAT.
-
-### Driver prereqs at a glance
-
-| Kind | Required tools on PATH + runtime |
+On first invocation in a directory:
+
+1. A discovery Claude agent inspects the project and infers tracks
+   (sub-codebases with a coherent build/run/test loop, e.g. `backend/`
+   API + `frontend/` web app + `workers/` worker).
+2. Existing code in each track is analysed in parallel; results land in
+   `.agentic-dev/artifacts/track_<name>_analysis.md` and feed into the
+   architect so it reverse-engineers a spec from what's there rather than
+   designing from scratch.
+3. `.agentic-dev/` is scaffolded in the project root. Your existing files
+   are untouched.
+4. The deterministic pipeline runs end-to-end: plan → architecture →
+   sprints with QA → UAT.
+
+On subsequent invocations, the same command dispatches on state:
+
+| Pipeline state | What `work` does |
 |---|---|
-| `web` / `desktop_electron` | Playwright MCP server registered; `npx` |
-| `desktop_tauri` | `tauri-driver` |
-| `cli` | Bash (always present) |
-| `mobile` | Either `maestro` + `maestro doctor` passing, or `flutter` + at least one non-web device in `flutter devices` |
-| `backend_only` | `curl` |
+| no `.agentic-dev/` | first-run onboarding (see above) |
+| `COMPLETE` | treats the prompt as an update; restarts at `FEATURE_ANALYSIS` |
+| `FAILED` | injects the prompt as feedback and auto-resumes |
+| anything mid-pipeline | exits 1 — use `agentic-dev resume` first |
 
-If a required tool is missing when `uat_mode: full`, UAT's overall result is FAIL with reason `runtime_driver_unavailable` — this is the correct behaviour, not a bug. Install the tool (or switch to `spec_only`) before re-running.
-
-## Configuring Checkpoints
+### Alternate input channels
 
 ```bash
-# Pause after every sprint
-agentic-dev config my-app --checkpoints design,sprint
+# Read requirements from a file (useful for long docs with blank lines).
+agentic-dev work --from-file requirements.md
 
-# Full autonomy (no pauses)
-agentic-dev config my-app --autonomy full
+# Attach Figma designs (the architect treats designer annotations as
+# authoritative). Repeatable; ``::`` adds an annotation.
+agentic-dev work "redesign onboarding" \
+  --from-figma "https://figma.com/file/abc::onboarding wireframes"
 
-# Maximum control (pause everywhere)
-agentic-dev config my-app --autonomy maximum
+# Re-run discovery before running the pipeline.
+agentic-dev work --rediscover
 ```
 
-## Cost Management
+## Track inference and overrides
 
-The agency tracks costs per agent run. Use `agentic-dev cost my-app` to see a breakdown. Each agent has a max budget in its YAML definition — the agent stops when its turn limit is exhausted.
+agentic-dev infers tracks automatically, but if you want explicit control —
+or to skip the Claude discovery call entirely — drop an `agentic-dev.yaml`
+at the project root and commit it. The file is authoritative; the discovery
+agent is skipped when it's present.
 
-## MCP Configuration for Third-Party Services
+```yaml
+# agentic-dev.yaml
+tracks:
+  - name: backend
+    path: backend
+    kind: api
+    uat_kind: api
+  - name: frontend
+    path: frontend
+    kind: web
+    uat_kind: web
+```
 
-The agency uses MCP (Model Context Protocol) servers to give agents direct access to third-party services. Rather than maintaining its own MCP configuration, agentic-dev relies on **Claude Code's native MCP infrastructure** — any MCP servers configured in your Claude Code environment are automatically available to all spawned agents.
+`kind` and `uat_kind` are free-form strings. Common values: `web`, `api`,
+`cli`, `worker`, `desktop`, `mobile`, `library`, `generic`. Set `uat_kind`
+when a runtime UAT is feasible; leave it null otherwise.
 
-### Setting Up MCP Servers
-
-Configure MCP servers using Claude Code's built-in tools:
-
-| Service | Setup Command | Alternative |
-|---------|--------------|-------------|
-| **Figma** | `claude mcp add figma` | Claude Code's OAuth UI |
-| **GitHub** | `claude mcp add github` | Claude Code's OAuth UI |
-| **Stripe** | `claude mcp add stripe` | Manual in `~/.claude/settings.json` |
-| **Supabase** | `claude mcp add supabase` | Manual in `~/.claude/settings.json` |
-
-MCP servers can be configured at three levels (later overrides earlier):
-1. **Global:** `~/.claude/settings.json` — available to all projects
-2. **Project:** `<project>/.claude/settings.json` — project-specific
-3. **Project-local:** `<project>/.claude/settings.local.json` — local overrides (not committed)
-
-For services that support OAuth (like Figma), Claude Code provides a UI-friendly authentication flow that opens your browser automatically.
-
-See https://docs.anthropic.com/en/docs/claude-code/mcp for full MCP documentation.
-
-### How It Works
-
-1. The sprint planner identifies which sprints need third-party integrations
-2. Before sprints begin, the engine checks your Claude Code settings and logs warnings for services not yet configured
-3. During the integration phase, agents inherit all MCP servers from your Claude Code environment automatically
-4. For services without an MCP server configured, the integration agent falls back to SDK-only mode using `WebSearch` and official documentation
-
-### Pre-Flight Validation
-
-The CLI validates MCP prerequisites before starting expensive operations. For example, `--from-figma` checks that a Figma MCP server is configured in your Claude Code settings before launching any agents. If validation fails, the CLI shows a status table and setup instructions.
-
-## Troubleshooting
-
-### Pipeline Failed
-
-Check the error: `agentic-dev status my-app`
-
-Common causes:
-- Claude CLI not authenticated
-- Budget exceeded (increase max_turns in agent YAML)
-- Network issues
-
-Resume after fixing: `agentic-dev resume my-app`
-
-### Shell Quoting
-
-URLs often contain `&`, `?`, and `#` — characters that have special meaning in the shell. If you pass them unquoted, the shell interprets them before agentic-dev sees them. For example:
+Inspect what's persisted:
 
 ```bash
-# BROKEN — the & backgrounds the process; --frontend becomes a separate command
-agentic-dev adopt /path --from-figma https://figma.com/file/abc?m=auto&t=xyz --frontend client
-
-# FIXED — quote the URL and any multi-word values
-agentic-dev adopt /path --from-figma "https://figma.com/file/abc?m=auto&t=xyz" --frontend client
+agentic-dev tracks
+agentic-dev tracks --rediscover   # re-run discovery and overwrite the saved tracks
 ```
 
-**Rule of thumb:** always wrap URLs and multi-word values in double quotes. This applies to any flag that takes a string value, including `--from-figma`, `--from-codebase`, `--extend`, and `--feedback`.
+## Other commands (all operate on the cwd-resolved project)
 
-### Agent Output Issues
+```bash
+agentic-dev status              # pipeline phase, sprints, cost
+agentic-dev resume              # continue a paused/failed pipeline
+agentic-dev resume --feedback "be more conservative with deletions"
+agentic-dev resume --skip-sprint 3
+agentic-dev remediate           # re-enter the pipeline using the last UAT report
+agentic-dev config --autonomy full
+agentic-dev config --checkpoints after_design,before_uat
+agentic-dev logs                # latest pipeline run log
+agentic-dev logs --agent architect
+agentic-dev cost                # cost breakdown by agent/sprint
+```
 
-Check logs: `agentic-dev logs my-app --agent <agent-name>`
+There is no `agentic-dev new` or `agentic-dev update`. Both are subsumed
+by `work` — first call onboards, subsequent calls enqueue updates.
 
-Logs contain the full rendered prompt and raw Claude CLI output for each agent run.
+## Checkpoints
+
+By default the pipeline pauses after design (architecture + sprint plan)
+so you can review specs before code is written. Skip the pause with
+`agentic-dev config --autonomy full`, or enable additional checkpoints:
+
+```bash
+agentic-dev config --checkpoints after_design,after_each_sprint,before_uat
+```
+
+Resume after a checkpoint with `agentic-dev resume`. Inject feedback with
+`agentic-dev resume --feedback "use TanStack Query, not Redux"`.
+
+## Where artifacts live
+
+Everything the agency produces is under `<project>/.agentic-dev/artifacts/`:
+
+- `<track>_spec.md` — per-track architecture spec
+- `api_contract.md` — cross-track API contract (when any track is `kind=api`)
+- `sprint_plan.md` — sprint plan with `Tracks in scope:` lines
+- `track_<name>_analysis.md` — existing-code analysis fed to the architect
+- `existing_code_analyses.md` — concatenated input for the architect
+- `qa/<name>.md` — per-step QA reports
+- `uat_report_<track>.md` and `uat_report.md` — UAT verdicts
+- `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots and transcripts
+
+The pipeline overwrites artifacts in place; per-cycle history is in
+`.agentic-dev/history/state-*.json` and the git history of the project repo.
+
+## Notes for adopting an existing project
+
+Just `cd` into it and run `agentic-dev work "<your prompt>"`. The discovery
+pass treats it as a multi-track adoption, the analyses go to the architect,
+and the architect reverse-engineers per-track specs that reflect the actual
+code. Existing files are never touched by the scaffolder; the developer
+agents have no `Delete` tool and modify in place.
+
+If discovery doesn't infer your layout correctly, drop an `agentic-dev.yaml`
+at the project root (see [Track inference](#track-inference-and-overrides))
+and re-run.

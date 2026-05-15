@@ -2,64 +2,99 @@
 
 Autonomous software development agency powered by Claude Code CLI.
 
-## Architecture: tracks, not fixed roles
+agentic-dev is a **process enforcer**, not a project scaffolder. You run it
+from inside an existing project the way you run `git` or `claude`. There is
+no `new` command, no app-name registry, no `--path` flag. The directory you
+invoke it from is the project; the tool's job is to enforce a deterministic
+plan → architecture → sprints → QA → UAT pipeline.
 
-A project is a collection of **tracks**, where each track is one codebase
-(`Track(name, path, kind, uat_kind)`). A track lives in its own nested
-directory inside the project root. The default for a fresh project is a single
-track named `app` at the repo root; multi-codebase projects declare each track
-explicitly via repeatable `--track name::path::kind[::uat_kind]` flags on
-`agentic-dev new`.
-
-Pipeline phases:
+## The pipeline
 
 ```
 IDLE -> INPUT_PROCESSING -> FEATURE_ANALYSIS -> ARCHITECTURE -> SPRINT_PLANNING
      -> DESIGN_CHECKPOINT -> SPRINTING -> UAT -> COMPLETE
 ```
 
-The architecture phase produces one `<track>_spec` per declared track, plus an
-`api_contract` only when at least one track has `kind == "api"`. The sprint
-planner emits a `**Tracks in scope:**` line per sprint; the sprint runner
-iterates those tracks, invoking a single generic `developer` + `qa` pair per
-track with the track kind injected into the prompt. UAT iterates every
-UAT-capable track (`track.uat_kind is not None`) and the
-`uat/aggregator.py` helper combines the per-track verdicts into the final
-report.
+Every phase is deterministic and persisted to `.agentic-dev/state.json`. The
+phases never change based on the project; only the agent outputs do.
 
-The minimum useful invocation is `agentic-dev new myapp` (one default track).
-The maximum is N nested directories with separate kinds, e.g.:
+## Primary command: `agentic-dev work`
 
+```bash
+cd /path/to/any/project
+agentic-dev work "add a referrals feature"
 ```
-agentic-dev new shop \
-  --track web::web::web::web \
-  --track api::api::api::api \
-  --track worker::workers/jobs::worker
-```
+
+`work` walks up from `cwd` looking for `.agentic-dev/`. If absent, it
+scaffolds one in `cwd` and runs the pipeline from scratch. On subsequent
+calls it dispatches on `state.phase`:
+
+| Phase on entry | Behaviour |
+|---|---|
+| no `.agentic-dev/` | discover tracks → analyse existing code → scaffold → run pipeline |
+| `COMPLETE` | enqueue the prompt as an update cycle |
+| `FAILED` | inject the prompt as feedback and auto-resume |
+| anything mid-pipeline | exit 1 — use `agentic-dev resume` |
+
+Other supporting commands all operate on the cwd-resolved project (no
+app-name argument):
+
+- `agentic-dev resume` — continue a paused/failed pipeline; takes
+  `--feedback` and `--skip-sprint`
+- `agentic-dev remediate` — re-enter the pipeline using the last UAT
+  report as the change request (the outer ralph loop)
+- `agentic-dev tracks` — show inferred tracks; `--rediscover` re-runs the
+  discovery agent and persists the result
+- `agentic-dev status` / `config` / `logs` / `cost` — read-only or
+  checkpoint-config helpers
+
+## Track inference
+
+A track is one codebase with a coherent build/run/test loop. Tracks are
+inferred on first `work`:
+
+1. If `agentic-dev.yaml` exists at the project root, its `tracks:` list
+   is authoritative.
+2. Otherwise, a Claude-driven `discovery_agent` (Read/Glob/Grep tools)
+   walks the project and emits one track per detected codebase, choosing
+   `kind` from the language/framework signals it finds and `uat_kind` to
+   match when a runtime UAT is feasible.
+
+`Track(name, path, kind, uat_kind)` is persisted to
+`.agentic-dev/config.json`. Override at any time by editing that file or
+adding an `agentic-dev.yaml`.
+
+Existing code in each track is analysed by `analyze_codebase` in parallel
+during onboarding; results land in `track_<name>_analysis.md` artifacts and
+are concatenated into `existing_code_analyses.md`, which the architect reads
+to reverse-engineer specs that reflect what's already there rather than
+designing from scratch.
 
 ## Artifact layout
 
 All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
-There is no top-level `docs/` directory. The relevant subpaths:
 
 - `.agentic-dev/artifacts/<track>_spec.md` — per-track architecture spec
 - `.agentic-dev/artifacts/api_contract.md` — emitted iff any track has `kind=api`
-- `.agentic-dev/artifacts/sprint_plan.md` — sprint plan with `Tracks in scope` lines
+- `.agentic-dev/artifacts/sprint_plan.md` — sprint plan with `Tracks in scope:` lines
+- `.agentic-dev/artifacts/track_<name>_analysis.md` — per-track existing-code analysis
+- `.agentic-dev/artifacts/existing_code_analyses.md` — concatenated input for the architect
+- `.agentic-dev/artifacts/figma_sources.md` — Figma URLs and user-supplied labels
 - `.agentic-dev/artifacts/qa/<name>.md` — per-step QA reports
 - `.agentic-dev/artifacts/uat_report_<track>.md` — per-track UAT verdict
 - `.agentic-dev/artifacts/uat_report.md` — aggregated multi-track UAT report
 - `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots, transcripts
 - `.agentic-dev/state.json` — pipeline state
-- `.agentic-dev/config.json` — project config (tracks, checkpoint, etc.)
+- `.agentic-dev/config.json` — project config (tracks, checkpoint, autonomy)
 
 ## Ralph-loop semantics
 
-There is no separate outer "ralph" loop. Two layered loops already give
+There is no separate outer "ralph" loop. Two layered loops give
 ralph-style persistence:
 
 1. The QA-correction cycle inside `run_qa_cycle` retries the action agent
    against the QA agent's feedback up to a bounded number of corrections.
-2. The unbounded `agentic-dev remediate <app>` command re-enters the pipeline
+2. The unbounded `agentic-dev remediate` command re-enters the pipeline
    from feature analysis whenever UAT reports `FAIL`, increments
    `remediation_cycle`, and is intended to be run as many times as needed
    until UAT passes.
@@ -67,13 +102,13 @@ ralph-style persistence:
 Treat `remediate` as the outer ralph loop and the per-agent QA correction
 cycle as the inner one.
 
-## Removed commands and features
+## Removed commands
 
-`adopt`, `sync`, and `integrate` have been removed. They existed only to
-reconcile the previous frontend/backend/docs split, which no longer exists.
-For an existing codebase, point `agentic-dev new` at it via `--path` and
-declare the tracks with `--track`. For drift handling, edit specs in
-`.agentic-dev/artifacts/` and re-run the pipeline.
+`new`, `update`, `adopt`, `sync`, `integrate`, `--path`, `--track`, and the
+global project-name registry were removed in the process-enforcer refactor.
+For an existing codebase, just `cd` into it and run `agentic-dev work`.
+Drift handling: edit specs in `.agentic-dev/artifacts/` and re-run the
+pipeline.
 
 Document archiving (the old `docs/archive/cycle_N/` and `docs/archive/update_*/`
 directories) was removed along with the top-level `docs/` tree. The pipeline
@@ -100,4 +135,3 @@ overwrites artifacts in place; per-cycle history is available via
 ```bash
 pytest
 ```
-

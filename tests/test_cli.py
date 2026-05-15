@@ -19,7 +19,7 @@ from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import GracefulShutdown, RateLimitPause
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.state.manager import StateManager
-from agentic_dev.state.models import PipelinePhase, SprintState, SprintStatus
+from agentic_dev.state.models import PipelinePhase
 
 
 runner = CliRunner()
@@ -55,62 +55,6 @@ class TestHelpOutput:
         assert result.exit_code == 0
         assert "agentic-dev" in result.output.lower() or "autonomous" in result.output.lower()
 
-    def test_new_help(self) -> None:
-        result = runner.invoke(app, ["new", "--help"])
-        assert result.exit_code == 0
-
-    def test_new_help_documents_track_flag(self) -> None:
-        result = runner.invoke(app, ["new", "--help"])
-        assert result.exit_code == 0
-        assert "--track" in result.output
-
-
-class TestTrackFlag:
-    """Tests for the --track flag on ``new``."""
-
-    def test_invalid_track_value_rejected(self) -> None:
-        result = runner.invoke(app, ["new", "myapp", "--track", ""])
-        assert result.exit_code == 1
-        assert "Invalid --track" in result.output
-
-    def test_default_track_when_omitted(self, tmp_path: Path) -> None:
-        from agentic_dev.config import load_project_config
-        from agentic_dev.state.manager import StateManager
-
-        with patch("agentic_dev.cli._run_pipeline"), \
-             patch("agentic_dev.cli._collect_user_requirements", return_value="build x"):
-            result = runner.invoke(
-                app,
-                ["new", "myapp", "--path", str(tmp_path)],
-            )
-        assert result.exit_code == 0, result.output
-        state = StateManager(tmp_path / "myapp").load()
-        assert [t.name for t in state.tracks] == ["app"]
-        cfg = load_project_config(tmp_path / "myapp")
-        assert [t.name for t in cfg.tracks] == ["app"]
-
-    def test_explicit_tracks_persisted(self, tmp_path: Path) -> None:
-        from agentic_dev.config import load_project_config
-        from agentic_dev.state.manager import StateManager
-
-        with patch("agentic_dev.cli._run_pipeline"), \
-             patch("agentic_dev.cli._collect_user_requirements", return_value="build x"):
-            result = runner.invoke(
-                app,
-                [
-                    "new", "myapp",
-                    "--path", str(tmp_path),
-                    "--track", "web::web::web::web",
-                    "--track", "api::api::api::api",
-                ],
-            )
-        assert result.exit_code == 0, result.output
-        state = StateManager(tmp_path / "myapp").load()
-        assert {t.name for t in state.tracks} == {"web", "api"}
-        cfg = load_project_config(tmp_path / "myapp")
-        assert {t.name for t in cfg.tracks} == {"web", "api"}
-
-
 class TestMoreHelpOutput:
     def test_resume_help(self) -> None:
         result = runner.invoke(app, ["resume", "--help"])
@@ -133,860 +77,6 @@ class TestMoreHelpOutput:
         result = runner.invoke(app, ["cost", "--help"])
         assert result.exit_code == 0
 
-
-class TestNewCommand:
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_creates_project_structure(
-        self, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        """The new command should create base workspace (no frontend/backend yet)."""
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path)],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        project_dir = tmp_path / "my-app"
-        assert project_dir.is_dir()
-        assert (project_dir / ".agentic-dev").is_dir()
-        assert (project_dir / ".agentic-dev" / "artifacts").is_dir()
-        assert not (project_dir / "frontend").exists()
-        assert not (project_dir / "backend").exists()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_saves_initial_state(
-        self, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path)],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        state_mgr = StateManager(tmp_path / "my-app")
-        state = state_mgr.load()
-        assert state.project_name == "my-app"
-        assert state.phase == PipelinePhase.IDLE
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_saves_config(
-        self, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path)],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        config_path = tmp_path / "my-app" / AGENTIC_DEV_METADATA_DIR / CONFIG_FILE
-        assert config_path.exists()
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-        assert data["checkpoint"]["after_design"] is True
-        assert data["tracks"]
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_saves_user_input(
-        self, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path)],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
-        assert user_input_path.exists()
-        assert "todo" in user_input_path.read_text(encoding="utf-8").lower()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_calls_pipeline(
-        self, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path)],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        mock_run_pipeline.assert_called_once()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.onboarding.analyzer.analyze_codebase")
-    def test_from_codebase_runs_analyzer(
-        self, mock_analyze, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        from agentic_dev.claude.runner import ClaudeResult
-
-        mock_analyze.return_value = ClaudeResult(
-            text="# Codebase Analysis\nDetected: Django backend",
-            session_id="test",
-            cost_usd=0.5,
-            exit_code=0,
-            raw_json={},
-        )
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path), "--from-codebase", "/some/path"],
-            input="Extend this app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        mock_analyze.assert_called_once()
-        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
-        content = user_input_path.read_text(encoding="utf-8")
-        assert "Codebase Analysis" in content
-
-    def test_duplicate_project_fails(self, tmp_path: Path) -> None:
-        (tmp_path / "my-app").mkdir()
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path)],
-            input="Build something\n\n\n",
-        )
-        assert result.exit_code == 1
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_from_file_reads_requirements(
-        self, mock_run_pipeline, tmp_path: Path
-    ) -> None:
-        """--from-file should read requirements from a file instead of interactive input."""
-        req_file = tmp_path / "requirements.txt"
-        req_file.write_text(
-            "Build a comprehensive todo app with tags and filters",
-            encoding="utf-8",
-        )
-
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path), "--from-file", str(req_file)],
-        )
-
-        assert result.exit_code == 0, result.output
-        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
-        assert user_input_path.exists()
-        assert "comprehensive todo app" in user_input_path.read_text(encoding="utf-8").lower()
-
-    def test_from_file_nonexistent_fails(self, tmp_path: Path) -> None:
-        """--from-file with a missing file should exit with code 1."""
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path), "--from-file", "/nonexistent/file.txt"],
-        )
-
-        assert result.exit_code == 1
-        assert "not found" in result.output.lower()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_from_file_empty_fails(self, mock_run_pipeline, tmp_path: Path) -> None:
-        """--from-file with an empty file should exit with code 1."""
-        req_file = tmp_path / "empty.txt"
-        req_file.write_text("", encoding="utf-8")
-
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path), "--from-file", str(req_file)],
-        )
-
-        assert result.exit_code == 1
-
-
-class TestNewCommandFigma:
-    """Tests for --from-figma in the new command."""
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_does_not_concatenate_into_user_input(
-        self, mock_mcp, mock_pipeline, tmp_path: Path
-    ) -> None:
-        """Figma URLs should NOT be appended to user_input."""
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path),
-             "--from-figma", "https://figma.com/file/abc"],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        user_input_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "user_input.md"
-        content = user_input_path.read_text(encoding="utf-8")
-        assert "figma.com/file/abc" not in content
-        assert "todo" in content.lower()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_writes_figma_sources_doc(
-        self, mock_mcp, mock_pipeline, tmp_path: Path
-    ) -> None:
-        """--from-figma should persist URLs in figma_sources document."""
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path),
-             "--from-figma", "https://figma.com/file/abc::Main UI"],
-            input="Build a todo app\n\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        figma_sources_path = tmp_path / "my-app" / ".agentic-dev" / "artifacts" / "figma_sources.md"
-        assert figma_sources_path.exists()
-        content = figma_sources_path.read_text(encoding="utf-8")
-        assert "https://figma.com/file/abc" in content
-        assert "Main UI" in content
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_only_does_not_abort(
-        self, mock_mcp, mock_pipeline, tmp_path: Path
-    ) -> None:
-        """--from-figma alone (no text input) should NOT abort."""
-        result = runner.invoke(
-            app,
-            ["new", "my-app", "--path", str(tmp_path),
-             "--from-figma", "https://figma.com/file/abc"],
-            input="\n\n",
-        )
-
-        assert result.exit_code == 0, result.output
-        mock_pipeline.assert_called_once()
-
-
-class TestStatusCommand:
-    def test_displays_state(self, project_with_state: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["status", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert "test-app" in result.output
-        assert "IDLE" in result.output
-
-    def test_missing_project_fails(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["status", "nonexistent", "--path", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-
-    def test_no_app_name_fails(self) -> None:
-        result = runner.invoke(app, ["status"])
-        assert result.exit_code == 1
-
-
-class TestConfigCommand:
-    def test_set_autonomy_full(self, project_with_state: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["config", "test-app", "--autonomy", "full", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert "after_design: False" in result.output
-
-    def test_set_autonomy_maximum(self, project_with_state: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["config", "test-app", "--autonomy", "maximum", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert "after_design: True" in result.output
-        assert "after_each_sprint: True" in result.output
-        assert "before_uat: True" in result.output
-
-    def test_set_individual_checkpoints(self, project_with_state: Path) -> None:
-        result = runner.invoke(
-            app,
-            [
-                "config", "test-app",
-                "--checkpoints", "after_design,before_uat",
-                "--path", str(project_with_state),
-            ],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert "after_design: True" in result.output
-        assert "before_uat: True" in result.output
-        assert "after_each_sprint: False" in result.output
-
-    def test_config_persists(self, project_with_state: Path) -> None:
-        runner.invoke(
-            app,
-            ["config", "test-app", "--autonomy", "full", "--path", str(project_with_state)],
-        )
-
-        config_path = (
-            project_with_state / "test-app" / AGENTIC_DEV_METADATA_DIR / CONFIG_FILE
-        )
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-        assert data["after_design"] is False
-        assert data["after_each_sprint"] is False
-        assert data["before_uat"] is False
-
-    def test_missing_project_fails(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["config", "nonexistent", "--autonomy", "full", "--path", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-
-
-class TestResumeCommand:
-    def test_no_app_name_fails(self) -> None:
-        result = runner.invoke(app, ["resume"])
-        assert result.exit_code == 1
-
-    def test_missing_project_fails(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["resume", "nonexistent", "--path", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_injects_feedback(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        result = runner.invoke(
-            app,
-            [
-                "resume", "test-app",
-                "--feedback", "Please add dark mode",
-                "--path", str(project_with_state),
-            ],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert "Feedback injected" in result.output
-
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        assert state.checkpoint_feedback == "Please add dark mode"
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_skip_sprint_marks_sprint_complete(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        """--skip-sprint N marks sprint N as complete before resuming."""
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.FAILED
-        state.failed_at_phase = PipelinePhase.SPRINTING
-        state.sprints = [
-            SprintState(sprint_number=1, name="Foundation", status=SprintStatus.COMPLETE),
-            SprintState(sprint_number=2, name="Auth", status=SprintStatus.COMPLETE),
-            SprintState(sprint_number=3, name="Overdue Detection", status=SprintStatus.FAILED),
-        ]
-        state_mgr.save(state)
-
-        result = runner.invoke(
-            app,
-            [
-                "resume", "test-app",
-                "--skip-sprint", "3",
-                "--path", str(project_with_state),
-            ],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert "Skipped sprint 3" in result.output
-
-        updated_state = state_mgr.load()
-        skipped = next(s for s in updated_state.sprints if s.sprint_number == 3)
-        assert skipped.status == SprintStatus.COMPLETE
-        assert skipped.completed_at is not None
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_skip_sprint_invalid_number_fails(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        """--skip-sprint with a non-existent sprint number exits with code 1."""
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.FAILED
-        state.failed_at_phase = PipelinePhase.SPRINTING
-        state.sprints = [
-            SprintState(sprint_number=1, name="Foundation", status=SprintStatus.FAILED),
-        ]
-        state_mgr.save(state)
-
-        result = runner.invoke(
-            app,
-            [
-                "resume", "test-app",
-                "--skip-sprint", "99",
-                "--path", str(project_with_state),
-            ],
-        )
-
-        assert result.exit_code == 1
-
-
-class TestCostCommand:
-    def test_no_runs_shows_message(self, project_with_state: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["cost", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0
-        assert "No agent runs" in result.output
-
-    def test_missing_project_fails(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["cost", "nonexistent", "--path", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-
-
-class TestLogsCommand:
-    def test_no_logs_shows_message(self, project_with_state: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["logs", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0
-        assert "No log files" in result.output or "No pipeline runs" in result.output
-
-    def test_displays_pipeline_log(self, project_with_state: Path) -> None:
-        logs_dir = (
-            project_with_state / "test-app" / AGENTIC_DEV_METADATA_DIR / "logs"
-        )
-        run_dir = logs_dir / "runs" / "abc123def456"
-        run_dir.mkdir(parents=True)
-        (run_dir / "pipeline.log").write_text(
-            "Log content here", encoding="utf-8"
-        )
-        latest = logs_dir / "latest"
-        latest.symlink_to(run_dir)
-
-        result = runner.invoke(
-            app,
-            ["logs", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0
-        assert "Log content here" in result.output
-
-    def test_filter_by_agent(self, project_with_state: Path) -> None:
-        logs_dir = (
-            project_with_state / "test-app" / AGENTIC_DEV_METADATA_DIR / "logs"
-        )
-        dumps_dir = logs_dir / "agent_dumps"
-        dumps_dir.mkdir(parents=True)
-        (dumps_dir / "architect_20260401T143201Z.json").write_text(
-            '{"agent": "architect"}', encoding="utf-8"
-        )
-        (dumps_dir / "frontend_20260401T143201Z.json").write_text(
-            '{"agent": "frontend"}', encoding="utf-8"
-        )
-
-        result = runner.invoke(
-            app,
-            ["logs", "test-app", "--agent", "architect", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0
-        assert "architect" in result.output
-        assert "frontend" not in result.output
-
-    def test_view_specific_run(self, project_with_state: Path) -> None:
-        logs_dir = (
-            project_with_state / "test-app" / AGENTIC_DEV_METADATA_DIR / "logs"
-        )
-        run_dir = logs_dir / "runs" / "specific123ab"
-        run_dir.mkdir(parents=True)
-        (run_dir / "pipeline.log").write_text("specific run log", encoding="utf-8")
-
-        result = runner.invoke(
-            app,
-            ["logs", "test-app", "--run", "specific123ab", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0
-        assert "specific run log" in result.output
-
-    def test_missing_project_fails(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["logs", "nonexistent", "--path", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-
-
-class TestUpdateCommand:
-    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
-    def test_requires_complete_state(self, mock_collect, project_with_state: Path) -> None:
-        """Update should fail when project is not in COMPLETE phase."""
-        result = runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 1
-        assert "COMPLETE" in result.output
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
-    def test_interactive_input_saves_doc(
-        self, mock_collect, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        result = runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0, result.output
-        user_input_path = project_with_state / "test-app" / ".agentic-dev" / "artifacts" / "user_input.md"
-        assert user_input_path.exists()
-        assert "dark mode" in user_input_path.read_text(encoding="utf-8").lower()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
-    def test_update_resets_state(
-        self, mock_collect, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state)],
-        )
-
-        updated_state = state_mgr.load()
-        assert updated_state.mode == "update"
-        assert updated_state.phase == PipelinePhase.FEATURE_ANALYSIS
-
-    @patch("agentic_dev.cli._collect_user_requirements", return_value="")
-    def test_empty_input_fails(self, mock_collect, project_with_state: Path) -> None:
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        result = runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 1
-
-    def test_missing_project_fails(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["update", "nonexistent", "--path", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_from_file_reads_requirements(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        """--from-file should read change description from a file."""
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        req_file = project_with_state / "changes.txt"
-        req_file.write_text("Add dark mode support", encoding="utf-8")
-
-        result = runner.invoke(
-            app,
-            ["update", "test-app", "--from-file", str(req_file), "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0, result.output
-        user_input_path = project_with_state / "test-app" / ".agentic-dev" / "artifacts" / "user_input.md"
-        assert "dark mode" in user_input_path.read_text(encoding="utf-8").lower()
-
-    def test_from_file_nonexistent_fails(self, project_with_state: Path) -> None:
-        """--from-file with a missing file should exit with code 1."""
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        result = runner.invoke(
-            app,
-            ["update", "test-app", "--from-file", "/no/such/file.txt", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 1
-        assert "not found" in result.output.lower()
-
-    def test_from_file_and_full_spec_mutually_exclusive(
-        self, project_with_state: Path
-    ) -> None:
-        """Providing both --from-file and --full-spec should error."""
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        req_file = project_with_state / "changes.txt"
-        req_file.write_text("Add dark mode", encoding="utf-8")
-
-        result = runner.invoke(
-            app,
-            [
-                "update", "test-app",
-                "--from-file", str(req_file),
-                "--full-spec", str(req_file),
-                "--path", str(project_with_state),
-            ],
-        )
-
-        assert result.exit_code == 1
-        assert "cannot use both" in result.output.lower()
-
-
-class TestUpdateCommandFigma:
-    """Tests for --from-figma in the update command."""
-
-    def _set_complete(self, project_with_state: Path) -> None:
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_only_runs_pipeline(
-        self, mock_mcp, mock_pipeline, project_with_state: Path
-    ) -> None:
-        """--from-figma alone should drive an update without text input."""
-        self._set_complete(project_with_state)
-
-        result = runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state),
-             "--from-figma", "https://figma.com/file/abc"],
-        )
-
-        assert result.exit_code == 0, result.output
-        mock_pipeline.assert_called_once()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_writes_figma_sources(
-        self, mock_mcp, mock_pipeline, project_with_state: Path
-    ) -> None:
-        """--from-figma should write figma_sources."""
-        self._set_complete(project_with_state)
-
-        runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state),
-             "--from-figma", "https://figma.com/file/abc::Main UI"],
-        )
-
-        project_dir = project_with_state / "test-app"
-        doc_store = DocumentStore(project_dir)
-        assert doc_store.exists("figma_sources")
-        assert "Main UI" in doc_store.read("figma_sources")
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_only_does_not_write_user_input(
-        self, mock_mcp, mock_pipeline, project_with_state: Path
-    ) -> None:
-        """--from-figma alone should not write user_input or change_request."""
-        self._set_complete(project_with_state)
-
-        runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state),
-             "--from-figma", "https://figma.com/file/abc"],
-        )
-
-        project_dir = project_with_state / "test-app"
-        # user_input might exist from archiving, but should not contain new content
-        # change_request should not be written
-        assert not (project_dir / ".agentic-dev" / "artifacts" / "change_request.md").exists()
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_only_restarts_from_architecture(
-        self, mock_mcp, mock_pipeline, project_with_state: Path
-    ) -> None:
-        """Figma-only update should restart from ARCHITECTURE phase."""
-        self._set_complete(project_with_state)
-
-        runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state),
-             "--from-figma", "https://figma.com/file/abc"],
-        )
-
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        assert state.phase == PipelinePhase.ARCHITECTURE
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.cli._collect_user_requirements", return_value="Add dark mode")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_with_text_writes_both_channels(
-        self, mock_mcp, mock_collect, mock_pipeline,
-        project_with_state: Path
-    ) -> None:
-        """--from-figma with text input writes both text and design channels."""
-        self._set_complete(project_with_state)
-
-        runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state),
-             "--from-figma", "https://figma.com/file/abc"],
-        )
-
-        project_dir = project_with_state / "test-app"
-        doc_store = DocumentStore(project_dir)
-        assert doc_store.exists("user_input")
-        assert "dark mode" in doc_store.read("user_input").lower()
-        assert doc_store.exists("figma_sources")
-
-    @patch("agentic_dev.cli._run_pipeline")
-    @patch("agentic_dev.mcp.setup.check_mcp_prerequisites", return_value=True)
-    def test_figma_with_full_spec_writes_figma_sources(
-        self, mock_mcp, mock_pipeline, project_with_state: Path
-    ) -> None:
-        """--full-spec + --from-figma should write figma_sources."""
-        self._set_complete(project_with_state)
-
-        spec_file = project_with_state / "full_spec.txt"
-        spec_file.write_text("Complete new spec", encoding="utf-8")
-
-        runner.invoke(
-            app,
-            ["update", "test-app", "--path", str(project_with_state),
-             "--full-spec", str(spec_file),
-             "--from-figma", "https://figma.com/file/abc"],
-        )
-
-        project_dir = project_with_state / "test-app"
-        doc_store = DocumentStore(project_dir)
-        assert doc_store.exists("figma_sources")
-
-
-class TestRemediateCommand:
-    def test_requires_complete_state(self, project_with_state: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["remediate", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 1
-        assert "COMPLETE" in result.output
-
-    def test_requires_uat_report(self, project_with_state: Path) -> None:
-        state_mgr = StateManager(project_with_state / "test-app")
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        result = runner.invoke(
-            app,
-            ["remediate", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 1
-        assert "UAT report" in result.output
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_remediate_resets_and_runs_pipeline(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        project_dir = project_with_state / "test-app"
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        doc_store = DocumentStore(project_dir)
-        doc_store.write("uat_report", "FAIL: Missing empty state handling.")
-
-        result = runner.invoke(
-            app,
-            ["remediate", "test-app", "--path", str(project_with_state)],
-        )
-
-        assert result.exit_code == 0, result.output
-        mock_run_pipeline.assert_called_once()
-
-        updated_state = state_mgr.load()
-        assert updated_state.mode == "remediate"
-        assert updated_state.phase == PipelinePhase.INPUT_PROCESSING
-        assert updated_state.remediation_cycle == 1
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_remediate_writes_composed_input(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        project_dir = project_with_state / "test-app"
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state_mgr.save(state)
-
-        doc_store = DocumentStore(project_dir)
-        doc_store.write("uat_report", "FAIL: Missing confirmation dialog.")
-
-        runner.invoke(
-            app,
-            ["remediate", "test-app", "--path", str(project_with_state)],
-        )
-
-        user_input = doc_store.read("user_input")
-        assert "Remediation Request" in user_input
-        assert "Missing confirmation dialog" in user_input
-
-    @patch("agentic_dev.cli._run_pipeline")
-    def test_remediate_increments_cycle(
-        self, mock_run_pipeline, project_with_state: Path
-    ) -> None:
-        project_dir = project_with_state / "test-app"
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
-        state.phase = PipelinePhase.COMPLETE
-        state.remediation_cycle = 2
-        state_mgr.save(state)
-
-        doc_store = DocumentStore(project_dir)
-        doc_store.write("uat_report", "FAIL: Still broken.")
-
-        runner.invoke(
-            app,
-            ["remediate", "test-app", "--path", str(project_with_state)],
-        )
-
-        updated_state = state_mgr.load()
-        assert updated_state.remediation_cycle == 3
-
-    def test_missing_project_fails(self, tmp_path: Path) -> None:
-        result = runner.invoke(
-            app,
-            ["remediate", "nonexistent", "--path", str(tmp_path)],
-        )
-        assert result.exit_code == 1
-
-    def test_remediate_help(self) -> None:
-        result = runner.invoke(app, ["remediate", "--help"])
-        assert result.exit_code == 0
-        assert "UAT" in result.output or "remediat" in result.output.lower()
 class TestRateLimitPauseResume:
     """CLI-level sleep-and-re-enter loop around ``engine.run()``."""
 
@@ -1166,3 +256,428 @@ class TestRunPipelineEngineConstruction:
             "state_manager",
             "checkpoint_config",
         }
+
+
+# ---------------------------------------------------------------------------
+# `work` command — cwd-based onboarding and state-transition dispatch
+# ---------------------------------------------------------------------------
+
+
+def _claude_result(text: str):
+    from agentic_dev.claude.runner import ClaudeResult
+
+    return ClaudeResult(
+        text=text,
+        session_id="test",
+        cost_usd=0.0,
+        exit_code=0,
+        raw_json={},
+    )
+
+
+def _fake_discovery_result(tracks):
+    from agentic_dev.discovery.agent import DiscoveryResult
+
+    return DiscoveryResult(tracks=tracks, reasoning="fake", raw_response="{}")
+
+
+class TestWorkCommandOnboarding:
+    """First-run behaviour of ``agentic-dev work``."""
+
+    def test_uses_yaml_override_when_present(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = tmp_path / "skillsbloom"
+        project.mkdir()
+        (project / "backend").mkdir()
+        (project / "backend" / "main.py").write_text("# fastapi\n")
+        (project / "agentic-dev.yaml").write_text(
+            "tracks:\n"
+            "  - name: backend\n    path: backend\n    kind: api\n    uat_kind: api\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._run_pipeline") as mock_run, patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ) as mock_analyse, patch(
+            "agentic_dev.discovery.agent.discover_tracks"
+        ) as mock_discover:
+            result = runner.invoke(app, ["work", "do the thing"])
+
+        assert result.exit_code == 0, result.output
+        mock_discover.assert_not_called()
+        mock_run.assert_called_once()
+        mock_analyse.assert_called_once()
+        # Config persisted the override tracks.
+        cfg_path = project / AGENTIC_DEV_METADATA_DIR / CONFIG_FILE
+        cfg = json.loads(cfg_path.read_text())
+        assert [t["name"] for t in cfg["tracks"]] == ["backend"]
+
+    def test_runs_discovery_when_no_override(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from agentic_dev.tracks import Track
+
+        project = tmp_path / "fresh"
+        project.mkdir()
+        (project / "main.py").write_text("print('hi')\n")
+        monkeypatch.chdir(project)
+
+        discover_mock = AsyncMock(
+            return_value=_fake_discovery_result(
+                [Track(name="app", path=".", kind="api", uat_kind="api")]
+            )
+        )
+
+        with patch("agentic_dev.cli._run_pipeline") as mock_run, patch(
+            "agentic_dev.cli._analyze_existing_tracks"
+        ), patch(
+            "agentic_dev.discovery.discover_tracks", discover_mock
+        ):
+            result = runner.invoke(app, ["work", "build it"])
+
+        assert result.exit_code == 0, result.output
+        discover_mock.assert_awaited_once()
+        mock_run.assert_called_once()
+
+    def test_runs_analyser_on_non_empty_tracks(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+
+        project = tmp_path / "two-track"
+        project.mkdir()
+        (project / "backend").mkdir()
+        (project / "backend" / "main.py").write_text("# fastapi\n")
+        (project / "frontend").mkdir()
+        (project / "frontend" / "package.json").write_text('{"name": "x"}\n')
+        (project / "agentic-dev.yaml").write_text(
+            "tracks:\n"
+            "  - name: backend\n    path: backend\n    kind: api\n    uat_kind: api\n"
+            "  - name: frontend\n    path: frontend\n    kind: web\n    uat_kind: web\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(project)
+
+        analyse_mock = AsyncMock(
+            return_value=[
+                _claude_result("# Backend Analysis\n"),
+                _claude_result("# Frontend Analysis\n"),
+            ]
+        )
+
+        with patch("agentic_dev.cli._run_pipeline"), patch(
+            "agentic_dev.onboarding.analyzer.analyze_codebases", analyse_mock
+        ):
+            result = runner.invoke(app, ["work", "add referrals"])
+
+        assert result.exit_code == 0, result.output
+        analyse_mock.assert_awaited_once()
+        sources = analyse_mock.await_args.args[1]
+        assert {Path(s.value).name for s in sources} == {"backend", "frontend"}
+
+        artifacts = project / AGENTIC_DEV_METADATA_DIR / "artifacts"
+        assert (artifacts / "track_backend_analysis.md").is_file()
+        assert (artifacts / "track_frontend_analysis.md").is_file()
+        combined = (artifacts / "existing_code_analyses.md").read_text()
+        assert "backend (api)" in combined
+        assert "frontend (web)" in combined
+
+    def test_skips_analyser_when_all_tracks_empty(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+
+        project = tmp_path / "greenfield"
+        project.mkdir()
+        (project / "agentic-dev.yaml").write_text(
+            "tracks:\n  - name: app\n    path: .\n    kind: web\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(project)
+
+        analyse_mock = AsyncMock(return_value=[])
+
+        with patch("agentic_dev.cli._run_pipeline"), patch(
+            "agentic_dev.onboarding.analyzer.analyze_codebases", analyse_mock
+        ):
+            result = runner.invoke(app, ["work", "build a todo app"])
+
+        assert result.exit_code == 0, result.output
+        analyse_mock.assert_not_called()
+        artifacts = project / AGENTIC_DEV_METADATA_DIR / "artifacts"
+        assert not (artifacts / "existing_code_analyses.md").exists()
+
+    def test_first_run_without_requirements_fails(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = tmp_path / "p"
+        project.mkdir()
+        (project / "agentic-dev.yaml").write_text(
+            "tracks:\n  - name: app\n    path: .\n    kind: web\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(project)
+
+        # No prompt, no --from-file, no --from-figma, no stdin input.
+        result = runner.invoke(app, ["work"], input="")
+
+        assert result.exit_code == 1
+        assert "no requirements provided" in result.output.lower()
+
+
+class TestWorkCommandDispatch:
+    """State-transition behaviour on subsequent ``agentic-dev work`` calls."""
+
+    def _seed_project(self, tmp_path: Path, phase: PipelinePhase) -> Path:
+        from agentic_dev.config import ProjectConfig, save_project_config
+        from agentic_dev.workspace.manager import ensure_scaffold
+
+        project = tmp_path / "already-running"
+        ensure_scaffold(project)
+        save_project_config(project, ProjectConfig(app_name="already-running"))
+        sm = StateManager(project)
+        state = sm.create_initial("already-running")
+        state.phase = phase
+        if phase == PipelinePhase.FAILED:
+            # ``resume_from_failure`` requires a recorded failure point.
+            state.failed_at_phase = PipelinePhase.SPRINTING
+        sm.save(state)
+        return project
+
+    def test_complete_project_enqueues_update(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = self._seed_project(tmp_path, PipelinePhase.COMPLETE)
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._start_update_cycle") as mock_update:
+            result = runner.invoke(app, ["work", "add a /version endpoint"])
+
+        assert result.exit_code == 0, result.output
+        mock_update.assert_called_once()
+        kwargs = mock_update.call_args.kwargs
+        assert kwargs["mode"] == "update"
+        assert kwargs["restart_phase"] == PipelinePhase.FEATURE_ANALYSIS
+        assert kwargs["is_targeted"] is True
+        assert kwargs["change_input"] == "add a /version endpoint"
+
+    def test_failed_project_resumes_with_feedback(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = self._seed_project(tmp_path, PipelinePhase.FAILED)
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._run_pipeline") as mock_run:
+            result = runner.invoke(app, ["work", "try the /version idea again"])
+
+        assert result.exit_code == 0, result.output
+        mock_run.assert_called_once()
+        # The new prompt was injected as checkpoint feedback before resumption.
+        state = StateManager(project).load()
+        assert state.checkpoint_feedback == "try the /version idea again"
+
+    def test_mid_pipeline_errors(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = self._seed_project(tmp_path, PipelinePhase.ARCHITECTURE)
+        monkeypatch.chdir(project)
+
+        with patch("agentic_dev.cli._run_pipeline") as mock_run, patch(
+            "agentic_dev.cli._start_update_cycle"
+        ) as mock_update:
+            result = runner.invoke(app, ["work", "another change"])
+
+        assert result.exit_code == 1
+        assert "in progress" in result.output.lower()
+        mock_run.assert_not_called()
+        mock_update.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Cwd-based commands: status / config / resume / remediate / cost / logs / tracks
+# ---------------------------------------------------------------------------
+
+
+def _seed_minimal_project(tmp_path: Path, phase: PipelinePhase = PipelinePhase.IDLE) -> Path:
+    """Create a minimal agentic-dev project at ``tmp_path/proj`` for cwd tests."""
+    from agentic_dev.config import ProjectConfig, save_project_config
+    from agentic_dev.workspace.manager import ensure_scaffold
+
+    project = tmp_path / "proj"
+    ensure_scaffold(project)
+    save_project_config(project, ProjectConfig(app_name="proj"))
+    sm = StateManager(project)
+    state = sm.create_initial("proj")
+    state.phase = phase
+    sm.save(state)
+    return project
+
+
+class TestCwdCommandsResolveProject:
+    """Every cwd-based command should error cleanly when run outside a project."""
+
+    @pytest.mark.parametrize("command", [
+        ["status"],
+        ["resume"],
+        ["remediate"],
+        ["config"],
+        ["logs"],
+        ["cost"],
+        ["tracks"],
+    ])
+    def test_errors_outside_managed_project(
+        self, command, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, command)
+        assert result.exit_code == 1
+        assert "no agentic-dev project found" in result.output.lower()
+
+
+class TestStatusCommand:
+    def test_displays_phase(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path, PipelinePhase.SPRINTING)
+        monkeypatch.chdir(project)
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0, result.output
+        assert "SPRINTING" in result.output
+
+
+class TestResumeCommand:
+    def test_injects_feedback(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path, PipelinePhase.ARCHITECTURE)
+        monkeypatch.chdir(project)
+        with patch("agentic_dev.cli._run_pipeline") as mock_run:
+            result = runner.invoke(app, ["resume", "--feedback", "try harder"])
+        assert result.exit_code == 0, result.output
+        mock_run.assert_called_once()
+        state = StateManager(project).load()
+        assert state.checkpoint_feedback == "try harder"
+
+    def test_failed_state_auto_recovers(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path, PipelinePhase.FAILED)
+        state = StateManager(project).load()
+        state.failed_at_phase = PipelinePhase.SPRINTING
+        StateManager(project).save(state)
+        monkeypatch.chdir(project)
+        with patch("agentic_dev.cli._run_pipeline"):
+            result = runner.invoke(app, ["resume"])
+        assert result.exit_code == 0, result.output
+        state = StateManager(project).load()
+        assert state.phase == PipelinePhase.SPRINTING
+
+
+class TestRemediateCommand:
+    def test_requires_complete_state(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path, PipelinePhase.SPRINTING)
+        monkeypatch.chdir(project)
+        result = runner.invoke(app, ["remediate"])
+        assert result.exit_code == 1
+        assert "COMPLETE" in result.output
+
+    def test_requires_uat_report(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path, PipelinePhase.COMPLETE)
+        monkeypatch.chdir(project)
+        result = runner.invoke(app, ["remediate"])
+        assert result.exit_code == 1
+        assert "uat report" in result.output.lower()
+
+    def test_remediate_runs_update_cycle(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = _seed_minimal_project(tmp_path, PipelinePhase.COMPLETE)
+        DocumentStore(project).write(
+            "uat_report",
+            "## Overall Result: FAIL\nSomething broke",
+        )
+        monkeypatch.chdir(project)
+        with patch("agentic_dev.cli._start_update_cycle") as mock_update:
+            result = runner.invoke(app, ["remediate"])
+        assert result.exit_code == 0, result.output
+        mock_update.assert_called_once()
+        assert mock_update.call_args.kwargs["mode"] == "remediate"
+        assert (
+            mock_update.call_args.kwargs["restart_phase"]
+            == PipelinePhase.INPUT_PROCESSING
+        )
+
+
+class TestConfigCommand:
+    def test_sets_autonomy(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path)
+        monkeypatch.chdir(project)
+        result = runner.invoke(app, ["config", "--autonomy", "full"])
+        assert result.exit_code == 0, result.output
+
+    def test_sets_individual_checkpoints(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project = _seed_minimal_project(tmp_path)
+        monkeypatch.chdir(project)
+        result = runner.invoke(
+            app, ["config", "--checkpoints", "after_design,before_uat"]
+        )
+        assert result.exit_code == 0, result.output
+
+
+class TestCostCommand:
+    def test_no_runs_message(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path)
+        monkeypatch.chdir(project)
+        result = runner.invoke(app, ["cost"])
+        assert result.exit_code == 0, result.output
+        assert "No agent runs" in result.output
+
+
+class TestLogsCommand:
+    def test_no_logs_message(self, tmp_path: Path, monkeypatch) -> None:
+        project = _seed_minimal_project(tmp_path)
+        monkeypatch.chdir(project)
+        result = runner.invoke(app, ["logs"])
+        assert result.exit_code == 0, result.output
+        assert "No pipeline runs" in result.output or "No log files" in result.output
+
+
+class TestTracksCommand:
+    def test_shows_persisted_tracks(self, tmp_path: Path, monkeypatch) -> None:
+        from agentic_dev.config import (
+            load_project_config,
+            save_project_config,
+        )
+        from agentic_dev.tracks import Track
+
+        project = _seed_minimal_project(tmp_path)
+        cfg = load_project_config(project)
+        cfg.tracks = [
+            Track(name="backend", path="backend", kind="api", uat_kind="api"),
+            Track(name="frontend", path="frontend", kind="web", uat_kind="web"),
+        ]
+        save_project_config(project, cfg)
+        monkeypatch.chdir(project)
+
+        result = runner.invoke(app, ["tracks"])
+
+        assert result.exit_code == 0, result.output
+        assert "backend" in result.output
+        assert "frontend" in result.output
+
+    def test_rediscover_overwrites_persisted_tracks(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from agentic_dev.config import load_project_config
+        from agentic_dev.tracks import Track
+
+        project = _seed_minimal_project(tmp_path)
+        monkeypatch.chdir(project)
+
+        with patch(
+            "agentic_dev.cli._resolve_tracks_for_in_place",
+            return_value=[
+                Track(name="api", path=".", kind="api", uat_kind="api"),
+            ],
+        ):
+            result = runner.invoke(app, ["tracks", "--rediscover"])
+
+        assert result.exit_code == 0, result.output
+        cfg = load_project_config(project)
+        assert [t.name for t in cfg.tracks] == ["api"]

@@ -1,4 +1,10 @@
-"""Workspace manager for creating and managing agentic-dev project directories."""
+"""Workspace scaffolding for agentic-dev projects.
+
+A project is whatever directory contains ``.agentic-dev/`` — there is no
+global registry and no app-name concept. ``ensure_scaffold`` is the single
+function that writes the metadata tree; everything else (project resolution,
+track directories) is the caller's responsibility.
+"""
 
 from pathlib import Path
 
@@ -7,79 +13,42 @@ from agentic_dev.config import (
     HISTORY_DIR,
     LOGS_DIR,
     SESSIONS_DIR,
-    resolve_project_path,
 )
 from agentic_dev.exceptions import WorkspaceError
-from agentic_dev.tracks import Track
 from agentic_dev.workspace.git import init_repo_sync
 
 
-class WorkspaceManager:
-    """Creates and manages project directory structures."""
+def ensure_scaffold(project_root: Path, fresh: bool = False) -> Path:
+    """Scaffold ``.agentic-dev/`` metadata inside ``project_root``.
 
-    def __init__(self, base_dir: Path) -> None:
-        self.base_dir = base_dir
+    Creates ``project_root`` if it doesn't exist, then writes the standard
+    metadata tree (``history/``, ``logs/``, ``sessions/``, ``artifacts/qa/``)
+    and initialises a git repo inside ``artifacts/``. Pre-existing files in
+    the project root are left untouched.
 
-    def create_project(self, app_name: str) -> Path:
-        """Create the project skeleton.
+    The operation is idempotent by default: if ``.agentic-dev/`` already
+    exists, the function returns without modifying anything. When ``fresh``
+    is True, an existing metadata directory causes a ``WorkspaceError``
+    instead.
+    """
+    project_root.mkdir(parents=True, exist_ok=True)
 
-        The project root contains only ``.agentic-dev/`` (with artifacts/
-        as the git-tracked artifact store) plus whatever track directories
-        the user declares later. There is no top-level ``docs/`` directory.
-        """
-        project_root = self.base_dir / app_name
-
-        if project_root.exists():
+    metadata_dir = project_root / AGENTIC_DEV_METADATA_DIR
+    if metadata_dir.exists():
+        if fresh:
             raise WorkspaceError(
-                f"Project directory already exists: {project_root}"
+                f"Project already initialised at {project_root}"
             )
-
-        metadata_dir = project_root / AGENTIC_DEV_METADATA_DIR
-        metadata_dir.mkdir(parents=True)
-        (metadata_dir / HISTORY_DIR).mkdir()
-        (metadata_dir / LOGS_DIR).mkdir()
-        (metadata_dir / SESSIONS_DIR).mkdir()
-
-        artifacts_dir = metadata_dir / "artifacts"
-        artifacts_dir.mkdir()
-        (artifacts_dir / "qa").mkdir()
-        init_repo_sync(artifacts_dir)
-
         return project_root
 
-    def create_track_dirs(self, app_name: str, tracks: list[Track]) -> None:
-        """Materialise each declared track's working directory.
+    metadata_dir.mkdir()
+    (metadata_dir / HISTORY_DIR).mkdir()
+    (metadata_dir / LOGS_DIR).mkdir()
+    (metadata_dir / SESSIONS_DIR).mkdir()
 
-        Raises WorkspaceError if the project directory does not exist.
-        """
-        project_root = self.get_project_dir(app_name)
-        for track in tracks:
-            (project_root / track.path).mkdir(parents=True, exist_ok=True)
+    artifacts_dir = metadata_dir / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "qa").mkdir()
+    init_repo_sync(artifacts_dir)
 
-    def get_project_dir(self, app_name: str) -> Path:
-        """Return the project root path.
-
-        Checks the global project registry first, then falls back
-        to base_dir / app_name.
-
-        Raises WorkspaceError if the project directory does not exist.
-        """
-        project_root = resolve_project_path(app_name, self.base_dir)
-
-        if not project_root.exists():
-            raise WorkspaceError(
-                f"Project directory does not exist: {project_root}"
-            )
-
-        return project_root
-
-    def list_projects(self) -> list[str]:
-        """List project names (directories that contain .agentic-dev/)."""
-        if not self.base_dir.exists():
-            return []
-
-        return sorted(
-            entry.name
-            for entry in self.base_dir.iterdir()
-            if entry.is_dir() and (entry / AGENTIC_DEV_METADATA_DIR).is_dir()
-        )
+    return project_root

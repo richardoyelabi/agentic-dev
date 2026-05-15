@@ -1,4 +1,4 @@
-"""Tests for ProjectConfig, config migration, and project registry."""
+"""Tests for ProjectConfig, config migration, and cwd-based project resolution."""
 
 import json
 
@@ -10,9 +10,7 @@ from agentic_dev.config import (
     ExternalSource,
     ProjectConfig,
     load_project_config,
-    load_registry,
-    register_project,
-    resolve_project_path,
+    resolve_project_dir,
     save_project_config,
 )
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig
@@ -130,44 +128,41 @@ class TestConfigMigration:
         assert restored == original
 
 
-class TestProjectRegistry:
-    def test_load_empty_registry(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("agentic_dev.config.REGISTRY_FILE", tmp_path / "registry.json")
-        assert load_registry() == {}
+class TestResolveProjectDir:
+    """`resolve_project_dir(cwd)` walks upward looking for ``.agentic-dev/``.
 
-    def test_register_and_load(self, tmp_path, monkeypatch):
-        registry_file = tmp_path / "registry.json"
-        monkeypatch.setattr("agentic_dev.config.REGISTRY_FILE", registry_file)
-        monkeypatch.setattr("agentic_dev.config.GLOBAL_REGISTRY_DIR", tmp_path)
+    Mirrors how ``git rev-parse --show-toplevel`` finds the repo root. When no
+    metadata directory exists anywhere above cwd, cwd itself is returned as
+    the prospective project root (it would be scaffolded on the first
+    ``agentic-dev work`` invocation).
+    """
 
-        register_project("my-app", tmp_path / "my-app")
-        registry = load_registry()
-        assert "my-app" in registry
-        assert registry["my-app"] == str((tmp_path / "my-app").resolve())
+    def test_returns_cwd_when_no_agentic_dev_anywhere(self, tmp_path):
+        sub = tmp_path / "fresh-project"
+        sub.mkdir()
+        assert resolve_project_dir(sub) == sub
 
-    def test_resolve_from_registry(self, tmp_path, monkeypatch):
-        registry_file = tmp_path / "registry.json"
-        monkeypatch.setattr("agentic_dev.config.REGISTRY_FILE", registry_file)
-        monkeypatch.setattr("agentic_dev.config.GLOBAL_REGISTRY_DIR", tmp_path)
+    def test_finds_agentic_dev_at_cwd(self, tmp_path):
+        project = tmp_path / "my-app"
+        (project / AGENTIC_DEV_METADATA_DIR).mkdir(parents=True)
+        assert resolve_project_dir(project) == project
 
-        project_path = tmp_path / "custom" / "location"
-        register_project("my-app", project_path)
+    def test_walks_up_to_find_agentic_dev_in_parent(self, tmp_path):
+        project = tmp_path / "my-app"
+        (project / AGENTIC_DEV_METADATA_DIR).mkdir(parents=True)
+        inner = project / "backend" / "src"
+        inner.mkdir(parents=True)
+        assert resolve_project_dir(inner) == project
 
-        resolved = resolve_project_path("my-app")
-        assert resolved == project_path.resolve()
+    def test_walks_up_multiple_levels(self, tmp_path):
+        project = tmp_path / "deep" / "nested" / "project"
+        (project / AGENTIC_DEV_METADATA_DIR).mkdir(parents=True)
+        deep = project / "a" / "b" / "c" / "d"
+        deep.mkdir(parents=True)
+        assert resolve_project_dir(deep) == project
 
-    def test_resolve_falls_back_to_base_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("agentic_dev.config.REGISTRY_FILE", tmp_path / "registry.json")
-
-        resolved = resolve_project_path("unknown-app", base_dir=tmp_path)
-        assert resolved == tmp_path / "unknown-app"
-
-    def test_register_overwrites_existing(self, tmp_path, monkeypatch):
-        registry_file = tmp_path / "registry.json"
-        monkeypatch.setattr("agentic_dev.config.REGISTRY_FILE", registry_file)
-        monkeypatch.setattr("agentic_dev.config.GLOBAL_REGISTRY_DIR", tmp_path)
-
-        register_project("my-app", tmp_path / "old-path")
-        register_project("my-app", tmp_path / "new-path")
-        registry = load_registry()
-        assert registry["my-app"] == str((tmp_path / "new-path").resolve())
+    def test_returns_cwd_when_filesystem_root_reached(self, tmp_path):
+        # No .agentic-dev/ anywhere in tmp_path's ancestor chain.
+        sub = tmp_path / "lonely" / "leaf"
+        sub.mkdir(parents=True)
+        assert resolve_project_dir(sub) == sub

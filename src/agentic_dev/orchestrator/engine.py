@@ -363,9 +363,17 @@ class PipelineEngine:
             except Exception:  # noqa: BLE001
                 pass
 
+        existing_code_analyses = (
+            self._doc_store.read("existing_code_analyses")
+            if self._doc_store.exists("existing_code_analyses")
+            else ""
+        )
+
         tracks = self._resolve_tracks(state)
         extra_context: dict[str, object] = {"tracks": tracks}
         extra_context.update(self._update_extra_context(state))
+        if existing_code_analyses:
+            extra_context["existing_code_analyses"] = existing_code_analyses
 
         result = await run_qa_cycle(
             claude=self._claude,

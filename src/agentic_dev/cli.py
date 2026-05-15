@@ -15,13 +15,13 @@ from rich.table import Table
 from agentic_dev.config import (
     AGENTIC_DEV_METADATA_DIR,
     CONFIG_FILE,
-    DEFAULT_PROJECTS_DIR,
     LATEST_SYMLINK,
     LOGS_DIR,
     MAX_CONSECUTIVE_RATE_LIMIT_PAUSES,
     RATE_LIMIT_PAUSE_POLL_INTERVAL_SECONDS,
     RUNS_DIR,
 )
+
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import (
     AgenticDevError,
@@ -32,8 +32,6 @@ from agentic_dev.exceptions import (
 from agentic_dev.orchestrator.checkpoint import CheckpointConfig, from_autonomy_level
 from agentic_dev.state.manager import StateManager
 from agentic_dev.state.models import PipelinePhase, PipelineState, SprintStatus
-from agentic_dev.workspace.manager import WorkspaceManager
-
 console = Console()
 
 app = typer.Typer(
@@ -46,12 +44,6 @@ app = typer.Typer(
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-
-
-def _get_workspace_manager(path: str | None) -> WorkspaceManager:
-    """Create a WorkspaceManager rooted at the given or default path."""
-    base_dir = Path(path) if path else DEFAULT_PROJECTS_DIR
-    return WorkspaceManager(base_dir=base_dir)
 
 
 def _display_checkpoint(state: PipelineState, project_dir: Path) -> None:
@@ -371,140 +363,37 @@ def _run_pipeline(project_dir: Path, state: PipelineState) -> None:
 # ---------------------------------------------------------------------------
 
 
-@app.command()
-def new(
-    app_name: str = typer.Argument(help="Name of the application to create"),
-    path: str | None = typer.Option(None, help="Directory to create the project in"),
-    from_file: str | None = typer.Option(
-        None, "--from-file", help="Path to a file containing project requirements"
-    ),
-    from_figma: list[str] | None = typer.Option(
-        None, help="Figma URL to import designs from (use '::' for annotation, repeatable)"
-    ),
-    from_codebase: list[str] | None = typer.Option(
-        None, help="Existing codebase to use as reference context (use '::' for annotation, repeatable)"
-    ),
-    track: list[str] | None = typer.Option(
-        None,
-        "--track",
-        help=(
-            "Declare a codebase track. Format: name[::path[::kind[::uat_kind]]]. "
-            "Repeatable; omit for single-track default."
-        ),
-    ),
-) -> None:
-    """Create a new project and start the development pipeline."""
-    try:
-        from agentic_dev.tracks import default_tracks, parse_track_spec  # noqa: WPS433
+def _resolve_managed_project() -> Path:
+    """Return the agentic-dev project root containing ``cwd``.
 
-        declared_tracks = default_tracks()
-        if track:
-            try:
-                declared_tracks = [parse_track_spec(s) for s in track]
-            except ValueError as exc:
-                console.print(f"[bold red]Invalid --track value: {exc}[/bold red]")
-                raise typer.Exit(code=1)
+    The cwd-based commands (``resume``, ``remediate``, ``status``, ``config``,
+    ``logs``, ``cost``, ``tracks``) call this to find the project. When no
+    ``.agentic-dev/`` is found anywhere in the cwd's ancestor chain, the
+    command exits with a clear error pointing the user at ``agentic-dev work``.
+    """
+    from agentic_dev.config import resolve_project_dir  # noqa: WPS433
 
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.create_project(app_name)
-        console.print(f"[green]Created project workspace at {project_dir}[/green]")
-
-        # Save initial pipeline state
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.create_initial(app_name)
-        state.tracks = declared_tracks
-        state_mgr.save(state)
-
-        # Save default checkpoint config
-        _save_config(project_dir, CheckpointConfig())
-
-        from agentic_dev.config import (  # noqa: WPS433
-            load_project_config,
-            save_project_config,
+    project_dir = resolve_project_dir(Path.cwd())
+    if not (project_dir / AGENTIC_DEV_METADATA_DIR).is_dir():
+        console.print(
+            "[bold red]No agentic-dev project found in the current directory "
+            "or any parent. Run `agentic-dev work \"<prompt>\"` to start one."
+            "[/bold red]"
         )
-        cfg = load_project_config(project_dir)
-        cfg.tracks = declared_tracks
-        names = ", ".join(t.name for t in declared_tracks)
-        console.print(f"[cyan]Tracks: {names}[/cyan]")
-        save_project_config(project_dir, cfg)
-
-        # Collect user requirements
-        if from_file:
-            user_input = _read_requirements_file(from_file)
-        else:
-            user_input = _collect_user_requirements()
-
-        from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
-
-        codebase_sources = [AnnotatedSource.parse(s) for s in (from_codebase or [])]
-        figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
-
-        if codebase_sources:
-            from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
-            from agentic_dev.onboarding.analyzer import analyze_codebases  # noqa: WPS433
-
-            for src in codebase_sources:
-                label = f"{src.value} ({src.annotation})" if src.annotation else src.value
-                console.print(f"[cyan]Analyzing existing codebase: {label}[/cyan]")
-
-            codebase_results = asyncio.run(
-                analyze_codebases(ClaudeRunner(), codebase_sources)
-            )
-            for src, result in zip(codebase_sources, codebase_results):
-                header = "\n\n---\n## Source: Codebase"
-                if src.annotation:
-                    header += f" - {src.annotation}"
-                header += f"\n**Path:** `{src.value}`\n\n"
-                user_input = (user_input or "") + header + result.text
-
-        if figma_sources:
-            from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
-            from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
-
-            if not check_mcp_prerequisites(["figma"], console):
-                raise typer.Exit(code=1)
-
-            for src in figma_sources:
-                label = f"{src.value} ({src.annotation})" if src.annotation else src.value
-                console.print(f"[cyan]Registered Figma source: {label}[/cyan]")
-
-        if not user_input and not figma_sources:
-            console.print("[bold red]No requirements provided. Aborting.[/bold red]")
-            raise typer.Exit(code=1)
-
-        # Save user input to docs/
-        doc_store = DocumentStore(project_dir)
-        if user_input:
-            doc_store.write("user_input", user_input)
-            console.print("[green]Saved requirements to docs/user_input.md[/green]")
-
-        if figma_sources:
-            write_figma_sources(doc_store, figma_sources)
-
-        _run_pipeline(project_dir, state)
-
-    except (AgenticDevError, RuntimeError) as exc:
-        _display_error(exc)
         raise typer.Exit(code=1)
+    return project_dir
 
 
 @app.command()
 def resume(
-    app_name: str | None = typer.Argument(None, help="Name of the application to resume"),
     feedback: str | None = typer.Option(None, help="Feedback to inject into the next agent"),
     skip_sprint: int | None = typer.Option(
         None, "--skip-sprint", help="Skip the given sprint number (mark as complete)"
     ),
-    path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
-    """Resume a paused or failed pipeline."""
-    if not app_name:
-        console.print("[bold red]Please provide an application name.[/bold red]")
-        raise typer.Exit(code=1)
-
+    """Resume a paused or failed pipeline in the current project."""
     try:
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.get_project_dir(app_name)
+        project_dir = _resolve_managed_project()
 
         state_mgr = StateManager(project_dir)
         state = state_mgr.load()
@@ -536,7 +425,7 @@ def resume(
             state_mgr.save(state)
             console.print("[cyan]Feedback injected into pipeline state.[/cyan]")
 
-        console.print(f"[green]Resuming project: {app_name}[/green]")
+        console.print(f"[green]Resuming project: {state.project_name}[/green]")
         _run_pipeline(project_dir, state)
 
     except AgenticDevError as exc:
@@ -594,156 +483,15 @@ def _start_update_cycle(
 
 
 @app.command()
-def update(
-    app_name: str = typer.Argument(help="Name of the application to update"),
-    full_spec: str | None = typer.Option(None, help="Path to full updated spec file"),
-    from_file: str | None = typer.Option(
-        None, "--from-file", help="Path to a file containing change requirements"
-    ),
-    from_figma: list[str] | None = typer.Option(
-        None, help="Figma URL to import designs from (use '::' for annotation, repeatable)"
-    ),
-    path: str | None = typer.Option(None, help="Directory containing the project"),
-) -> None:
-    """Trigger an update cycle on an existing project."""
+def remediate() -> None:
+    """Fix UAT failures by running a full remediation pipeline cycle.
+
+    Operates on the project containing ``cwd``. The most recent UAT report
+    is read from the doc store and fed back to the pipeline as the change
+    request, with ``mode=remediate`` so ``remediation_cycle`` is incremented.
+    """
     try:
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.get_project_dir(app_name)
-
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
-
-        if state.phase != PipelinePhase.COMPLETE:
-            console.print(
-                "[bold red]Project must be in COMPLETE state to update. "
-                f"Current phase: {state.phase}[/bold red]"
-            )
-            raise typer.Exit(code=1)
-
-        doc_store = DocumentStore(project_dir)
-
-        if full_spec and from_file:
-            console.print(
-                "[bold red]Cannot use both --full-spec and --from-file. "
-                "Please provide only one.[/bold red]"
-            )
-            raise typer.Exit(code=1)
-
-        # -- Text channel --
-        change_input: str | None = None
-        spec_changes: str | None = None
-        if full_spec:
-            spec_path = Path(full_spec)
-            if not spec_path.exists():
-                console.print(f"[bold red]Spec file not found: {full_spec}[/bold red]")
-                raise typer.Exit(code=1)
-            change_input = spec_path.read_text(encoding="utf-8")
-
-            # Read old structured_input before it gets overwritten for diff
-            old_structured_input = (
-                doc_store.read("structured_input")
-                if doc_store.exists("structured_input")
-                else ""
-            )
-            if old_structured_input:
-                from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
-                from agentic_dev.documents.diff import run_spec_diff  # noqa: WPS433
-
-                console.print("[cyan]Comparing old and new specs...[/cyan]")
-                log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
-                spec_changes = asyncio.run(
-                    run_spec_diff(
-                        ClaudeRunner(log_dir=log_dir),
-                        old_structured_input, change_input, project_dir,
-                    )
-                )
-        elif from_file:
-            change_input = _read_requirements_file(from_file)
-        elif not from_figma:
-            change_input = _collect_user_requirements()
-            if not change_input:
-                console.print(
-                    "[bold red]No change description provided.[/bold red]"
-                )
-                raise typer.Exit(code=1)
-        else:
-            change_input = _collect_user_requirements()
-            # Figma is provided, so empty text is acceptable
-
-        # -- Design channel --
-        from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
-
-        figma_sources = [AnnotatedSource.parse(s) for s in (from_figma or [])]
-        design_changes: str | None = None
-
-        if figma_sources:
-            from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
-            from agentic_dev.mcp.setup import check_mcp_prerequisites  # noqa: WPS433
-            from agentic_dev.onboarding.figma import detect_design_changes  # noqa: WPS433
-            from agentic_dev.onboarding.figma import write_figma_sources  # noqa: WPS433
-
-            if not check_mcp_prerequisites(["figma"], console):
-                raise typer.Exit(code=1)
-
-            write_figma_sources(doc_store, figma_sources)
-
-            # Detect design changes by comparing live Figma against existing specs
-            if doc_store.exists("frontend_spec"):
-                existing_spec = doc_store.read("frontend_spec")
-                log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / "logs"
-                figma_claude = ClaudeRunner(log_dir=log_dir)
-
-                console.print("[cyan]Detecting design changes against existing specs...[/cyan]")
-                change_result = asyncio.run(
-                    detect_design_changes(figma_claude, figma_sources, existing_spec, project_dir)
-                )
-                if change_result.has_changes:
-                    design_changes = change_result.summary
-                else:
-                    console.print("[green]No design changes detected.[/green]")
-
-        if not change_input and not figma_sources:
-            console.print("[bold red]No change description provided.[/bold red]")
-            raise typer.Exit(code=1)
-
-        # Determine restart phase using document diff
-        from agentic_dev.documents.diff import diff_structured_input  # noqa: WPS433
-
-        is_targeted = not full_spec
-        restart_phase = PipelinePhase.FEATURE_ANALYSIS
-        if full_spec and doc_store.exists("structured_input.md"):
-            old_input = doc_store.read("structured_input.md")
-            diff_result = diff_structured_input(old_input, change_input or "")
-            restart_phase = PipelinePhase(diff_result.restart_from.upper())
-        elif figma_sources and not change_input:
-            restart_phase = PipelinePhase.ARCHITECTURE
-
-        _start_update_cycle(
-            project_dir=project_dir,
-            state=state,
-            state_mgr=state_mgr,
-            change_input=change_input or None,
-            mode="update",
-            restart_phase=restart_phase,
-            is_targeted=is_targeted,
-            design_changes=design_changes,
-            spec_changes=spec_changes,
-        )
-
-    except AgenticDevError as exc:
-        _display_error(exc)
-        raise typer.Exit(code=1)
-
-
-@app.command()
-def remediate(
-    app_name: str = typer.Argument(help="Name of the application to remediate"),
-    path: str | None = typer.Option(None, help="Directory containing the project"),
-) -> None:
-    """Fix UAT failures by running a full remediation pipeline cycle."""
-    try:
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.get_project_dir(app_name)
+        project_dir = _resolve_managed_project()
 
         state_mgr = StateManager(project_dir)
         state = state_mgr.load()
@@ -771,12 +519,12 @@ def remediate(
         from agentic_dev.orchestrator.uat_composer import compose_remediation_input  # noqa: WPS433
 
         change_input = compose_remediation_input(
-            uat_report, app_name, tracks=state.tracks
+            uat_report, state.project_name, tracks=state.tracks
         )
 
         console.print(
             f"[cyan]Starting remediation cycle {state.remediation_cycle + 1} "
-            f"for {app_name}[/cyan]"
+            f"for {state.project_name}[/cyan]"
         )
 
         _start_update_cycle(
@@ -794,31 +542,12 @@ def remediate(
 
 
 @app.command()
-def status(
-    app_name: str | None = typer.Argument(None, help="Name of the application"),
-    path: str | None = typer.Option(None, help="Directory containing the project"),
-) -> None:
+def status() -> None:
     """Show pipeline status: current phase, sprint progress, costs."""
-    if not app_name:
-        console.print("[bold red]Please provide an application name.[/bold red]")
-        raise typer.Exit(code=1)
-
     try:
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.get_project_dir(app_name)
-
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
-
+        project_dir = _resolve_managed_project()
+        state = StateManager(project_dir).load()
         _display_status(state)
-
-        doc_store = DocumentStore(project_dir)
-        if doc_store.exists("sync_change_request"):
-            console.print(
-                "[yellow]Warning:[/yellow] Pending code changes from sync. "
-                "Run 'agentic-dev update' to apply them, or delete "
-                "docs/sync_change_request.md to dismiss."
-            )
 
     except AgenticDevError as exc:
         _display_error(exc)
@@ -827,15 +556,12 @@ def status(
 
 @app.command()
 def config(
-    app_name: str = typer.Argument(help="Name of the application"),
     checkpoints: str | None = typer.Option(None, help="Comma-separated checkpoint names to enable"),
     autonomy: str | None = typer.Option(None, help="Autonomy level: full, default, or maximum"),
-    path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
-    """Configure checkpoint behavior for a project."""
+    """Configure checkpoint behaviour for the current project."""
     try:
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.get_project_dir(app_name)
+        project_dir = _resolve_managed_project()
 
         if autonomy:
             cfg = from_autonomy_level(autonomy)
@@ -849,7 +575,7 @@ def config(
             cfg.before_uat = "before_uat" in checkpoint_names
 
         _save_config(project_dir, cfg)
-        console.print(f"[green]Configuration updated for {app_name}:[/green]")
+        console.print("[green]Configuration updated:[/green]")
         console.print(f"  after_design: {cfg.after_design}")
         console.print(f"  after_each_sprint: {cfg.after_each_sprint}")
         console.print(f"  before_uat: {cfg.before_uat}")
@@ -861,23 +587,19 @@ def config(
 
 @app.command()
 def logs(
-    app_name: str = typer.Argument(help="Name of the application"),
     run: str | None = typer.Option(None, help="Specific run ID to view"),
     jsonl: bool = typer.Option(False, "--jsonl", help="Show JSON lines instead of human-readable log"),
     agent: str | None = typer.Option(None, help="Filter agent dumps by agent name"),
-    path: str | None = typer.Option(None, help="Directory containing the project"),
 ) -> None:
-    """View pipeline run logs or agent dumps."""
+    """View pipeline run logs or agent dumps for the current project."""
     try:
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.get_project_dir(app_name)
+        project_dir = _resolve_managed_project()
 
         logs_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
         if not logs_dir.exists():
             console.print("[yellow]No log files found.[/yellow]")
             return
 
-        # If --agent is specified, show agent dumps
         if agent:
             dumps_dir = logs_dir / "agent_dumps"
             if not dumps_dir.exists():
@@ -895,7 +617,6 @@ def logs(
                 ))
             return
 
-        # Otherwise show pipeline run logs
         runs_dir = logs_dir / RUNS_DIR
         if run:
             run_dir = runs_dir / run
@@ -935,17 +656,11 @@ def logs(
 
 
 @app.command()
-def cost(
-    app_name: str = typer.Argument(help="Name of the application"),
-    path: str | None = typer.Option(None, help="Directory containing the project"),
-) -> None:
-    """Show cost breakdown by agent and sprint."""
+def cost() -> None:
+    """Show cost breakdown by agent and sprint for the current project."""
     try:
-        workspace_mgr = _get_workspace_manager(path)
-        project_dir = workspace_mgr.get_project_dir(app_name)
-
-        state_mgr = StateManager(project_dir)
-        state = state_mgr.load()
+        project_dir = _resolve_managed_project()
+        state = StateManager(project_dir).load()
 
         if not state.agent_runs:
             console.print("[yellow]No agent runs recorded yet.[/yellow]")
@@ -958,7 +673,6 @@ def cost(
         table.add_column("Cost (USD)", justify="right")
         table.add_column("Status")
 
-        # Group runs by sprint for visual clarity
         design_runs = [r for r in state.agent_runs if r.sprint is None]
         sprint_runs = [r for r in state.agent_runs if r.sprint is not None]
 
@@ -982,5 +696,297 @@ def cost(
         console.print(table)
 
     except AgenticDevError as exc:
+        _display_error(exc)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def tracks(
+    rediscover: bool = typer.Option(
+        False, "--rediscover", help="Re-run the discovery agent and overwrite the persisted tracks"
+    ),
+) -> None:
+    """Show the project's inferred tracks; optionally re-run discovery."""
+    try:
+        project_dir = _resolve_managed_project()
+
+        if rediscover:
+            from agentic_dev.config import (  # noqa: WPS433
+                load_project_config,
+                save_project_config,
+            )
+
+            new_tracks = _resolve_tracks_for_in_place(project_dir, rediscover=True)
+            cfg = load_project_config(project_dir)
+            cfg.tracks = new_tracks
+            save_project_config(project_dir, cfg)
+            console.print(
+                "[green]Persisted re-discovered tracks to "
+                ".agentic-dev/config.json[/green]"
+            )
+            return
+
+        from agentic_dev.config import load_project_config  # noqa: WPS433
+
+        cfg = load_project_config(project_dir)
+        table = Table(title="Tracks")
+        table.add_column("Name", style="bold")
+        table.add_column("Path")
+        table.add_column("Kind")
+        table.add_column("UAT kind")
+        for track in cfg.tracks:
+            table.add_row(
+                track.name,
+                track.path,
+                track.kind,
+                track.uat_kind or "-",
+            )
+        console.print(table)
+
+    except AgenticDevError as exc:
+        _display_error(exc)
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# `work` — cwd-based command implementing the process-enforcer model.
+# Subsequent invocations dispatch on pipeline state. First invocation runs
+# track discovery, analyses any existing code, scaffolds ``.agentic-dev/``,
+# and starts the deterministic pipeline.
+# ---------------------------------------------------------------------------
+
+
+def _collect_work_input(prompt: str | None, from_file: str | None) -> str:
+    """Resolve the user's requirements text for a single ``work`` invocation."""
+    if prompt and from_file:
+        console.print(
+            "[bold red]Cannot pass both a prompt and --from-file.[/bold red]"
+        )
+        raise typer.Exit(code=1)
+    if from_file:
+        return _read_requirements_file(from_file)
+    if prompt:
+        return prompt.strip()
+    if not sys.stdin.isatty():
+        return sys.stdin.read().strip()
+    return _collect_user_requirements()
+
+
+def _resolve_tracks_for_in_place(project_dir: Path, rediscover: bool) -> list:
+    """Return tracks for an in-place project: ``agentic-dev.yaml`` > discovery."""
+    from agentic_dev.discovery import discover_tracks, load_track_override  # noqa: WPS433
+
+    if not rediscover:
+        override = load_track_override(project_dir)
+        if override is not None:
+            console.print(
+                f"[cyan]Loaded {len(override)} track(s) from agentic-dev.yaml[/cyan]"
+            )
+            return override
+
+    from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+
+    log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+    console.print("[cyan]Discovering project structure...[/cyan]")
+    claude = ClaudeRunner(log_dir=log_dir)
+    discovery = asyncio.run(discover_tracks(claude, project_dir))
+    summary = ", ".join(f"{t.name} ({t.kind})" for t in discovery.tracks)
+    console.print(f"  [green]Detected:[/green] {summary}")
+    if discovery.reasoning:
+        console.print(f"  [dim]{discovery.reasoning}[/dim]")
+    return discovery.tracks
+
+
+_NON_CODE_ENTRIES = frozenset({
+    AGENTIC_DEV_METADATA_DIR,
+    "agentic-dev.yaml",
+    ".git",
+    ".gitignore",
+})
+
+
+def _track_has_existing_code(project_dir: Path, track) -> bool:
+    """Return True iff the track's directory has source files worth analysing.
+
+    Pure-metadata entries (``.agentic-dev/``, the override YAML, git
+    bookkeeping) don't count as "existing code" — the analyser would have
+    nothing useful to report on them.
+    """
+    track_dir = project_dir / track.path
+    if not track_dir.is_dir():
+        return False
+    return any(
+        entry.name not in _NON_CODE_ENTRIES for entry in track_dir.iterdir()
+    )
+
+
+def _analyze_existing_tracks(project_dir: Path, tracks: list, doc_store: DocumentStore) -> None:
+    """Run the codebase analyser on each non-empty track in parallel."""
+    from agentic_dev.claude.runner import ClaudeRunner  # noqa: WPS433
+    from agentic_dev.onboarding.analyzer import analyze_codebases  # noqa: WPS433
+    from agentic_dev.onboarding.models import AnnotatedSource  # noqa: WPS433
+
+    sources: list[AnnotatedSource] = []
+    sources_meta: list = []
+    for track in tracks:
+        if not _track_has_existing_code(project_dir, track):
+            continue
+        track_path = project_dir / track.path
+        sources.append(
+            AnnotatedSource(
+                value=str(track_path),
+                annotation=f"{track.name} ({track.kind})",
+            )
+        )
+        sources_meta.append(track)
+
+    if not sources:
+        console.print("[dim]No existing code detected — skipping analysis pass.[/dim]")
+        return
+
+    console.print(
+        f"[cyan]Analysing existing code in {len(sources)} track(s) in parallel...[/cyan]"
+    )
+    log_dir = project_dir / AGENTIC_DEV_METADATA_DIR / LOGS_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+    claude = ClaudeRunner(log_dir=log_dir)
+    results = asyncio.run(analyze_codebases(claude, sources))
+
+    combined: list[str] = []
+    for track, result in zip(sources_meta, results):
+        doc_store.write(f"track_{track.name}_analysis", result.text)
+        combined.append(f"## {track.name} ({track.kind})\n\n{result.text}")
+    doc_store.write("existing_code_analyses", "\n\n---\n\n".join(combined))
+
+
+def _onboard_in_place(
+    project_dir: Path,
+    user_input: str,
+    rediscover: bool = False,
+) -> PipelineState:
+    """First-run onboarding: discover tracks, scaffold ``.agentic-dev/``, persist state."""
+    from agentic_dev.config import (  # noqa: WPS433
+        ProjectConfig,
+        save_project_config,
+    )
+    from agentic_dev.workspace.manager import ensure_scaffold  # noqa: WPS433
+
+    tracks = _resolve_tracks_for_in_place(project_dir, rediscover)
+
+    ensure_scaffold(project_dir)
+
+    cfg = ProjectConfig(app_name=project_dir.name, tracks=tracks)
+    save_project_config(project_dir, cfg)
+
+    state_mgr = StateManager(project_dir)
+    state = state_mgr.create_initial(project_dir.name)
+    state.tracks = tracks
+    state_mgr.save(state)
+
+    doc_store = DocumentStore(project_dir)
+    _analyze_existing_tracks(project_dir, tracks, doc_store)
+    if user_input:
+        doc_store.write("user_input", user_input)
+
+    return state
+
+
+@app.command()
+def work(
+    prompt: str | None = typer.Argument(
+        None,
+        help="What you'd like agentic-dev to do. Omit to provide via stdin or --from-file.",
+    ),
+    from_file: str | None = typer.Option(
+        None, "--from-file", help="Read the work request from a file"
+    ),
+    from_figma: list[str] | None = typer.Option(
+        None,
+        help="Figma URL with optional '::annotation' (repeatable)",
+    ),
+    rediscover: bool = typer.Option(
+        False,
+        "--rediscover",
+        help="Re-run track discovery even if a config already exists",
+    ),
+) -> None:
+    """Run agentic-dev against the project containing the current directory.
+
+    First invocation: walks up from ``cwd`` for ``.agentic-dev/``, scaffolds
+    one in the cwd if absent, discovers tracks (or loads
+    ``agentic-dev.yaml``), analyses any existing code in each track, and
+    starts the deterministic pipeline.
+
+    Subsequent invocations dispatch on pipeline state:
+
+    - ``COMPLETE`` → the prompt is enqueued as an update cycle.
+    - ``FAILED`` → the prompt is injected as feedback and the pipeline
+      resumes from the failed phase.
+    - mid-pipeline → exits with an error pointing at ``resume``.
+    """
+    from agentic_dev.config import resolve_project_dir  # noqa: WPS433
+
+    try:
+        project_dir = resolve_project_dir(Path.cwd())
+        change_input = _collect_work_input(prompt, from_file)
+
+        is_first_run = not (project_dir / AGENTIC_DEV_METADATA_DIR).is_dir()
+
+        if is_first_run:
+            if not change_input and not from_figma:
+                console.print(
+                    "[bold red]No requirements provided. Pass a prompt, "
+                    "--from-file, or --from-figma.[/bold red]"
+                )
+                raise typer.Exit(code=1)
+            console.print(f"[green]Working on project at {project_dir}[/green]")
+            state = _onboard_in_place(
+                project_dir, change_input, rediscover=rediscover
+            )
+            _run_pipeline(project_dir, state)
+            return
+
+        state_mgr = StateManager(project_dir)
+        state = state_mgr.load()
+
+        if state.phase == PipelinePhase.COMPLETE:
+            console.print(
+                f"[cyan]Project at {project_dir} is COMPLETE — "
+                "enqueuing the new prompt as an update.[/cyan]"
+            )
+            _start_update_cycle(
+                project_dir=project_dir,
+                state=state,
+                state_mgr=state_mgr,
+                change_input=change_input or None,
+                mode="update",
+                restart_phase=PipelinePhase.FEATURE_ANALYSIS,
+                is_targeted=True,
+            )
+            return
+
+        if state.phase == PipelinePhase.FAILED:
+            from agentic_dev.state.transitions import resume_from_failure  # noqa: WPS433
+
+            console.print(
+                "[yellow]Pipeline previously FAILED — auto-resuming "
+                "with the new prompt as feedback.[/yellow]"
+            )
+            if change_input:
+                state.checkpoint_feedback = change_input
+            state = resume_from_failure(state)
+            state_mgr.save(state)
+            _run_pipeline(project_dir, state)
+            return
+
+        console.print(
+            f"[bold red]Pipeline already in progress (phase={state.phase}). "
+            "Use `agentic-dev resume` to continue it before starting new work."
+            "[/bold red]"
+        )
+        raise typer.Exit(code=1)
+
+    except (AgenticDevError, RuntimeError) as exc:
         _display_error(exc)
         raise typer.Exit(code=1)

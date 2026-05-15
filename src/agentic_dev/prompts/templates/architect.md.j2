@@ -44,6 +44,14 @@ Figma MCP tools are not available. Proceed without direct design reference.
 {% include "_partials/update_context.md.j2" %}
 {% endif %}
 
+{% if existing_code_analyses is defined and existing_code_analyses %}
+# Existing code in tracks
+
+The track(s) below already contain code. **Reverse-engineer the per-track spec from the analyses** — capture the tech stack, modules, routes, models, and components that exist today, not a generic template. Only add new structure for features the analyses don't yet cover. Do not propose deleting existing modules unless the requirements explicitly demand it.
+
+{{ existing_code_analyses }}
+{% endif %}
+
 # Constraints
 
 {% for c in constraints %}

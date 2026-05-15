@@ -12,8 +12,6 @@ from agentic_dev.orchestrator.checkpoint import CheckpointConfig
 from agentic_dev.tracks import Track, default_tracks
 
 
-DEFAULT_PROJECTS_DIR = Path.home() / "projects"
-
 _PACKAGE_DIR = Path(__file__).parent  # always the agentic_dev/ package dir
 
 AGENT_DEFINITIONS_DIR = _PACKAGE_DIR / "agents" / "definitions"
@@ -58,9 +56,6 @@ MAX_CONSECUTIVE_RATE_LIMIT_PAUSES = 5
 
 DOCUMENT_SEPARATOR = "<!-- DOCUMENT: {name} -->"
 DOCUMENT_SEPARATOR_PATTERN = r"<!-- DOCUMENT: (\w+) -->"
-
-GLOBAL_REGISTRY_DIR = Path.home() / ".agentic-dev"
-REGISTRY_FILE = GLOBAL_REGISTRY_DIR / "registry.json"
 
 
 # ---------------------------------------------------------------------------
@@ -137,31 +132,25 @@ def save_project_config(project_dir: Path, config: ProjectConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Global project registry
+# Project directory resolution (cwd-walk, no global registry)
 # ---------------------------------------------------------------------------
 
 
-def load_registry() -> dict[str, str]:
-    """Load the global project registry mapping app names to absolute paths."""
-    if not REGISTRY_FILE.exists():
-        return {}
-    return json.loads(REGISTRY_FILE.read_text())
+def resolve_project_dir(cwd: Path) -> Path:
+    """Resolve the project root by walking upward from ``cwd``.
 
+    Returns the nearest ancestor (including ``cwd`` itself) that contains a
+    ``.agentic-dev/`` metadata directory. When no such ancestor exists, the
+    original ``cwd`` is returned: it is the prospective project root that
+    would be scaffolded on the first ``agentic-dev work`` invocation.
 
-def register_project(app_name: str, path: Path) -> None:
-    """Register a project in the global registry."""
-    registry = load_registry()
-    registry[app_name] = str(path.resolve())
-    GLOBAL_REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-    REGISTRY_FILE.write_text(json.dumps(registry, indent=2) + "\n")
-
-
-def resolve_project_path(app_name: str, base_dir: Path = DEFAULT_PROJECTS_DIR) -> Path:
-    """Resolve a project path by checking the registry first, then base_dir.
-
-    Returns the project directory path. Does not validate that it exists.
+    The behaviour mirrors ``git rev-parse --show-toplevel`` and does not
+    consult any global registry.
     """
-    registry = load_registry()
-    if app_name in registry:
-        return Path(registry[app_name])
-    return base_dir / app_name
+    candidate = cwd.resolve()
+    while True:
+        if (candidate / AGENTIC_DEV_METADATA_DIR).is_dir():
+            return candidate
+        if candidate.parent == candidate:
+            return cwd.resolve()
+        candidate = candidate.parent
