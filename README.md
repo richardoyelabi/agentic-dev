@@ -1,18 +1,47 @@
 # Agentic-Dev
 
-Autonomous software development agency powered by the Claude Code CLI. Takes a
-product description, decomposes it into manageable sprints, drives the
-implementation end-to-end, and runtime-verifies the result with UAT — across
-any combination of web, CLI, desktop, mobile, API, and worker codebases.
+Autonomous software development agency powered by the Claude Code CLI.
+`agentic-dev` is a **process enforcer**, not a project scaffolder: you run
+it from inside an existing project the way you run `git` or `claude`. It
+decomposes a request into a deterministic plan → architecture → sprints →
+QA → UAT pipeline, drives the implementation end-to-end across any
+combination of web, CLI, desktop, mobile, API, and worker codebases, and
+runtime-verifies the result.
 
 ## Core ideas
 
-- **Tracks, not fixed roles.** A project is a list of `Track(name, path, kind, uat_kind)` values. Each track is one codebase in a nested directory inside the project root. The default is a single `app` track at the repo root; multi-codebase projects declare each track explicitly with repeatable `--track name::path::kind[::uat_kind]` flags.
-- **Deterministic pipeline.** A finite state machine advances through `INPUT_PROCESSING → FEATURE_ANALYSIS → ARCHITECTURE → SPRINT_PLANNING → DESIGN_CHECKPOINT → SPRINTING → UAT → COMPLETE`. State is persisted to `.agentic-dev/state.json` and every step is resumable.
-- **Per-track parallel artifacts.** The architect emits one `<track>_spec.md` per track (plus an `api_contract.md` only when any track has `kind=api`). The sprint planner produces a per-sprint `**Tracks in scope:**` line. The sprint runner runs one generic `developer` + `qa` cycle per in-scope track, passing the track's kind into the prompt for kind-specific guidance.
-- **Multi-track UAT with aggregator.** Every track that has `uat_kind` set gets its own UAT cycle (web / api / cli / mobile / desktop). Per-track verdicts roll up through `uat/aggregator.py` into a single `## Overall Result: PASS|FAIL` report.
-- **Ralph loop semantics.** Two layered loops give ralph-style persistence without an extra outer controller: the per-agent QA correction loop inside `run_qa_cycle`, and the unbounded `agentic-dev remediate` command which re-enters the pipeline whenever UAT reports `FAIL`.
-- **All artifacts under `.agentic-dev/`.** No `docs/` directory is created. The codebases and their inline `README.md` / `ARCHITECTURE.md` are the only user-facing documentation.
+- **Process enforcer.** There is no `new` command, no app-name registry,
+  and no `--path` flag. The directory you invoke `agentic-dev` from is the
+  project. On first run it scaffolds a `.agentic-dev/` metadata directory
+  in place; on subsequent runs it dispatches on persisted state.
+- **Inferred tracks.** A track is one codebase with a coherent
+  build/run/test loop. Tracks are discovered automatically on first run by
+  a Claude agent that inspects the project. Drop an `agentic-dev.yaml` at
+  the project root to override the discovery output explicitly.
+- **Deterministic pipeline.** A finite state machine advances through
+  `IDLE → INPUT_PROCESSING → FEATURE_ANALYSIS → ARCHITECTURE →
+  SPRINT_PLANNING → DESIGN_CHECKPOINT → SPRINTING → UAT → COMPLETE`. Each
+  agent phase is paired with a `_QA` phase. State persists to
+  `.agentic-dev/state.json` and every step is resumable.
+- **Per-track parallel artifacts.** The architect emits one
+  `<track>_spec.md` per track, plus an `api_contract.md` when any track has
+  `kind=api`. The sprint planner emits a per-sprint `**Tracks in scope:**`
+  line. The sprint runner runs a generic `developer` + `qa` cycle per
+  in-scope track, passing the track's `kind` into the prompt for
+  kind-specific guidance.
+- **Multi-track runtime UAT.** Every track with `uat_kind` set gets its
+  own UAT cycle (`uat_web`, `uat_api`, `uat_cli`, `uat_mobile`,
+  `uat_desktop_electron`, `uat_desktop_tauri`). Per-track verdicts roll up
+  through `uat/aggregator.py` into a single
+  `## Overall Result: PASS|FAIL` report. UAT agents drive long-running
+  processes in the background and poll them with the `Monitor` tool.
+- **Ralph-loop semantics.** Two layered loops give ralph-style persistence
+  without an extra outer controller: the per-agent QA correction loop
+  inside `run_qa_cycle`, and the unbounded `agentic-dev remediate`
+  command which re-enters the pipeline whenever UAT reports `FAIL`.
+- **All artifacts under `.agentic-dev/`.** No top-level `docs/` directory
+  is created in the host project. The codebases and their inline
+  `README.md` / `ARCHITECTURE.md` are the only user-facing documentation.
 
 ## Project layout produced by the agency
 
@@ -21,21 +50,24 @@ any combination of web, CLI, desktop, mobile, API, and worker codebases.
 ├── .agentic-dev/
 │   ├── state.json
 │   ├── config.json
-│   ├── artifacts/                       # git-tracked agent artifacts
-│   │   ├── user_input.md
+│   ├── artifacts/                       # agent artifacts
 │   │   ├── structured_input.md
 │   │   ├── features.md
 │   │   ├── <track>_spec.md              # one per track
 │   │   ├── api_contract.md              # iff any track has kind=api
 │   │   ├── sprint_plan.md
 │   │   ├── sprint_<N>_<track>.md
-│   │   ├── sprint_rolling_summary.md
-│   │   ├── qa/<name>.md                 # QA reports
+│   │   ├── track_<name>_analysis.md     # per-track existing-code analysis
+│   │   ├── existing_code_analyses.md    # concatenated input for the architect
+│   │   ├── figma_sources.md
+│   │   ├── qa/<name>.md                 # per-step QA reports
+│   │   ├── uat_prereqs_<track>.md
 │   │   ├── uat_report_<track>.md
 │   │   └── uat_report.md                # aggregated multi-track verdict
 │   ├── uat/<run_id>/evidence/<track>/   # screenshots, transcripts, http logs
-│   ├── logs/   sessions/   history/   runs/   agent_dumps/
-└── <track_dirs>/                        # one nested dir per declared track
+│   ├── history/                         # state snapshots (state-*.json)
+│   ├── logs/   sessions/   runs/   agent_dumps/
+└── <track_dirs>/                        # one nested dir per discovered track
 ```
 
 ## Installation
@@ -52,96 +84,146 @@ Requires:
 ## Quick start
 
 ```bash
-# Single-track project (defaults to one track named "app" at the repo root)
-agentic-dev new my-saas-app
-
-# Multi-track project: web frontend + JSON API + background worker
-agentic-dev new shop \
-  --track web::web::web::web \
-  --track api::api::api::api \
-  --track worker::workers/jobs::worker
+# Run agentic-dev against the project containing the current directory.
+# First call onboards (discovery → analysis → scaffold → pipeline);
+# subsequent calls dispatch on state (COMPLETE = update, FAILED = resume).
+cd /path/to/my/project
+agentic-dev work "add a referrals feature where users earn credits"
 
 # Check status
-agentic-dev status my-saas-app
+agentic-dev status
 
-# Resume after reviewing artifacts at .agentic-dev/artifacts/
-agentic-dev resume my-saas-app
+# Resume after a checkpoint (or after fixing a FAILED phase)
+agentic-dev resume
 
-# Resume with feedback
-agentic-dev resume my-saas-app --feedback "Use Supabase instead of raw PostgreSQL"
+# Resume with feedback injected
+agentic-dev resume --feedback "Use Supabase instead of raw PostgreSQL"
 
 # Remediate failing UAT (unbounded outer ralph loop)
-agentic-dev remediate my-saas-app
+agentic-dev remediate
 ```
+
+To override the auto-inferred tracks, commit an `agentic-dev.yaml` at the
+project root:
+
+```yaml
+# agentic-dev.yaml
+tracks:
+  - name: backend
+    path: backend
+    kind: api
+    uat_kind: api
+  - name: frontend
+    path: frontend
+    kind: web
+    uat_kind: web
+```
+
+`kind` and `uat_kind` are free-form strings. Common values: `web`, `api`,
+`cli`, `worker`, `desktop`, `mobile`, `library`, `generic`. Set `uat_kind`
+when a runtime UAT is feasible; leave it null otherwise.
 
 ## CLI reference
 
-### `new <app-name>`
+All commands operate on the cwd-resolved project — there is no `<app-name>`
+argument. `agentic-dev` walks upward from `cwd` looking for a
+`.agentic-dev/` directory the way `git` walks for `.git/`.
 
-Create a new project and start the development pipeline.
+### `work [prompt]`
 
-```
-Options:
-  --path TEXT            Directory to create the project in (default: ~/projects)
-  --from-file TEXT       Path to a file containing project requirements
-  --from-figma TEXT      Figma URL to import designs (value::annotation, repeatable)
-  --from-codebase TEXT   Existing codebase to use as reference context (value::annotation, repeatable)
-  --track TEXT           Declare a codebase track: name[::path[::kind[::uat_kind]]]
-                         Repeatable. Omit for a single default track at the repo root.
-```
-
-`--track` examples:
-
-- `--track app` — track named `app` at `./app/`, kind=`generic`
-- `--track web::frontend::web::web` — track named `web` at `./frontend/`, kind=`web`, UAT via `uat_web`
-- `--track api::services/api::api::api` — track named `api` at `./services/api/`, kind=`api`, UAT via `uat_api`
-
-`--from-codebase` and `--from-figma` analyze sources read-only as context. They never adopt or modify the source.
-
-### `resume [app-name]`
-
-Resume a paused or failed pipeline.
+Primary entry point. Onboards on first run, dispatches on state on
+subsequent runs.
 
 ```
 Options:
-  --feedback TEXT  Feedback to inject into the next agent's context
+  prompt              What you'd like agentic-dev to do (positional;
+                      omit to provide via --from-file or stdin)
+  --from-file TEXT    Read the work request from a file
+  --from-figma TEXT   Figma URL with optional '::annotation' (repeatable)
+  --rediscover        Re-run track discovery even if a config already exists
 ```
 
-### `update <app-name>`
+Dispatch on second-and-later invocations:
 
-Request intentional changes to a `COMPLETE` project. Re-runs the pipeline from the appropriate phase.
+| Pipeline state | What `work` does |
+|---|---|
+| no `.agentic-dev/` | first-run onboarding (discovery + analysis + scaffold + pipeline) |
+| `COMPLETE` | enqueues the prompt as an update; restarts at `FEATURE_ANALYSIS` |
+| `FAILED` | injects the prompt as feedback and auto-resumes from the failed phase |
+| anything mid-pipeline | exits 1 — use `agentic-dev resume` first |
+
+### `resume`
+
+Continue a paused or failed pipeline.
 
 ```
 Options:
-  --from-file TEXT   Path to a file containing change requirements
-  --from-figma TEXT  Figma URL with updated designs (value::annotation, repeatable)
+  --feedback TEXT     Feedback to inject into the next agent's context
+  --skip-sprint N     Mark sprint N complete and continue
 ```
 
-### `remediate <app-name>`
+### `remediate`
 
-Fix failing UAT acceptance criteria by re-entering the pipeline with the UAT report as a remediation prompt. Increments `remediation_cycle`. Intended to be run as many times as needed until UAT passes.
+Fix failing UAT acceptance criteria by re-entering the pipeline with the
+last UAT report as a remediation prompt. Increments `remediation_cycle`
+in state. Intended to be run as many times as needed until UAT passes —
+this is the outer ralph loop.
 
-### `status [app-name]`
+### `tracks`
 
-Show pipeline status: current phase, sprint progress, and costs.
+Show the inferred tracks and their kinds.
 
-### `config <app-name>`
+```
+Options:
+  --rediscover        Re-run the discovery agent and overwrite the saved tracks
+```
 
-Configure checkpoint behavior and autonomy level.
+### `status`
 
-### `logs <app-name>`
+Show pipeline phase, sprint progress, and total cost.
 
-View per-run and per-agent logs from `.agentic-dev/logs/`.
+### `config`
 
-### `cost <app-name>`
+Configure checkpoint behaviour and autonomy level.
 
-Show cost breakdown by agent and sprint.
+```
+Options:
+  --autonomy TEXT     Autonomy level (e.g. "full")
+  --checkpoints TEXT  Comma-separated list of checkpoint names
+                      (after_design, after_each_sprint, before_uat)
+```
+
+### `logs`
+
+View per-run pipeline logs or per-agent dumps from `.agentic-dev/logs/`.
+
+```
+Options:
+  --run TEXT          Specific run id (defaults to latest)
+  --agent TEXT        Filter to one agent's dumps
+  --jsonl             Emit the raw JSONL events
+```
+
+### `cost`
+
+Show cost breakdown by agent, phase, and sprint.
 
 ## Tech stack
 
 - Python 3.12+
-- Typer (CLI), Pydantic (models), Jinja2 (templates), Rich (terminal UI), PyYAML (config)
+- Typer (CLI), Pydantic (models), Jinja2 (templates), Rich (terminal UI),
+  PyYAML (config), httpx
 - Pytest with pytest-asyncio for async tests
+
+## Documentation
+
+- [User guide](docs/user-guide.md) — end-to-end walkthrough of the `work`
+  command, track inference, checkpoints, and artifact locations.
+- [Architecture](docs/architecture.md) — module map for contributors.
+- [Agents](docs/agents.md) — agent catalogue, model assignments, and the
+  YAML schema.
+- [Documents](docs/documents.md) — document taxonomy and producer/consumer
+  flow.
 
 ## Running tests
 

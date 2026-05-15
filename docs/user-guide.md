@@ -126,10 +126,12 @@ Everything the agency produces is under `<project>/.agentic-dev/artifacts/`:
 - `<track>_spec.md` — per-track architecture spec
 - `api_contract.md` — cross-track API contract (when any track is `kind=api`)
 - `sprint_plan.md` — sprint plan with `Tracks in scope:` lines
-- `track_<name>_analysis.md` — existing-code analysis fed to the architect
-- `existing_code_analyses.md` — concatenated input for the architect
+- `track_<name>_analysis.md` — per-track existing-code analysis fed to the architect
+- `existing_code_analyses.md` — concatenated existing-code analyses for the architect
+- `figma_sources.md` — Figma URLs and user-supplied annotations
 - `qa/<name>.md` — per-step QA reports
-- `uat_report_<track>.md` and `uat_report.md` — UAT verdicts
+- `uat_prereqs_<track>.md` — per-track UAT prerequisite probe report
+- `uat_report_<track>.md` and `uat_report.md` — per-track and aggregated UAT verdicts
 - `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots and transcripts
 
 The pipeline overwrites artifacts in place; per-cycle history is in

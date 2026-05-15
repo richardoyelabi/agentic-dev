@@ -2,103 +2,138 @@
 
 ## Agent Definitions
 
-All agents are defined as YAML files in `src/agentic_dev/agents/definitions/`.
+All agents are defined as YAML files in
+`src/agentic_dev/agents/definitions/`. The current roster is:
 
-### Model Assignments
+```
+architect.yml              feature_analyst.yml      sprint_planner.yml
+architect_qa.yml           feature_analyst_qa.yml   sprint_planner_qa.yml
+design_diff.yml            input_processor.yml      qa.yml
+developer.yml              input_processor_qa.yml   spec_diff.yml
+integration.yml            input_updater.yml        uat_api.yml
+integration_qa.yml         input_updater_qa.yml     uat_cli.yml
+uat_desktop_electron.yml   uat_desktop_tauri.yml    uat_mobile.yml
+uat_qa.yml                 uat_web.yml
+```
+
+There is **no** separate `frontend_developer` / `backend_developer` —
+sprint execution uses the single `developer` agent driven once per
+in-scope track per sprint, with the track's `kind` passed in for
+kind-specific prompt guidance. The QA counterpart is the single generic
+`qa` agent. The legacy adoption and sync teams
+(`structure_detector`, `spec_reverse_engineer`, `feature_extractor`,
+`code_analyzer`, `drift_detector`, `spec_updater` and their QAs) were
+removed alongside the `adopt` and `sync` commands.
+
+### Model assignments
 
 | Model | Agents | Rationale |
 |---|---|---|
-| **opus** | Feature Analyst, Architect, all QA agents (incl. Input Processor QA, Input Updater QA, UAT QA, Drift Detector QA), all per-kind UAT agents (`uat_web`, `uat_cli`, `uat_desktop_electron`, `uat_desktop_tauri`, `uat_mobile`, `uat_api`), Spec Reverse Engineer, Feature Extractor, Drift Detector, Design Diff, Spec Diff | Deep reasoning, critical review, multi-document synthesis |
-| **sonnet** | Input Processor, Input Updater, Sprint Planner, Frontend/Backend Dev, Integration, Structure Detector, Code Analyzer, Spec Updater, Code Analyzer QA, Spec Updater QA, Spec Reverse Engineer QA, Feature Extractor QA | Structured transformation, code generation, validation, cost-effective |
+| **opus** | `architect`, `architect_qa`, `developer`, `qa`, `feature_analyst`, `input_processor`, `input_updater`, `input_updater_qa`, `spec_diff`, `sprint_planner`, `integration`, `integration_qa`, `uat_qa`, all per-kind UAT agents (`uat_web`, `uat_api`, `uat_cli`, `uat_mobile`, `uat_desktop_electron`, `uat_desktop_tauri`) | Deep reasoning, multi-document synthesis, critical review, runtime UAT |
+| **sonnet** | `input_processor_qa`, `feature_analyst_qa`, `sprint_planner_qa`, `design_diff` | Structured transformation and cheap-to-run review |
 
-### Design & Architecture Team
+The exact model IDs live in `MODELS` in
+[src/agentic_dev/config.py](../src/agentic_dev/config.py).
 
-| Agent | QA Counterpart | Input | Output |
+### Design & architecture team
+
+| Agent | QA counterpart | Input | Output |
 |---|---|---|---|
-| Input Processor | Input Processor QA | User input | Structured Input |
-| Input Updater | Input Updater QA | Previous Structured Input + change request | Updated Structured Input |
-| Design Diff | *(none)* | Old Design Analyses, New Design Analyses | Design Changes (change summary) |
-| Spec Diff | *(none)* | Old Structured Input, New Structured Input | Spec Changes (change summary) |
-| Feature Analyst | Feature Analyst QA | Structured Input | Features Request |
-| Architect | Architect QA | Features Request, Structured Input | Frontend Spec, Backend Spec, API Contract |
-| Sprint Planner | Sprint Planner QA | Features Request, all specs | Sprint Plan |
+| `input_processor` | `input_processor_qa` | User input | Structured Input |
+| `input_updater` | `input_updater_qa` | Previous Structured Input + change request | Updated Structured Input |
+| `feature_analyst` | `feature_analyst_qa` | Structured Input | Features Request |
+| `architect` | `architect_qa` | Features Request, Structured Input, existing-code analyses | Per-track specs (`<track>_spec.md`) + `api_contract.md` (when any track has `kind=api`). The agent emits a single multi-document output; `orchestrator/engine.py` splits it into the per-track files. |
+| `sprint_planner` | `sprint_planner_qa` | Features Request + all specs | Sprint Plan |
+| `spec_diff` | *(none)* | Old Structured Input, New Structured Input | Spec Changes summary |
+| `design_diff` | *(none)* | Old Design Analyses, New Design Analyses, Figma Sources | Design Changes summary |
 
-### Frontend Team
+### Track development
 
-| Agent | QA Counterpart | Input | Output |
+| Agent | QA counterpart | Input | Output |
 |---|---|---|---|
-| Frontend Developer | Frontend QA | Frontend Spec, API Contract, Sprint scope, `frontend_kind`, Figma Sources (when available) | Code in frontend/ repo |
+| `developer` | `qa` | Track spec, API contract (when relevant), sprint scope, `track.kind`, Figma Sources + `figma_mcp_available` (when present) | Code in the track directory |
 
-Frontend Developer and Frontend QA templates branch on `frontend_kind`:
+`developer` is invoked **once per in-scope track per sprint**. The
+prompt template branches on the track's `kind` for kind-appropriate
+guidance:
 
-- `web` — today's guidance: pages, components, error boundaries, form validation
+- `web` — pages, components, error boundaries, form validation
+- `api` — endpoints, request/response shapes, persistence, auth
 - `cli` — commands, stdout/stderr contract, non-interactive mode, exit codes
 - `desktop` — windows, menus, IPC boundaries, packaging
 - `mobile` — screens, navigation, platform lifecycle, main-thread UI rules
+- `worker` / `library` / `generic` — fall back to generic guidance
 
-Tool allowlists stay identical across kinds — the split is prompt-only. See `docs/superpowers/specs/2026-04-17-multi-frontend-runtime-uat-design.md` for rationale.
+Tool allowlists are identical across kinds — the split is prompt-only.
+When Figma sources are present, the `developer` agent also receives the
+Figma URLs and a `figma_mcp_available` flag. If the Figma MCP server is
+configured in the project's Claude Code environment, the agent uses it
+directly for pixel-accurate implementation; otherwise it falls back to
+the text-based Design Analyses.
 
-When Figma sources are present, the Frontend Developer and Frontend QA agents receive the Figma URLs and a `figma_mcp_available` flag. If the Figma MCP server is configured in your Claude Code environment, agents use it directly for pixel-accurate implementation. Otherwise, they fall back to the text-based Design Analyses.
+### Integration
 
-### Backend Team
-
-| Agent | QA Counterpart | Input | Output |
+| Agent | QA counterpart | Input | Output |
 |---|---|---|---|
-| Backend Developer | Backend QA | Backend Spec, API Contract, Sprint scope | Code in backend/ repo |
+| `integration` | `integration_qa` | API Contract, Sprint Plan | Integration code + `integration_guide.md` |
 
-### Integration Team
+Run per sprint when the sprint plan calls for an integration step.
 
-| Agent | QA Counterpart | Input | Output |
+### UAT (per-track runtime verification)
+
+The earlier single `uat` agent was replaced by a family of per-kind UAT
+agents dispatched on `track.uat_kind` by
+[uat/dispatcher.py](../src/agentic_dev/uat/dispatcher.py):
+
+| Agent | Driver | Tool additions beyond base | QA counterpart |
 |---|---|---|---|
-| Integration Agent | Integration QA | API Contract, Sprint Plan | Integration code + guide |
+| `uat_web` | Playwright MCP | `Monitor`, `mcp__plugin_playwright_playwright__*` | `uat_qa` |
+| `uat_cli` | subprocess via `Bash` | `Monitor` | `uat_qa` |
+| `uat_desktop_electron` | Playwright attached via CDP | `Monitor`, `mcp__plugin_playwright_playwright__*` | `uat_qa` |
+| `uat_desktop_tauri` | `tauri-driver` (WebDriver) | `Monitor` | `uat_qa` |
+| `uat_mobile` | Maestro (primary) or the project's own integration test runner | `Monitor` | `uat_qa` |
+| `uat_api` | `curl` / `httpx` via `Bash` | `Monitor` | `uat_qa` |
 
-### Adoption Team
+Base tool allowlist for every UAT agent: `Read, Glob, Grep, Bash,
+WebFetch`. Budgets: `max_budget_usd: 5.00`, `max_turns: 100`.
 
-| Agent | QA Counterpart | Input | Output |
-|---|---|---|---|
-| Structure Detector | *(none)* | Project directory | Directory mapping (JSON) |
-| Spec Reverse Engineer | Spec Reverse Engineer QA | Existing code + target spec type | Frontend Spec, Backend Spec, or API Contract |
-| Feature Extractor | Feature Extractor QA | All generated specs | Features Request with `[EXISTING-F...]` IDs |
+**Backgrounded drivers.** UAT agents start long-running drivers
+(dev servers, browsers, simulators) in the background with `Bash`'s
+`run_in_background` and poll them through the `Monitor` tool, so a
+single UAT cycle can drive a full real-product run without blocking.
 
-### Sync Team
+**Prereq probes.** Before dispatch, `uat/prereqs.py` runs runtime checks
+for each driver (e.g. `maestro --version` plus `maestro doctor`,
+`flutter --version` plus a booted non-web device, `tauri-driver
+--version`, Playwright MCP availability) and writes a structured
+`uat_prereqs_<track>.md` artifact that the per-track UAT agent reads
+before starting and that it uses to degrade gracefully when a driver is
+unavailable.
 
-| Agent | QA Counterpart | Input | Output |
-|---|---|---|---|
-| Code Analyzer | Code Analyzer QA | Code directory + scope | Code reality snapshot |
-| Drift Detector | Drift Detector QA | Code snapshots + spec documents | Sync Report with `[DRIFT-nnn]` IDs |
-| Spec Updater | Spec Updater QA | Current spec + resolved drift items | Updated spec document |
+**False-PASS enforcement.** After the action agent completes,
+`uat/validator.py` parses the report and forces `Overall: FAIL` if any
+of these rules trips (in `uat_mode: full`):
 
-### QA Team
+- no AC has `Verification mode: runtime`
+- any runtime PASS AC has an empty `Artifacts:` list
+- every AC reports `Driver: none` with overall PASS
+- any PASS AC lacks concrete `Evidence:` bullets
 
-The legacy single `uat` agent is replaced by a family of per-kind UAT agents dispatched by `(ProjectType, FrontendKind)`. Each runtime-drives the product through a platform-appropriate surface and emits structured per-AC evidence.
+When triggered, the validator prepends a `## Validator Override` section
+to the report explaining which rule failed. This is enforced in code,
+not just prompt.
 
-| Agent | Driver | Tool additions beyond base | QA Counterpart |
-|---|---|---|---|
-| `uat_web` | Playwright MCP | `mcp__plugin_playwright_playwright__*` | `uat_qa` |
-| `uat_cli` | subprocess via `Bash` | — | `uat_qa` |
-| `uat_desktop_electron` | Playwright attached via CDP | `mcp__plugin_playwright_playwright__*` | `uat_qa` |
-| `uat_desktop_tauri` | `tauri-driver` (WebDriver) | — | `uat_qa` |
-| `uat_mobile` | Maestro (primary) or the project's integration test runner | — | `uat_qa` |
-| `uat_api` | `curl` / `httpx` via `Bash` (used only when `ProjectType == backend_only`) | — | `uat_qa` |
+**Artifacts.** The engine creates `.agentic-dev/uat/<run_id>/evidence/<track>/`
+before dispatch. UAT agents write screenshots, subprocess transcripts,
+Maestro logs, WebDriver sessions, and HTTP traces there. Artifacts are
+referenced by path from the UAT report.
 
-Base tool allowlist for every UAT agent: `Read, Glob, Grep, Bash, WebFetch`. Budgets: `max_budget_usd: 5.00`, `max_turns: 50`.
+**Aggregation.** [uat/aggregator.py](../src/agentic_dev/uat/aggregator.py)
+combines every `uat_report_<track>.md` into a single `uat_report.md`
+with one `## Overall Result: PASS|FAIL` line — PASS iff every track
+passed.
 
-**Input documents** for every per-kind UAT agent include `uat_prereqs` — a document written by the engine before dispatch that records the result of runtime probes (e.g. `maestro doctor`, `flutter devices`, Playwright MCP availability, `tauri-driver --version`). The agent reads prereq results and degrades gracefully if its driver is unavailable.
-
-**False-PASS enforcement.** After the UAT agent completes, `uat/validator.py` structurally parses the report and forces `Overall: FAIL` if any of these hold under `uat_mode: full`:
-
-- No AC has `Verification mode: runtime`
-- Any runtime PASS AC has an empty `Artifacts:` list
-- Every AC reports `Driver: none` with overall PASS
-- Any PASS AC lacks concrete `Evidence:` bullets
-
-When triggered, the validator prepends a `## Validator Override` section to the report explaining which rule failed. This is enforced in code, not just prompt.
-
-**Artifacts.** The engine creates `.agentic-dev/uat_artifacts/<run_id>/` before dispatch. UAT agents write screenshots, subprocess transcripts, Maestro logs, WebDriver sessions, and HTTP traces there. Artifacts are referenced by path from the UAT report.
-
-See `src/agentic_dev/uat/dispatcher.py` for the full `(ProjectType, FrontendKind)` dispatch matrix.
-
-## Agent YAML Schema
+## Agent YAML schema
 
 ```yaml
 name: string
@@ -106,34 +141,43 @@ description: string
 team: string
 claude:
   model: opus|sonnet
-  permission_mode: plan|bypassPermissions
-  allowed_tools: [list]
+  permission_mode: bypassPermissions   # most agents
+  allowed_tools: [list]                # additive on top of the base
   max_budget_usd: float
-  use_bare_mode: true
-  max_turns: 50
-prompt_template: string
-input_documents: [list]
-output_documents: [list]
-qa_agent: string|null
-working_directory: string
+  max_turns: int                       # defaults to DEFAULT_MAX_TURNS in config.py
+  use_bare_mode: true                  # defaults to true on AgentDefinition
+prompt_template: string                # filename under prompts/templates/
+input_documents: [list]                # document names; can be empty
+output_documents: [list]               # document names; can be empty
+qa_agent: string | null
+working_directory: string              # optional; defaults to "."
 constraints: [list]
 ```
 
-## Prompt Templates
+See [agents/base.py](../src/agentic_dev/agents/base.py) for the
+authoritative Pydantic model.
 
-All templates are Jinja2 files in `src/agentic_dev/prompts/templates/`. Each template receives:
+## Prompt templates
+
+All templates are Jinja2 files in `src/agentic_dev/prompts/templates/`.
+Each template receives:
 
 - `input_documents` — dict of document name → content
 - `constraints` — list of constraint strings from the YAML definition
-- `correction_mode` — bool, True when re-running after QA feedback
+- `correction_mode` — bool, true when re-running after QA feedback
 - `previous_output` — the agent's previous output (correction mode only)
-- `qa_feedback` — QA agent's feedback (correction mode only)
+- `qa_feedback` — the QA agent's feedback (correction mode only)
 
-Partials in `_partials/` provide reusable blocks for API contract context, sprint scope, and correction instructions.
+Partials in `_partials/` provide reusable blocks for API-contract
+context, sprint scope, and correction instructions.
 
-In update mode, templates may also receive:
-- `change_request` — text of the user's change description (targeted updates)
-- `spec_changes` — summary of what changed between old and new full specs (`--full-spec` updates)
-- `design_changes` — summary of what changed between old and new Figma designs (`--from-figma` updates)
-- `figma_sources` — Figma URLs for direct MCP access during frontend implementation
-- `figma_mcp_available` — `"true"` or `"false"` indicating whether the Figma MCP server is configured
+In update / remediate modes, templates may also receive:
+
+- `change_request` — text of the user's change description (targeted
+  updates) or the composed UAT-report-as-change-request (remediation)
+- `spec_changes` — summary from `spec_diff`
+- `design_changes` — summary from `design_diff`
+- `figma_sources` — Figma URLs for direct MCP access during
+  frontend implementation
+- `figma_mcp_available` — `"true"` / `"false"` indicating whether the
+  Figma MCP server is configured in this Claude Code environment

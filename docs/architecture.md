@@ -2,7 +2,13 @@
 
 ## Overview
 
-Agentic-Dev is a Python CLI tool that orchestrates Claude Code CLI sessions as an autonomous software development agency.
+`agentic-dev` is a Python CLI that orchestrates Claude Code CLI sessions
+as an autonomous software development agency. It is a **process enforcer**
+that runs against the directory you invoke it from: there is no global
+project registry, no app-name argument, and no scaffolder for new
+projects. On first invocation in a directory, it scaffolds a
+`.agentic-dev/` metadata folder in place and drives a deterministic
+pipeline; on subsequent invocations it dispatches on persisted state.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -19,10 +25,10 @@ Agentic-Dev is a Python CLI tool that orchestrates Claude Code CLI sessions as a
 │  │  Runner  │  │ Registry │  │ Renderer  │  │ Store  │ │
 │  └──────────┘  └──────────┘  └──────────┘  └────────┘ │
 ├─────────────────────────────────────────────────────────┤
-│  ┌──────────┐  ┌──────────┐                             │
-│  │  State   │  │Workspace │                             │
-│  │ Manager  │  │ Manager  │                             │
-│  └──────────┘  └──────────┘                             │
+│  ┌──────────┐  ┌───────────┐  ┌──────────┐  ┌────────┐│
+│  │  State   │  │ Discovery │  │Workspace │  │  UAT   ││
+│  │ Manager  │  │ + Tracks  │  │ Manager  │  │Subsys. ││
+│  └──────────┘  └───────────┘  └──────────┘  └────────┘│
 └─────────────────────────────────────────────────────────┘
          │                │
          ▼                ▼
@@ -33,119 +39,272 @@ Agentic-Dev is a Python CLI tool that orchestrates Claude Code CLI sessions as a
 ## Module Responsibilities
 
 ### `cli.py`
-User-facing CLI commands. Wires together all components and handles user interaction.
+User-facing Typer commands (`work`, `resume`, `remediate`, `status`,
+`config`, `logs`, `cost`, `tracks`). Every command resolves the project
+directory by walking up from `cwd` looking for `.agentic-dev/`; none take
+an app-name argument.
 
 ### `orchestrator/engine.py`
-Finite state machine that drives the pipeline. Advances through phases, delegates to QA cycle and sprint runner, checks checkpoints.
+Finite-state-machine driver. Advances through phases, dispatches to the QA
+cycle and sprint runner, evaluates checkpoints, and handles pipeline-level
+rate-limit pauses. Splits the architect's multi-document output into
+per-track `<track>_spec.md` files (see `_run_architecture` around
+[engine.py:345](../src/agentic_dev/orchestrator/engine.py#L345)).
 
 ### `orchestrator/qa_cycle.py`
-Reusable pattern: action agent → QA agent → optional correction. Used by every team.
+Reusable action-agent → QA-agent → optional-correction loop. Every agent
+that has a `qa_agent` field in its definition is driven through this.
 
 ### `orchestrator/sprint_runner.py`
-Executes a single sprint: backend → frontend → integration (if needed). Resolves working directories from the project's `DirectoryMap`.
+Executes a single sprint by running one generic `developer` + `qa` pair
+per in-scope track, then an `integration` + `integration_qa` pair when the
+sprint plan calls for it. The track's `kind` is passed into the prompt so
+the developer agent gets kind-specific guidance.
 
-### `orchestrator/adoption.py`
-Orchestrates project adoption: runs `spec_reverse_engineer` agents (with QA cycles) in parallel for frontend/backend specs, then API contract, then feature extraction. Produces the full spec suite from existing code.
-
-### `orchestrator/sync.py`
-Orchestrates drift detection and resolution: runs `code_analyzer` agents to snapshot current state, `drift_detector` to compare against specs, and `spec_updater` to apply resolutions. Generates change requests for `to_code` items.
-
-### `onboarding/structure_detector.py`
-Detects project directory structure using a Claude agent. Scans for framework markers and proposes a frontend/backend directory mapping.
+### `orchestrator/agent_bridge.py`
+Bridges the YAML `AgentDefinition` to the runtime `RunnerConfig` consumed
+by `claude/runner.py`. Carries `use_bare_mode` through unchanged.
 
 ### `orchestrator/checkpoint.py`
-Configurable pause points. Default: pause after design phase.
+Configurable pause points. Default: pause after design (architecture +
+sprint plan). See `CheckpointConfig` (`after_design`, `after_each_sprint`,
+`before_uat`).
 
-### `claude/runner.py`
-Async subprocess wrapper for the `claude` CLI. Builds commands from agent configs. In print mode the rendered prompt is passed immediately after `-p`, before flags such as `--allowedTools`, so the CLI does not parse the prompt as an extra tool name.
+### `orchestrator/uat_composer.py`
+Composes the change-request input used when the user runs
+`agentic-dev remediate` — wraps the last UAT report as a remediation
+prompt so the next pipeline cycle treats it as the change input.
 
-### `agents/registry.py`
-Loads agent definitions from YAML files. Provides lookup by name and team.
+### `orchestrator/shutdown.py`
+Cooperative shutdown handling for graceful cancellation of in-flight
+agents.
 
-### `prompts/renderer.py`
-Jinja2 template engine. Renders agent prompts with document content and constraints.
+### `discovery/agent.py`
+Runs a Claude agent that walks the project on first invocation and emits
+a list of `Track(name, path, kind, uat_kind)` values. Output is strict
+JSON (`{"tracks": [...], "reasoning": "..."}`).
 
-### `documents/store.py`
-Reads and writes specification documents to the project workspace.
+### `discovery/override.py`
+Loads an `agentic-dev.yaml` from the project root if present, returning
+its `tracks:` list. When the override exists, the Claude discovery agent
+is skipped entirely.
 
-### `state/manager.py`
-Persists pipeline state as JSON. Supports atomic writes and history archiving.
-
-### `workspace/manager.py`
-Creates and adopts project directories. Initializes git repos. Generates CLAUDE.md files. Resolves directory paths through `DirectoryMap` and the global project registry (`~/.agentic-dev/registry.json`).
-
-### `mcp/claude_settings.py`
-Discovers MCP servers from Claude Code's native settings files (`~/.claude/settings.json`, project `.claude/settings.json`, `.claude/settings.local.json`). Provides fuzzy matching to find servers by service name. Agents inherit configured MCP servers automatically — no `--mcp-config` flag needed.
+### `onboarding/analyzer.py`
+Runs per-track Claude agents in parallel to summarise existing code in
+each track. Each track gets a `track_<name>_analysis.md` artifact; the
+combined `existing_code_analyses.md` is fed to the architect so it
+reverse-engineers specs that reflect what's there.
 
 ### `onboarding/figma.py`
-Figma-specific helpers. `analyze_figma_designs()` runs Claude agents with Figma MCP to extract design analyses. `write_figma_sources()` persists Figma URLs as the `figma_sources` doc. `run_design_diff()` invokes the `design_diff` agent to compare old vs new design analyses and produce a `design_changes` summary. `check_figma_mcp_available()` validates the Figma MCP server is configured in the Claude Code environment.
+Figma helpers. `analyze_figma_designs()` runs Claude with the Figma MCP to
+extract design analyses. `write_figma_sources()` persists Figma URLs as
+the `figma_sources` doc. `run_design_diff()` invokes the `design_diff`
+agent to compare old vs new design analyses. `check_figma_mcp_available()`
+checks for the Figma MCP server in Claude Code settings.
+
+### `claude/runner.py`
+Async subprocess wrapper around the `claude` CLI. Builds the command from
+an agent's `RunnerConfig`. In print mode, the rendered prompt is passed
+immediately after `-p` (before flags like `--allowedTools`) so the CLI
+does not parse the prompt as an extra tool name.
+
+### `agents/registry.py`
+Loads agent definitions from YAML files in
+`src/agentic_dev/agents/definitions/`. Provides lookup by name and team.
+
+### `agents/base.py`
+Pydantic models for the agent YAML schema: `ClaudeConfig`,
+`AgentDefinition`, `RunnerConfig`. `use_bare_mode` defaults to `True`.
+
+### `prompts/renderer.py`
+Jinja2 template engine. Renders agent prompts with `input_documents`,
+`constraints`, and (in correction mode) `previous_output` + `qa_feedback`.
+Partials in `_partials/` provide reusable blocks for API contract context,
+sprint scope, and correction instructions.
+
+### `documents/store.py`
+Reads and writes agent artifacts under `.agentic-dev/artifacts/`. Holds
+the document-name → filename mapping.
 
 ### `documents/diff.py`
-Spec diffing helpers. `run_spec_diff()` invokes the `spec_diff` agent to compare old vs new structured input and produce a `spec_changes` summary. Used during `--full-spec` update cycles.
+`run_spec_diff()` invokes the `spec_diff` agent to compare old vs new
+structured input and produce a `spec_changes` summary, consumed by
+downstream agents during update cycles.
 
-### `mcp/catalog.py`
-Text-based service detection using regex patterns. Scans sprint plan text for references to known services (figma, github, stripe, supabase).
+### `documents/scoping.py`
+Selects the subset of documents a sprint or track needs as input, keeping
+prompts focused.
 
-### `mcp/setup.py`
-Rich-formatted prerequisite validation and guided setup helpers. Checks Claude Code settings for configured MCP servers and guides users to `claude mcp add` or Claude Code's OAuth UI.
+### `state/manager.py`
+Persists `PipelineState` as JSON. Supports atomic writes and per-phase
+history snapshots in `.agentic-dev/history/`.
+
+### `state/models.py`
+Pydantic models for the state machine: `PipelinePhase`, `SprintStatus`,
+`SprintState`, `PipelineState`, `AgentRunRecord`.
+
+### `state/transitions.py`
+Pure-logic helpers for transitioning between phases —
+`resume_from_failure()` clears error/`failed_at_phase` before resume.
+
+### `workspace/manager.py`
+Scaffolder for the `.agentic-dev/` metadata directory in the project
+root. Has **no** global registry and no app-name concept — `ensure_scaffold`
+is the single entry point. `workspace/claude_md.py` writes per-track
+`CLAUDE.md` files; `workspace/git.py` provides the helpers used to commit
+agent artifacts to the project repo.
 
 ### `config.py`
-Global settings, constants, and project configuration models. Contains `ProjectConfig` (with `DirectoryMap`, `ExternalSource`, checkpoint config, sync ignores, `frontend_kind`, and `uat_mode`), config migration logic, and the global project registry.
+Module-level constants (paths, model IDs, rate-limit settings) and the
+`ProjectConfig` Pydantic model persisted to `.agentic-dev/config.json`.
+`ProjectConfig` fields: `app_name`, `tracks`, `sources`, `checkpoint`,
+`uat_mode`. `resolve_project_dir()` walks upward from `cwd` looking for
+`.agentic-dev/` — there is no global registry. `load_project_config()`
+migrates older config files: the keys `directory_map`, `frontend_kind`,
+and `sync_ignores` are treated as legacy and dropped.
+
+### `tracks.py`
+`Track(name, path, kind, uat_kind)` and helpers: `default_tracks()`,
+`expected_architecture_docs()` (which per-track spec names are expected
+from the architect for a given track list), `TrackProgress`.
+
+### `mcp/claude_settings.py`
+Discovers MCP servers from Claude Code's native settings files
+(`~/.claude/settings.json`, project `.claude/settings.json`,
+`.claude/settings.local.json`). Provides fuzzy matching by service name.
+Agents inherit configured MCP servers automatically — no `--mcp-config`
+flag is needed.
+
+### `mcp/catalog.py`
+Text-based service detection via regex patterns. Scans sprint plan text
+for references to known services (figma, github, stripe, supabase).
+
+### `mcp/setup.py`
+Rich-formatted prerequisite validation and guided setup helpers. Checks
+Claude Code settings for configured MCP servers and points the user at
+`claude mcp add` or the Claude Code OAuth UI.
 
 ### `uat/dispatcher.py`
-Pure-logic module that maps `(ProjectType, FrontendKind, desktop_framework)` to a concrete UAT agent name (`uat_web`, `uat_cli`, `uat_desktop_electron`, `uat_desktop_tauri`, `uat_mobile`, `uat_api`). Invalid combinations raise `ValueError`. Also hosts `_read_desktop_framework()` which extracts the `desktop_framework` header from a `frontend_spec` text.
+Pure-logic dispatch from `track.uat_kind` to a concrete UAT agent name
+(`uat_<uat_kind>`). The desktop case picks between `uat_desktop_electron`
+and `uat_desktop_tauri` based on a `desktop_framework` header parsed from
+the track spec by `_read_desktop_framework()`. Invalid combinations raise
+`ValueError`.
 
 ### `uat/prereqs.py`
-Runtime prereq probes for each per-kind UAT agent. Checks that driver tools are not only on PATH but actually usable (e.g., `maestro --version` plus `maestro doctor`; `flutter --version` plus a booted non-web device). Emits `UATPrereqValidationEvent` and writes a structured `uat_prereqs` document the UAT agent reads before starting.
+Runtime prereq probes for each per-kind UAT agent. Checks that driver
+tools are not only on PATH but actually usable (e.g. `maestro --version`
+plus `maestro doctor`; `flutter --version` plus a booted non-web device;
+`tauri-driver --version`; Playwright MCP availability). Writes
+`uat_prereqs_<track>.md` artifacts that the per-track UAT agent reads
+before starting.
 
 ### `uat/validator.py`
-Code-level enforcement of the false-PASS invariant. Parses the UAT report after the action agent completes and rewrites `Overall: PASS` to `FAIL` (prepending a `## Validator Override` section) when any of four structural rules fail: no runtime AC, runtime PASS without artifacts, all-`none` drivers with overall PASS in `uat_mode: full`, or any PASS AC lacking concrete `Evidence:` bullets.
+Code-level enforcement of the false-PASS invariant. Parses the UAT report
+after the action agent completes and rewrites `Overall: PASS` to `FAIL`
+(prepending a `## Validator Override` section) when any of four structural
+rules fail: no runtime AC, runtime PASS without artifacts, all-`none`
+drivers with overall PASS in `uat_mode: full`, or any PASS AC lacking
+concrete `Evidence:` bullets.
+
+### `uat/aggregator.py`
+Reads each `uat_report_<track>.md` and emits the combined `uat_report.md`
+with a single `## Overall Result: PASS|FAIL` line. PASS iff every track
+passed.
+
+### `concurrency.py`
+Helpers for parallel execution of independent per-track agent runs
+(track analysis, per-track sprint development, per-track UAT).
+
+### `logging/`
+Structured event logging (JSONL run logs + per-agent dumps in
+`.agentic-dev/logs/agent_dumps/`).
 
 ## Data Flow
 
-Text and design are parallel input channels that merge into `extra_context` flowing to all downstream agents.
+Text and design are parallel input channels that merge into
+`extra_context` flowing to all downstream agents.
 
-1. User input → Input Processor → Structured Input (includes `## Project Type` and `## Frontend Kind`)
-2. Figma URLs → Figma Analyzer → Design Analyses + Figma Sources (stored independently)
-3. On update (`--full-spec`): old + new Structured Input → Spec Diff → Spec Changes
-4. On update (`--from-figma`): old + new Design Analyses → Design Diff → Design Changes
-5. Structured Input → Feature Analyst (+QA) → Features Request
-6. Features Request → Architect (+QA; frontend_kind-aware) → Frontend Spec + Backend Spec + API Contract
-7. All specs → Sprint Planner (+QA) → Sprint Plan
-8. Per sprint: specs + sprint scope + `frontend_kind` + extra_context → Dev agents (+QA; kind-aware templates) → Code
-   - Frontend agents also receive Figma Sources + `figma_mcp_available` for direct design access
-9. Pre-UAT: prereq probes write `uat_prereqs` doc; artifacts directory created at `.agentic-dev/uat_artifacts/<run_id>/`
-10. Per-kind UAT agent drives the running product → UAT Report → Validator (false-PASS gate) → UAT QA review
+1. User input (positional / `--from-file` / stdin) → Input Processor →
+   Structured Input.
+2. Figma URLs (`--from-figma`) → Figma Analyzer → Design Analyses +
+   Figma Sources (stored independently of the text channel).
+3. First-run only: each track is summarised by the onboarding Analyzer →
+   `track_<name>_analysis.md` (per track) +
+   `existing_code_analyses.md` (concatenated).
+4. On update mode: old + new Structured Input → Spec Diff →
+   `spec_changes` (consumed by all downstream agents).
+5. On update mode with `--from-figma`: old + new Design Analyses →
+   Design Diff → `design_changes`.
+6. Structured Input → Feature Analyst (+QA) → Features Request.
+7. Features Request + Structured Input + `existing_code_analyses` →
+   Architect (+QA) → multi-document output, split by the engine into
+   `<track>_spec.md` per track (plus `api_contract.md` when any track
+   has `kind=api`).
+8. All specs → Sprint Planner (+QA) → Sprint Plan with per-sprint
+   `**Tracks in scope:**` lines.
+9. Per sprint, per in-scope track: track spec + API contract (if relevant)
+   + sprint scope + `track.kind` → `developer` (+ `qa`) → code in the
+   track directory. Frontend tracks also receive Figma Sources and a
+   `figma_mcp_available` flag.
+10. Per-sprint integration step (when scoped): `integration` +
+    `integration_qa` → `integration_guide.md` and integration code.
+11. Pre-UAT: `uat/prereqs.py` writes `uat_prereqs_<track>.md` and creates
+    the artifacts directory `.agentic-dev/uat/<run_id>/evidence/<track>/`.
+12. Per track with `uat_kind`: dispatcher picks the UAT agent →
+    runtime-drives the product → `uat_report_<track>.md` → false-PASS
+    validator → `uat_qa`. UAT agents launch long-running drivers in the
+    background and poll them via the `Monitor` tool.
+13. `uat/aggregator.py` rolls every per-track report into a single
+    `uat_report.md` with one `## Overall Result: PASS|FAIL` line.
+14. On `FAIL`, the user runs `agentic-dev remediate`, which composes the
+    UAT report as a change request and re-enters the pipeline from
+    `INPUT_PROCESSING` with `mode=remediate` and an incremented
+    `remediation_cycle` counter.
 
-## FrontendKind axis
+## State machine
 
-`FrontendKind` is orthogonal to `ProjectType`. `ProjectType` decides which specs exist (fullstack/frontend_only/backend_only); `FrontendKind` decides *how* the client is built and verified.
+```
+IDLE
+ └─► INPUT_PROCESSING ─► INPUT_PROCESSING_QA
+      └─► FEATURE_ANALYSIS ─► FEATURE_ANALYSIS_QA
+           └─► ARCHITECTURE ─► ARCHITECTURE_QA
+                └─► SPRINT_PLANNING ─► SPRINT_PLANNING_QA
+                     └─► DESIGN_CHECKPOINT
+                          └─► SPRINTING
+                               └─► UAT ─► UAT_QA
+                                    └─► COMPLETE
+```
 
-| FrontendKind | Developer guidance | UAT driver |
+Any phase can transition to `FAILED`. `COMPLETE` and `FAILED` are the
+terminal states. `COMPLETE` can transition back to `FEATURE_ANALYSIS`
+(when a new `work` prompt arrives as an update) or to `INPUT_PROCESSING`
+(during `remediate`). The `state.mode` field (`new` / `update` /
+`remediate`) tells the engine which prompt template variants to render.
+
+The legacy `ADOPTING / ADOPTED / SYNCING` phases were removed alongside
+the `new`, `adopt`, `update`, and `sync` commands; first-run adoption is
+now handled by the discovery + analyzer pass inside `work`, and drift
+is handled by editing specs and re-running the pipeline.
+
+## UAT subsystem
+
+The single `uat` agent of earlier versions was replaced by a family of
+per-kind agents dispatched by `track.uat_kind`:
+
+| `uat_kind` | Agent | Driver |
 |---|---|---|
-| `web` | Pages / components / routing | Playwright MCP |
-| `cli` | Commands / flags / stdout-stderr contract / non-interactive mode | subprocess (Bash) |
-| `desktop` (electron) | Windows, menus, IPC, packaging | Playwright attached via CDP |
-| `desktop` (tauri) | Windows, menus, IPC, packaging | `tauri-driver` (WebDriver) |
-| `mobile` | Screens, navigation, platform lifecycle | Maestro (fallback: project's own integration_test) |
-| `none` | — | `uat_api` drives HTTP surface directly |
+| `web` | `uat_web` | Playwright MCP |
+| `api` | `uat_api` | `curl` / `httpx` via Bash |
+| `cli` | `uat_cli` | subprocess via Bash |
+| `mobile` | `uat_mobile` | Maestro (with fallback to the project's own integration tests) |
+| `desktop` (electron) | `uat_desktop_electron` | Playwright attached via CDP |
+| `desktop` (tauri) | `uat_desktop_tauri` | `tauri-driver` (WebDriver) |
 
-The detected kind lives on `PipelineState.frontend_kind` and `ProjectConfig.frontend_kind`. It can also be overridden at project creation time via `agentic-dev new --frontend-kind <kind>`.
+`uat/dispatcher.py:pick_uat_agent()` is the single dispatch entry point.
+The desktop case reads a `desktop_framework:` header out of the track
+spec to pick between Electron and Tauri.
 
-## State Machine
-
-```
-New project pipeline:
-IDLE → INPUT_PROCESSING → INPUT_PROCESSING_QA → FEATURE_ANALYSIS →
-FEATURE_ANALYSIS_QA → ARCHITECTURE → ARCHITECTURE_QA → SPRINT_PLANNING →
-SPRINT_PLANNING_QA → DESIGN_CHECKPOINT → SPRINTING →
-UAT (prereq-probe → dispatch → runtime-drive → validator) → UAT_QA → COMPLETE
-
-Adoption:
-IDLE → ADOPTING → ADOPTED (or → INPUT_PROCESSING if --extend)
-
-Sync:
-COMPLETE/ADOPTED → SYNCING → COMPLETE/ADOPTED
-```
-
-Any phase can transition to FAILED. COMPLETE, ADOPTED, and FAILED are terminal states. COMPLETE and ADOPTED can transition to INPUT_PROCESSING (for updates), SYNCING (for sync), or FEATURE_ANALYSIS/ARCHITECTURE (for targeted updates).
+UAT agents run long-lived drivers (browsers, simulators, dev servers) in
+the background and poll progress through the `Monitor` tool, so a single
+UAT cycle can drive a full real-product run without blocking.
