@@ -1,6 +1,7 @@
 """Tests for ProjectConfig, config migration, and cwd-based project resolution."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -166,3 +167,43 @@ class TestResolveProjectDir:
         sub = tmp_path / "lonely" / "leaf"
         sub.mkdir(parents=True)
         assert resolve_project_dir(sub) == sub
+
+    def test_does_not_use_agentic_dev_at_home_from_subdir(
+        self, tmp_path, monkeypatch
+    ):
+        """A stale ``.agentic-dev/`` in $HOME must not be returned when
+        ``work`` is run from a project subdirectory of $HOME.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        (fake_home / AGENTIC_DEV_METADATA_DIR).mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        project = fake_home / "projects" / "skillsbloom"
+        project.mkdir(parents=True)
+        assert resolve_project_dir(project) == project
+
+    def test_uses_agentic_dev_when_cwd_is_home(self, tmp_path, monkeypatch):
+        """If cwd is itself $HOME and $HOME has ``.agentic-dev/``, it is
+        honoured: cwd is always inspected before the $HOME ceiling kicks in.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        (fake_home / AGENTIC_DEV_METADATA_DIR).mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        assert resolve_project_dir(fake_home) == fake_home
+
+    def test_walks_up_within_home_subtree(self, tmp_path, monkeypatch):
+        """The $HOME ceiling does not break normal walk-up within a project
+        that lives under $HOME."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        project = fake_home / "projects" / "skillsbloom"
+        (project / AGENTIC_DEV_METADATA_DIR).mkdir(parents=True)
+        inner = project / "backend" / "src"
+        inner.mkdir(parents=True)
+
+        assert resolve_project_dir(inner) == project

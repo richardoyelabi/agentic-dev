@@ -144,13 +144,21 @@ def resolve_project_dir(cwd: Path) -> Path:
     original ``cwd`` is returned: it is the prospective project root that
     would be scaffolded on the first ``agentic-dev work`` invocation.
 
-    The behaviour mirrors ``git rev-parse --show-toplevel`` and does not
-    consult any global registry.
+    The walk never crosses ``$HOME`` from below: a stale ``.agentic-dev/``
+    sitting directly in ``$HOME`` is ignored when invoked from a
+    subdirectory, so unrelated projects under ``$HOME`` cannot inherit each
+    other's metadata. ``$HOME`` itself is still honoured when ``cwd`` is
+    ``$HOME``.
     """
-    candidate = cwd.resolve()
+    cwd_resolved = cwd.resolve()
+    home = Path.home().resolve()
+    candidate = cwd_resolved
     while True:
         if (candidate / AGENTIC_DEV_METADATA_DIR).is_dir():
             return candidate
-        if candidate.parent == candidate:
-            return cwd.resolve()
-        candidate = candidate.parent
+        parent = candidate.parent
+        if parent == candidate:
+            return cwd_resolved
+        if parent == home and candidate != home:
+            return cwd_resolved
+        candidate = parent
