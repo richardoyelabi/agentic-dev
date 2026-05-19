@@ -1,3 +1,4 @@
+- COMMIT each new chunk of work!!!!!!
 - remove fsm to allow for work with and without agentic-dev without lock in?
 - remove allowlist for tools altogether, leaving claude with all the power (instead using prompts to make it not go rogue); this also allows for easily switching coding clis
 - make products more production ready - convo already started with claude
