@@ -725,6 +725,12 @@ class PipelineEngine:
         total_cost = 0.0
 
         for track in uat_tracks:
+            if track.name in state.completed_uat_tracks:
+                per_track_reports[track.name] = self._doc_store.read(
+                    f"uat_report_{track.name}"
+                )
+                continue
+
             desktop_framework: str | None = None
             spec_doc = f"{track.name}_spec"
             if (
@@ -803,6 +809,8 @@ class PipelineEngine:
                 self._doc_store.write(f"uat_report_{track.name}", validated)
             per_track_reports[track.name] = validated
             self._record_agent_run(state, agent_name, result.total_cost)
+            state.completed_uat_tracks.append(track.name)
+            self._state_manager.save(state)
 
         aggregated = aggregate_uat_reports(per_track_reports)
         self._doc_store.write("uat_report", aggregated)

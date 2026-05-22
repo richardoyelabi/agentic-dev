@@ -88,3 +88,4 @@ class PipelineState(BaseModel):
     agent_runs: list[AgentRunRecord] = Field(default_factory=list)
     active_session_id: str | None = None
     tracks: list[Track] = Field(default_factory=list)
+    completed_uat_tracks: list[str] = Field(default_factory=list)

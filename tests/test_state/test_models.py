@@ -44,6 +44,16 @@ class TestPipelineState:
         restored = PipelineState.model_validate(data)
         assert restored.phase == PipelinePhase.UAT
 
+    def test_completed_uat_tracks_defaults_to_empty(self):
+        state = PipelineState(project_name="test")
+        assert state.completed_uat_tracks == []
+
+    def test_completed_uat_tracks_round_trip(self):
+        state = PipelineState(project_name="t", completed_uat_tracks=["api", "web"])
+        data = state.model_dump()
+        restored = PipelineState.model_validate(data)
+        assert restored.completed_uat_tracks == ["api", "web"]
+
 
 class TestSprintState:
     def test_default_track_fields(self):

@@ -131,6 +131,15 @@ class TestResetForUpdate:
         with pytest.raises(InvalidTransitionError):
             reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
 
+    def test_reset_clears_completed_uat_tracks(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.COMPLETE,
+            completed_uat_tracks=["api", "web"],
+        )
+        result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
+        assert result.completed_uat_tracks == []
+
 
 class TestResumeFromFailure:
     def test_resumes_to_failed_at_phase(self) -> None:
@@ -222,6 +231,21 @@ class TestResumeFromFailure:
 
         assert resumed.sprints[0].status == SprintStatus.INTEGRATION
         assert resumed.sprints[0].failed_at_step is None
+
+    def test_resume_preserves_completed_uat_tracks(self) -> None:
+        """Tracks that passed UAT before the failure must not be re-run on resume."""
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.FAILED,
+            failed_at_phase=PipelinePhase.UAT,
+            error="uat_web agent raised AgentRunError",
+            completed_uat_tracks=["api"],
+        )
+        resumed = resume_from_failure(state)
+
+        assert resumed.completed_uat_tracks == ["api"]
+        assert resumed.phase == PipelinePhase.UAT
+        assert resumed.error is None
 
     def test_resume_preserves_complete_sprints(self) -> None:
         complete_sprint = SprintState(

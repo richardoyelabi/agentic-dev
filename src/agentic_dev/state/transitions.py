@@ -88,6 +88,7 @@ def reset_for_update(
     state.error = None
     state.failed_at_phase = None
     state.checkpoint_feedback = None
+    state.completed_uat_tracks = []
     if mode == "remediate":
         state.remediation_cycle += 1
     state.updated_at = datetime.now(timezone.utc)
