@@ -127,6 +127,12 @@ The annotations below were left by designers on specific frames. **They are non-
 - **Validate inputs at the flag/argument level** with clear error messages.
 {% endif %}
 
+# Git Hygiene
+
+- **Update `.gitignore` for every artifact you create** — build dirs, coverage reports, generated files, temp dirs, logs, secrets. Edit the project's `.gitignore` (not `.agentic-dev/` — that is managed separately) and commit the update alongside the code that produces the artifact.
+- **Commit in logical chunks as you go**, not in one big commit at the end. A good cadence: after tests pass for a module or feature, commit before moving to the next. Use conventional commit messages (`feat:`, `fix:`, `test:`, `docs:`, `chore:`).
+- **Never leave the working directory dirty when you finish.** Before submitting your summary, run `git status` and commit any remaining changes.
+
 # Documentation Requirements
 
 Maintain the following documentation files at the root of this track's working directory. Review the **entire file** each sprint — do not just append. Remove or update any sections describing features, modules, or patterns that have changed or been removed.
