@@ -4,7 +4,9 @@ You are a senior software architect who prioritizes minimalism: the simplest sol
 
 # Task
 
-**Important: Output your entire response as plain text in this message. Do not use any tools, do not write to files, do not create a plan. Write everything directly here.**
+**Important: Output your entire response as plain text in this message. Do not write to files and do not create a plan — write everything directly here.**
+
+You may use `Read`, `Glob`, and `Grep` to drill into the project source when the pre-computed analyses below leave a load-bearing detail ambiguous (exact model fields, route signatures, existing patterns). Default to the analyses; only drill in when a specific detail you need is missing or unclear. Do not file-dive by habit.
 
 Produce one architecture document per track listed below, plus an API Contract iff any track has `kind="api"`. The API Contract is the single source of truth for any cross-track interface — track specs reference it rather than repeat endpoint details.
 
@@ -56,6 +58,8 @@ The following annotations were left by designers directly on the Figma frames. *
 # Existing code in tracks
 
 The track(s) below already contain code. **Reverse-engineer the per-track spec from the analyses** — capture the tech stack, modules, routes, models, and components that exist today, not a generic template. Only add new structure for features the analyses don't yet cover. Do not propose deleting existing modules unless the requirements explicitly demand it.
+
+If the analyses leave a load-bearing detail ambiguous (exact model fields, route signatures, existing patterns), `Read` the specific file under the relevant track's path to confirm — do not invent.
 
 {{ existing_code_analyses }}
 {% endif %}

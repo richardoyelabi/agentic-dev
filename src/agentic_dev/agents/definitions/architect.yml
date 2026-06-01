@@ -4,9 +4,10 @@ team: design_architecture
 claude:
   model: opus
   permission_mode: bypassPermissions
-  allowed_tools: []
-  max_turns: 5
+  allowed_tools: [Read, Glob, Grep]
+  max_turns: 15
   max_budget_usd: 3.00
+  figma_mcp: true
 prompt_template: architect.md.j2
 input_documents: [features_request, structured_input]
 output_documents: [frontend_spec, backend_spec, api_contract]

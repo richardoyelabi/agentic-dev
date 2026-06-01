@@ -7,6 +7,7 @@ claude:
   allowed_tools: ["Read", "Glob", "Grep"]
   max_turns: 15
   max_budget_usd: 2.00
+  figma_mcp: true
 prompt_template: design_change_detection.md.j2
 input_documents: [frontend_spec, figma_sources]
 output_documents: [design_changes]

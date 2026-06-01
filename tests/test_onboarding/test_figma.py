@@ -98,10 +98,12 @@ class TestDetectDesignChanges:
 
         await detect_design_changes(mock_runner, sources, "existing spec text", tmp_path)
 
+        from agentic_dev.agents.figma_tools import figma_tool_patterns
+
         config = mock_runner.run.call_args.kwargs["agent"]
         assert config.name == "design_change_detection"
         assert config.model == "opus"
-        assert config.allowed_tools == []
+        assert config.allowed_tools == figma_tool_patterns()
         assert config.max_turns == 15
         assert config.use_bare_mode is True
 

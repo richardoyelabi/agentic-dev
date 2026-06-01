@@ -11,6 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from agentic_dev.agents.figma_tools import figma_tool_patterns
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgenticDevError
@@ -112,7 +113,7 @@ async def detect_design_changes(
         name="design_change_detection",
         model="opus",
         permission_mode="bypassPermissions",
-        allowed_tools=[],
+        allowed_tools=figma_tool_patterns(),
         max_turns=15,
         use_bare_mode=True,
         mcp_config=None,

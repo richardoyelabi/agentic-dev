@@ -12,6 +12,7 @@ class ClaudeConfig(BaseModel):
     max_budget_usd: float
     use_bare_mode: bool = True
     max_turns: int = 50
+    figma_mcp: bool = False
     timeout_s: int | None = None
     idle_timeout_s: int | None = None
 

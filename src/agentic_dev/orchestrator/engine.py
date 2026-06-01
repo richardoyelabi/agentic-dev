@@ -397,6 +397,7 @@ class PipelineEngine:
             prompt_renderer=self._prompt_renderer,
             extra_context=extra_context,
             session_id=state.active_session_id,
+            figma_mcp_enabled=figma_mcp_available == "true",
         )
 
         # Split multi-document output into separate per-track specs

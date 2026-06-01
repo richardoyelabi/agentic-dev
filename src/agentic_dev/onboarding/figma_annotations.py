@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agentic_dev.agents.figma_tools import figma_tool_patterns
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.onboarding.models import AnnotatedSource
@@ -22,22 +23,9 @@ from agentic_dev.orchestrator.agent_bridge import AgentRunConfig
 from agentic_dev.prompts.renderer import PromptRenderer
 
 
-_FIGMA_MCP_TOOL_PATTERNS = [
-    "mcp__figma-mcp-go",
-    "mcp__figma-remote-mcp",
-    "mcp__figma",
-]
-
-
 def _allowed_tools_for_figma() -> list[str]:
-    """Return the wildcard tool patterns the extractor agent may invoke.
-
-    The figma MCP server can be registered under several different names
-    (``figma-mcp-go``, ``figma-remote-mcp``, or simply ``figma`` for
-    user-added stdio servers). Allow them all so the agent can use whichever
-    one is configured.
-    """
-    return [f"{prefix}__*" for prefix in _FIGMA_MCP_TOOL_PATTERNS]
+    """Back-compat shim — prefer :func:`figma_tool_patterns` for new code."""
+    return figma_tool_patterns()
 
 
 async def extract_figma_annotations(
@@ -73,7 +61,7 @@ async def extract_figma_annotations(
         name="figma_annotations_extractor",
         model="sonnet",
         permission_mode="bypassPermissions",
-        allowed_tools=_allowed_tools_for_figma(),
+        allowed_tools=figma_tool_patterns(),
         use_bare_mode=True,
         mcp_config=None,
         system_prompt=None,

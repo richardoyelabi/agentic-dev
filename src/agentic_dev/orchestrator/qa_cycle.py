@@ -207,6 +207,7 @@ async def run_qa_cycle(
     mcp_config: Path | None = None,
     content_markers: list[str] | None = None,
     skip_action_output_in_qa: bool = False,
+    figma_mcp_enabled: bool = False,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -244,8 +245,10 @@ async def run_qa_cycle(
     qa_key = qa_output_key or output_doc_name
     qa_report_name = f"qa/{output_doc_name}"
 
-    action_config = to_run_config(action_agent, mcp_config=mcp_config)
-    qa_config = to_run_config(qa_agent)
+    action_config = to_run_config(
+        action_agent, mcp_config=mcp_config, figma_mcp_enabled=figma_mcp_enabled,
+    )
+    qa_config = to_run_config(qa_agent, figma_mcp_enabled=figma_mcp_enabled)
 
     if skip_to_correction:
         # Resume: load prior action output and QA report from doc_store

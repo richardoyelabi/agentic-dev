@@ -285,6 +285,7 @@ class SprintRunner:
             skip_to_correction=skip_to_correction,
             skip_action_output_in_qa=True,
             extra_context=extra_context,
+            figma_mcp_enabled=shared_context.get("figma_mcp_available") == "true",
         )
 
         if progress is not None:
