@@ -43,6 +43,15 @@ DEFAULT_MAX_TURNS = 50
 # ``timeout_s`` field in its definition.
 DEFAULT_AGENT_BACKSTOP_S = 21600  # 6 hours
 
+# Inactivity timeout: max time a single CLI invocation may make **no progress**
+# (no new entries in its session transcript) before it is treated as wedged —
+# e.g. the CLI hung on a stalled upstream model stream while still alive. This is
+# progress-based, not wall-clock, so a healthy agent that keeps working (or
+# briefly waits on a backgrounded server boot/build, which takes minutes) is
+# never killed; only a genuine stall (no transcript writes for this long) is.
+# Overridable per agent via the optional ``idle_timeout_s`` field.
+DEFAULT_AGENT_IDLE_TIMEOUT_S = 1200  # 20 minutes
+
 MODELS = {
     "opus": "claude-opus-4-6",
     "sonnet": "claude-sonnet-4-6",

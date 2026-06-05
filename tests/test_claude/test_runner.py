@@ -11,9 +11,11 @@ import pytest
 
 from agentic_dev.claude.runner import (
     DEFAULT_AGENT_BACKSTOP_S,
+    DEFAULT_AGENT_IDLE_TIMEOUT_S,
     ClaudeResult,
     ClaudeRunner,
     _collect_output,
+    _latest_session_activity,
     _terminate_process_group,
 )
 from agentic_dev.exceptions import AgentRunError, RateLimitError
@@ -45,6 +47,7 @@ class FakeAgentConfig:
     mcp_config: Path | None = None
     system_prompt: str | None = None
     timeout_s: int | None = None
+    idle_timeout_s: int | None = None
 
     def __post_init__(self):
         if self.allowed_tools is None:
@@ -1092,21 +1095,25 @@ class TestCollectOutput:
         proc.pid = pid
         return proc
 
-    async def test_normal_completion_returns_output_without_reaping(self):
+    async def test_normal_completion_returns_output_without_reaping(self, tmp_path: Path):
         proc = self._proc(returncode=0)
         proc.communicate = AsyncMock(return_value=(b"out", b"err"))
 
         with patch(
             "agentic_dev.claude.runner._terminate_process_group",
             new_callable=AsyncMock,
-        ) as reap:
-            out, err, wedged = await _collect_output(proc, "p", backstop_s=100)
+        ) as reap, patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=None
+        ):
+            out, err, wedged = await _collect_output(
+                proc, "p", tmp_path, backstop_s=100, idle_timeout_s=100
+            )
 
-        assert (out, err, wedged) == (b"out", b"err", False)
+        assert (out, err, wedged) == (b"out", b"err", None)
         # EOF reached normally: nothing holds the pipe, so no group is reaped.
         reap.assert_not_awaited()
 
-    async def test_leaked_pipe_reaped_then_real_output_returned(self):
+    async def test_leaked_pipe_reaped_then_real_output_returned(self, tmp_path: Path):
         """CLI exited but a child holds the pipe → reap group → real output."""
         release = asyncio.Event()
 
@@ -1125,13 +1132,17 @@ class TestCollectOutput:
             side_effect=_reap,
         ) as reap, patch(
             "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=None
         ):
-            out, err, wedged = await _collect_output(proc, "p", backstop_s=100)
+            out, err, wedged = await _collect_output(
+                proc, "p", tmp_path, backstop_s=100, idle_timeout_s=100
+            )
 
-        assert (out, wedged) == (b'{"result": "ok"}', False)
+        assert (out, wedged) == (b'{"result": "ok"}', None)
         reap.assert_awaited()
 
-    async def test_detached_child_abandons_stdout(self):
+    async def test_detached_child_abandons_stdout(self, tmp_path: Path):
         """A fully-detached child keeps the pipe open → give up on stdout."""
         async def _never(*args, **kwargs):
             await asyncio.Event().wait()
@@ -1146,12 +1157,17 @@ class TestCollectOutput:
             "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
         ), patch(
             "agentic_dev.claude.runner._DRAIN_GRACE_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=None
         ):
-            out, err, wedged = await _collect_output(proc, "p", backstop_s=100)
+            out, err, wedged = await _collect_output(
+                proc, "p", tmp_path, backstop_s=100, idle_timeout_s=100
+            )
 
-        assert (out, err, wedged) == (b"", b"", False)
+        assert (out, err, wedged) == (b"", b"", None)
 
-    async def test_backstop_fires_only_when_cli_never_exits(self):
+    async def test_backstop_fires_when_cli_never_exits(self, tmp_path: Path):
+        """idle window high → the absolute backstop is what fires."""
         async def _never(*args, **kwargs):
             await asyncio.Event().wait()
 
@@ -1163,11 +1179,94 @@ class TestCollectOutput:
             new_callable=AsyncMock,
         ) as reap, patch(
             "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=None
         ):
-            out, err, wedged = await _collect_output(proc, "p", backstop_s=0.05)
+            out, err, wedged = await _collect_output(
+                proc, "p", tmp_path, backstop_s=0.05, idle_timeout_s=100
+            )
 
-        assert wedged is True
+        assert wedged is not None and "did not exit" in wedged
         reap.assert_awaited()
+
+    async def test_idle_wedge_when_transcript_stops_advancing(self, tmp_path: Path):
+        """Alive CLI whose transcript freezes → idle wedge (before the backstop)."""
+        async def _never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        proc = self._proc(returncode=None)
+        proc.communicate = AsyncMock(side_effect=_never)
+
+        with patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ) as reap, patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=1000.0
+        ):
+            # constant (stale) activity, small idle, large backstop
+            out, err, wedged = await _collect_output(
+                proc, "p", tmp_path, backstop_s=100, idle_timeout_s=0.05
+            )
+
+        assert wedged is not None and "progress" in wedged
+        reap.assert_awaited()
+
+    async def test_progress_resets_idle_timer(self, tmp_path: Path):
+        """While the transcript keeps advancing, the idle timer never fires."""
+        async def _never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        proc = self._proc(returncode=None)
+        proc.communicate = AsyncMock(side_effect=_never)
+
+        counter = {"t": 1000.0}
+
+        def _advancing(*args, **kwargs):
+            counter["t"] += 1.0  # transcript always growing
+            return counter["t"]
+
+        with patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ), patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity",
+            side_effect=_advancing,
+        ):
+            # idle window tiny, but continuous progress keeps resetting it, so the
+            # absolute backstop is what eventually fires — not the idle path.
+            out, err, wedged = await _collect_output(
+                proc, "p", tmp_path, backstop_s=0.1, idle_timeout_s=0.02
+            )
+
+        assert wedged is not None and "did not exit" in wedged
+
+
+class TestLatestSessionActivity:
+    """Unit tests for the transcript-heartbeat helper."""
+
+    def test_returns_newest_jsonl_mtime(self, tmp_path: Path):
+        import os
+        wd = tmp_path / "proj"
+        wd.mkdir()
+        claude_dir = tmp_path / "claude"
+        sessions = claude_dir / "projects" / str(wd).replace("/", "-")
+        sessions.mkdir(parents=True)
+        (sessions / "a.jsonl").write_text("{}")
+        (sessions / "b.jsonl").write_text("{}")
+        os.utime(sessions / "a.jsonl", (1000, 1000))
+        os.utime(sessions / "b.jsonl", (2000, 2000))
+
+        assert _latest_session_activity(wd, claude_dir=claude_dir) == 2000.0
+
+    def test_none_when_no_session_dir(self, tmp_path: Path):
+        assert (
+            _latest_session_activity(tmp_path / "nope", claude_dir=tmp_path / "claude")
+            is None
+        )
 
 
 class TestRunOutputCollection:
@@ -1222,12 +1321,13 @@ class TestRunOutputCollection:
 
         assert mock_exec.call_args.kwargs["start_new_session"] is True
 
-    async def test_default_backstop_and_per_agent_override(self, tmp_path: Path):
+    async def test_default_and_override_timeouts(self, tmp_path: Path):
         captured: dict[str, float] = {}
 
-        async def fake_collect(process, prompt, backstop_s):
+        async def fake_collect(process, prompt, working_dir, backstop_s, idle_timeout_s):
             captured["backstop"] = backstop_s
-            return (json.dumps({"result": "ok"}).encode(), b"", False)
+            captured["idle"] = idle_timeout_s
+            return (json.dumps({"result": "ok"}).encode(), b"", None)
 
         runner = ClaudeRunner(enable_usage_api=False)
         proc = AsyncMock()
@@ -1242,9 +1342,13 @@ class TestRunOutputCollection:
         ):
             await runner.run(FakeAgentConfig(), "p", tmp_path)
             assert captured["backstop"] == DEFAULT_AGENT_BACKSTOP_S
+            assert captured["idle"] == DEFAULT_AGENT_IDLE_TIMEOUT_S
 
-            await runner.run(FakeAgentConfig(timeout_s=123), "p", tmp_path)
+            await runner.run(
+                FakeAgentConfig(timeout_s=123, idle_timeout_s=45), "p", tmp_path
+            )
             assert captured["backstop"] == 123
+            assert captured["idle"] == 45
 
     async def test_unreadable_stdout_recovers_from_transcript(self, tmp_path: Path):
         """Detached child held the pipe → empty stdout → salvage from transcript."""
@@ -1260,7 +1364,7 @@ class TestRunOutputCollection:
         ), patch(
             "agentic_dev.claude.runner._collect_output",
             new_callable=AsyncMock,
-            return_value=(b"", b"", False),
+            return_value=(b"", b"", None),
         ), patch.object(
             ClaudeRunner, "_discover_session_id", return_value="sess-x"
         ), patch.object(
@@ -1270,6 +1374,30 @@ class TestRunOutputCollection:
 
         assert result.text == "Recovered doc."
         assert result.session_id == "sess-x"
+
+    async def test_idle_wedged_cli_raises_agent_run_error(self, tmp_path: Path):
+        """An alive-but-stalled CLI (no transcript progress) fails cleanly."""
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig(name="uat_web", idle_timeout_s=0.05)
+        proc = self._hanging_proc(returncode=None)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=proc,
+        ) as mock_exec, patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ) as reap, patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=1000.0
+        ):
+            with pytest.raises(AgentRunError, match="made no progress") as exc_info:
+                await runner.run(agent, "prompt", tmp_path)
+
+        assert exc_info.value.agent_name == "uat_web"
+        reap.assert_awaited()  # process group killed
+        mock_exec.assert_called_once()  # a wedge is a hard fail — no retry
 
 
 class TestTerminateProcessGroup:

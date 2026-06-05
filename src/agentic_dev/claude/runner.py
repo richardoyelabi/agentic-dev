@@ -15,7 +15,12 @@ from agentic_dev.claude.rate_limiter import (
     UsageApiClient,
     WaitStrategy,
 )
-from agentic_dev.config import DEFAULT_AGENT_BACKSTOP_S, DEFAULT_MAX_TURNS, MODELS
+from agentic_dev.config import (
+    DEFAULT_AGENT_BACKSTOP_S,
+    DEFAULT_AGENT_IDLE_TIMEOUT_S,
+    DEFAULT_MAX_TURNS,
+    MODELS,
+)
 from agentic_dev.exceptions import AgentRunError, RateLimitError
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
@@ -82,18 +87,50 @@ async def _cancel_task(task: "asyncio.Future") -> None:
         await task
 
 
+def _latest_session_activity(
+    working_dir: Path, claude_dir: Path | None = None
+) -> float | None:
+    """Newest session-transcript mtime for ``working_dir`` (progress heartbeat).
+
+    The Claude CLI appends to ``~/.claude/projects/<encoded>/<session>.jsonl`` as
+    the agent works, so the newest ``*.jsonl`` mtime is a reliable "is it making
+    progress" signal. Returns ``None`` when no transcript exists yet. Unambiguous
+    because the orchestrator runs agents sequentially — only one CLI writes
+    transcripts for a given working dir at a time.
+    """
+    if claude_dir is None:
+        claude_dir = Path.home() / ".claude"
+    encoded_path = str(working_dir).replace("/", "-")
+    sessions_dir = claude_dir / "projects" / encoded_path
+    if not sessions_dir.is_dir():
+        return None
+    newest: float | None = None
+    for path in sessions_dir.glob("*.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if newest is None or mtime > newest:
+            newest = mtime
+    return newest
+
+
 async def _collect_output(
     process: asyncio.subprocess.Process,
     prompt: str,
+    working_dir: Path,
     backstop_s: float,
-) -> tuple[bytes, bytes, bool]:
-    """Collect ``(stdout, stderr)`` keyed on the CLI's *process exit*.
+    idle_timeout_s: float,
+) -> tuple[bytes, bytes, str | None]:
+    """Collect ``(stdout, stderr)`` keyed on the CLI's *process exit* + progress.
 
     ``process.communicate`` blocks until the stdout/stderr pipes reach EOF — not
     until the CLI exits. A dev server the agent backgrounds inherits those pipes
-    and holds them open, so ``communicate`` alone can hang indefinitely even
-    after the CLI itself has finished. Instead we drive ``communicate`` as a
-    task and watch ``process.returncode``:
+    and holds them open, so ``communicate`` alone can hang even after the CLI has
+    finished. And a CLI can wedge while *still alive* (e.g. a stalled upstream
+    model stream), making no progress yet never exiting. So we drive
+    ``communicate`` as a task and watch both ``process.returncode`` and the
+    session-transcript heartbeat:
 
     - communicate completes (EOF) → the CLI exited and nothing is holding the
       pipe open; return its output directly.
@@ -101,9 +138,13 @@ async def _collect_output(
       pipe; reap the process group to force EOF, then return the real buffered
       output. If a fully-detached child still holds it past a short grace,
       abandon stdout (caller recovers from the session transcript).
-    - the CLI never exits within ``backstop_s`` → a genuine wedge; reap and
-      report it (third element ``True``).
+    - the CLI is still running but its transcript has not advanced for
+      ``idle_timeout_s`` → wedged; reap and report it.
+    - the CLI never exits within ``backstop_s`` → absolute-ceiling wedge; reap
+      and report it.
 
+    The third element is ``None`` on success, or a short reason string when the
+    run was killed as wedged (the caller raises ``AgentRunError``).
     ``process.returncode`` is set by asyncio's child watcher on exit,
     independently of communicate's blocked read. Safe to poll because the
     orchestrator runs agents sequentially (one CLI process at a time).
@@ -113,6 +154,8 @@ async def _collect_output(
     )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + backstop_s
+    last_progress = loop.time()
+    last_activity = _latest_session_activity(working_dir)
 
     while True:
         done, _ = await asyncio.wait(
@@ -124,7 +167,7 @@ async def _collect_output(
             # backgrounds with its output redirected away is torn down by the
             # agent itself — see the UAT "Server lifecycle" rule.)
             stdout_bytes, stderr_bytes = comm_task.result()
-            return stdout_bytes, stderr_bytes, False
+            return stdout_bytes, stderr_bytes, None
 
         if process.returncode is not None:
             # CLI exited but a spawned process holds the pipe open. Reap the
@@ -134,17 +177,31 @@ async def _collect_output(
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     asyncio.shield(comm_task), timeout=_DRAIN_GRACE_S
                 )
-                return stdout_bytes, stderr_bytes, False
+                return stdout_bytes, stderr_bytes, None
             except asyncio.TimeoutError:
                 # Fully-detached child still holds the pipe; give up on stdout.
                 await _cancel_task(comm_task)
-                return b"", b"", False
+                return b"", b"", None
 
-        if loop.time() >= deadline:
-            # The CLI process itself never exited: a genuine wedge.
+        # CLI still running: check the transcript heartbeat for a live wedge.
+        current_activity = _latest_session_activity(working_dir)
+        if current_activity is not None and (
+            last_activity is None or current_activity > last_activity
+        ):
+            last_activity = current_activity
+            last_progress = loop.time()
+
+        if loop.time() - last_progress > idle_timeout_s:
+            # Alive but no transcript progress for too long — a wedged CLI.
             await _terminate_process_group(process)
             await _cancel_task(comm_task)
-            return b"", b"", True
+            return b"", b"", f"made no progress for {idle_timeout_s:.0f}s (wedged)"
+
+        if loop.time() >= deadline:
+            # The CLI process itself never exited: absolute-ceiling wedge.
+            await _terminate_process_group(process)
+            await _cancel_task(comm_task)
+            return b"", b"", f"did not exit within {backstop_s:.0f}s (wedged)"
 
 
 @runtime_checkable
@@ -163,6 +220,7 @@ class AgentConfig(Protocol):
     mcp_config: Path | None
     system_prompt: str | None
     timeout_s: int | None
+    idle_timeout_s: int | None
 
 
 @dataclass(frozen=True)
@@ -501,6 +559,9 @@ class ClaudeRunner:
         sprint = ctx.sprint_number if ctx else None
         start_time = datetime.now(timezone.utc)
         backstop_s = getattr(agent, "timeout_s", None) or DEFAULT_AGENT_BACKSTOP_S
+        idle_timeout_s = (
+            getattr(agent, "idle_timeout_s", None) or DEFAULT_AGENT_IDLE_TIMEOUT_S
+        )
 
         emit(_event_log, AgentStartEvent(
             agent_name=agent.name,
@@ -536,32 +597,29 @@ class ClaudeRunner:
             )
 
             stdout_bytes, stderr_bytes, wedged = await _collect_output(
-                process, prompt, backstop_s
+                process, prompt, working_dir, backstop_s, idle_timeout_s
             )
             if wedged:
-                # The CLI process itself never exited within the backstop — a
-                # genuine wedge (not a server holding the pipe, which is handled
-                # above). Hard-fail rather than wait indefinitely.
+                # The CLI hung — either no transcript progress for idle_timeout_s
+                # (alive but wedged, e.g. a stalled model stream) or it never
+                # exited within the backstop. Either way the process group was
+                # reaped; hard-fail rather than wait indefinitely.
                 duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
                 emit(_event_log, AgentFailedEvent(
                     agent_name=agent.name,
                     model=agent.model,
                     duration_s=duration_s,
                     exit_code=-1,
-                    error=f"CLI did not exit within {backstop_s:.0f}s",
+                    error=wedged,
                     sprint=sprint,
                     level="ERROR",
                     message=(
-                        f"Agent '{agent.name}' did not exit within "
-                        f"{backstop_s:.0f}s — process group killed"
+                        f"Agent '{agent.name}' {wedged} — process group killed"
                     ),
                 ))
                 raise AgentRunError(
                     agent_name=agent.name,
-                    message=(
-                        f"Agent '{agent.name}' did not exit within "
-                        f"{backstop_s:.0f}s (CLI wedged)"
-                    ),
+                    message=f"Agent '{agent.name}' {wedged}",
                     exit_code=-1,
                 )
             exit_code = process.returncode or 0

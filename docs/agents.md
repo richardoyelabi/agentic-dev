@@ -149,6 +149,9 @@ claude:
                                        # for a wedged CLI — normal completion is the
                                        # CLI's own exit. Defaults to
                                        # DEFAULT_AGENT_BACKSTOP_S in config.py
+  idle_timeout_s: int | null           # optional; max time with no session-transcript
+                                       # progress before the CLI is treated as wedged.
+                                       # Defaults to DEFAULT_AGENT_IDLE_TIMEOUT_S
   use_bare_mode: true                  # defaults to true on AgentDefinition
 prompt_template: string                # filename under prompts/templates/
 input_documents: [list]                # document names; can be empty

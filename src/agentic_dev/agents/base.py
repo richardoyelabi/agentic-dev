@@ -13,6 +13,7 @@ class ClaudeConfig(BaseModel):
     use_bare_mode: bool = True
     max_turns: int = 50
     timeout_s: int | None = None
+    idle_timeout_s: int | None = None
 
 
 class AgentDefinition(BaseModel):

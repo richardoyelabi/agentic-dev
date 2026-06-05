@@ -117,12 +117,19 @@ if a child still holds the pipe the subprocess's process group is reaped
 (`start_new_session=True` makes the CLI the group leader, so the pgid stays
 valid even after it exits) to force EOF and return the real output; a
 fully-detached child that still holds the pipe is abandoned and the result is
-recovered from the session transcript. A generous wall-clock backstop
-(`DEFAULT_AGENT_BACKSTOP_S`, overridable per agent via `timeout_s`) fires only
-when the CLI process *itself* never exits — a genuine wedge — raising
-`AgentRunError`; it is set high enough never to threaten a healthy long-running
-or waiting agent. Rate-limit waits happen between calls and are not counted
-against it.
+recovered from the session transcript.
+
+A CLI can also wedge while *still alive* — e.g. hung on a stalled upstream model
+stream — making no progress yet never exiting, which exit-detection cannot catch.
+So `_collect_output` also watches a **progress heartbeat**: the mtime of the
+agent's session-transcript JSONL (`_latest_session_activity`). If it does not
+advance for `DEFAULT_AGENT_IDLE_TIMEOUT_S` (20 min, overridable per agent via
+`idle_timeout_s`), the process group is reaped and `AgentRunError` raised. This is
+progress-based, so a healthy agent that keeps working (or briefly waits on a
+backgrounded server boot/build) is never killed — only a genuine stall is. A far
+larger wall-clock backstop (`DEFAULT_AGENT_BACKSTOP_S`, overridable via
+`timeout_s`) is the absolute ceiling for a CLI that never exits at all. Rate-limit
+waits happen between calls and are not counted against either.
 
 ### `agents/registry.py`
 Loads agent definitions from YAML files in
