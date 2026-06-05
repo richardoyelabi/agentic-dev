@@ -33,6 +33,16 @@ SESSIONS_LOCK_FILE = ".sessions.lock"
 
 DEFAULT_MAX_TURNS = 50
 
+# Last-resort wall-clock backstop for a single Claude CLI invocation. The normal
+# completion signal is the CLI *process exiting* (the runner collects output on
+# exit, not on pipe-EOF, so a server the agent leaves running cannot hang it).
+# This backstop only fires when the CLI process itself never exits — a genuine
+# wedge — so it is set generously high to never threaten a healthy long-running
+# or waiting agent. The rate-limit pause budget (``RATE_LIMIT_PAUSE_MAX_SECONDS``)
+# is separate and spent *between* calls. Overridable per agent via the optional
+# ``timeout_s`` field in its definition.
+DEFAULT_AGENT_BACKSTOP_S = 21600  # 6 hours
+
 MODELS = {
     "opus": "claude-opus-4-6",
     "sonnet": "claude-sonnet-4-6",

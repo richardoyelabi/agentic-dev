@@ -22,3 +22,10 @@ the application, prefer the command from `bootstrap.md` (typically
 with an e2e compose file). For long-running builds, redirect output to a
 file and watch it for a readiness regex — never stream raw build logs into
 your context.
+
+**Server lifecycle (mandatory).** Any server, watcher, or process that does
+not exit on its own MUST be started in the background (`Bash` with
+`run_in_background: true`), waited on via a readiness check, and **torn down
+before you finish — even on failure or early exit**. Never run such a process
+in the foreground: it blocks until killed and will hang the UAT run
+indefinitely. Never leave one running after you exit.

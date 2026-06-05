@@ -33,12 +33,22 @@ Start the backend, hit every endpoint the acceptance criteria reference, and rec
 
 # Runtime Verification
 
-1. **Start the backend.** Use `Bash` to boot the backend dev server. Wait for a health check to succeed.
+1. **Start the backend.** Boot the backend dev server using the **Backgrounded-process pattern** below — never run it in the foreground. Wait for a health check to succeed before sending requests.
 2. **Exercise each endpoint.** For each AC, send the appropriate HTTP request(s) via `curl` or a `python -c "import httpx; ..."` one-liner. Cover the happy path plus at least one error path (auth, validation, or not-found) per endpoint.
 3. **Capture transcripts.** Save request/response pairs under `.agentic-dev/uat/<run_id>/evidence/<track>/ac_NNN.http.txt`.
 4. **Assert API Contract compliance.** Status codes, response schemas, error envelope shape must match the contract exactly.
 
 **If curl/httpx are unavailable (per prereqs):** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
+
+# Backgrounded-process pattern
+
+The backend dev server does not return on its own. **Never run it in the foreground** — a foreground server blocks until killed and will hang this run indefinitely. Always:
+
+1. **Start.** Use `Bash` with `run_in_background: true`. Record the returned shell id and output-file path.
+2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on the readiness line (`Starting development server`, `Listening on`, `Running on`, `Uvicorn running on`, `Application startup complete`, etc.). Do **not** use bare `sleep` loops.
+3. **Poll only as a fallback.** If `Monitor` is unavailable, run a bounded `curl --max-time 2 http://localhost:PORT/health` loop, max 30 attempts × 2s.
+4. **Tear down.** Before you finish — including on failure or early exit — terminate the server via `pkill -f '<command-fragment>'` through `Bash`. **Never leave a server running.**
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
 
 # Constraints
 

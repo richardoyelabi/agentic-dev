@@ -1,7 +1,10 @@
 """Async subprocess wrapper for invoking Claude Code CLI."""
 
 import asyncio
+import contextlib
 import json
+import os
+import signal
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +15,7 @@ from agentic_dev.claude.rate_limiter import (
     UsageApiClient,
     WaitStrategy,
 )
-from agentic_dev.config import DEFAULT_MAX_TURNS, MODELS
+from agentic_dev.config import DEFAULT_AGENT_BACKSTOP_S, DEFAULT_MAX_TURNS, MODELS
 from agentic_dev.exceptions import AgentRunError, RateLimitError
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
@@ -24,6 +27,124 @@ from agentic_dev.logging.events import (
 )
 
 _event_log = get_event_logger("runner")
+
+# How often the output collector wakes to check whether the CLI has exited.
+_OUTPUT_POLL_INTERVAL_S = 5.0
+# After the CLI exits, how long to wait for its pipes to reach EOF once the
+# process group has been reaped, before giving up on stdout.
+_DRAIN_GRACE_S = 10.0
+# Grace between SIGTERM and SIGKILL when reaping a process group.
+_PROCESS_GROUP_TERM_GRACE_S = 5.0
+
+
+async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
+    """Reap the CLI's process group — the CLI plus anything it left running.
+
+    The subprocess is started with ``start_new_session=True``, so the CLI leads
+    its own process group whose id equals its pid. That pgid stays valid for
+    ``killpg`` even *after* the leader itself exits, as long as a child (e.g. a
+    dev server the agent backgrounded) survives in the group — which is exactly
+    the case we need to clean up. Children that re-``setsid`` into a brand-new
+    session detach and cannot be reached this way; those rely on the agent's own
+    teardown step.
+
+    Sends ``SIGTERM``, polls until the group is empty (or a short grace
+    elapses), then ``SIGKILL`` any survivors. ``killpg`` on an already-empty
+    group raises ``ProcessLookupError`` and is treated as "nothing to do".
+    """
+    pgid = process.pid
+    # Never signal pgid 0 (the caller's own group) or 1 (init): a missing or
+    # bogus pid must not take down the orchestrator — or the machine.
+    if not isinstance(pgid, int) or pgid <= 1:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+
+    waited = 0.0
+    while waited < _PROCESS_GROUP_TERM_GRACE_S:
+        await asyncio.sleep(0.2)
+        waited += 0.2
+        try:
+            os.killpg(pgid, 0)  # probe: does the group still have members?
+        except (ProcessLookupError, PermissionError):
+            return  # group is gone
+
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, signal.SIGKILL)
+
+
+async def _cancel_task(task: "asyncio.Future") -> None:
+    """Cancel a task and swallow the resulting CancelledError."""
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+async def _collect_output(
+    process: asyncio.subprocess.Process,
+    prompt: str,
+    backstop_s: float,
+) -> tuple[bytes, bytes, bool]:
+    """Collect ``(stdout, stderr)`` keyed on the CLI's *process exit*.
+
+    ``process.communicate`` blocks until the stdout/stderr pipes reach EOF — not
+    until the CLI exits. A dev server the agent backgrounds inherits those pipes
+    and holds them open, so ``communicate`` alone can hang indefinitely even
+    after the CLI itself has finished. Instead we drive ``communicate`` as a
+    task and watch ``process.returncode``:
+
+    - communicate completes (EOF) → the CLI exited and nothing is holding the
+      pipe open; return its output directly.
+    - the CLI has exited but communicate is still pending → a child holds the
+      pipe; reap the process group to force EOF, then return the real buffered
+      output. If a fully-detached child still holds it past a short grace,
+      abandon stdout (caller recovers from the session transcript).
+    - the CLI never exits within ``backstop_s`` → a genuine wedge; reap and
+      report it (third element ``True``).
+
+    ``process.returncode`` is set by asyncio's child watcher on exit,
+    independently of communicate's blocked read. Safe to poll because the
+    orchestrator runs agents sequentially (one CLI process at a time).
+    """
+    comm_task = asyncio.ensure_future(
+        process.communicate(input=prompt.encode("utf-8"))
+    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + backstop_s
+
+    while True:
+        done, _ = await asyncio.wait(
+            {comm_task}, timeout=_OUTPUT_POLL_INTERVAL_S
+        )
+        if comm_task in done:
+            # EOF reached: the CLI exited and no spawned process is holding the
+            # pipe open, so there is nothing to reap here. (A server the agent
+            # backgrounds with its output redirected away is torn down by the
+            # agent itself — see the UAT "Server lifecycle" rule.)
+            stdout_bytes, stderr_bytes = comm_task.result()
+            return stdout_bytes, stderr_bytes, False
+
+        if process.returncode is not None:
+            # CLI exited but a spawned process holds the pipe open. Reap the
+            # group to close the inherited fds, then drain the buffered output.
+            await _terminate_process_group(process)
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    asyncio.shield(comm_task), timeout=_DRAIN_GRACE_S
+                )
+                return stdout_bytes, stderr_bytes, False
+            except asyncio.TimeoutError:
+                # Fully-detached child still holds the pipe; give up on stdout.
+                await _cancel_task(comm_task)
+                return b"", b"", False
+
+        if loop.time() >= deadline:
+            # The CLI process itself never exited: a genuine wedge.
+            await _terminate_process_group(process)
+            await _cancel_task(comm_task)
+            return b"", b"", True
 
 
 @runtime_checkable
@@ -41,6 +162,7 @@ class AgentConfig(Protocol):
     use_bare_mode: bool
     mcp_config: Path | None
     system_prompt: str | None
+    timeout_s: int | None
 
 
 @dataclass(frozen=True)
@@ -261,6 +383,40 @@ class ClaudeRunner:
         return longest
 
     @staticmethod
+    def _discover_session_id(
+        working_dir: Path,
+        since: datetime,
+        claude_dir: Path | None = None,
+    ) -> str | None:
+        """Return the id of the newest session transcript for ``working_dir``.
+
+        Used to salvage a result when the CLI's stdout could not be read (a
+        detached child held the pipe). Picks the most recently modified
+        ``*.jsonl`` written at/after ``since``. Unambiguous because the
+        orchestrator runs agents sequentially — only one CLI writes transcripts
+        for a given working dir at a time.
+        """
+        if claude_dir is None:
+            claude_dir = Path.home() / ".claude"
+        encoded_path = str(working_dir).replace("/", "-")
+        sessions_dir = claude_dir / "projects" / encoded_path
+        if not sessions_dir.is_dir():
+            return None
+
+        cutoff = since.timestamp() - 5.0  # small slack for clock granularity
+        newest: tuple[float, str] | None = None
+        for path in sessions_dir.glob("*.jsonl"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime < cutoff:
+                continue
+            if newest is None or mtime > newest[0]:
+                newest = (mtime, path.stem)
+        return newest[1] if newest else None
+
+    @staticmethod
     def _extract_session_id(stdout: str) -> str | None:
         """Try to extract session_id from potentially partial JSON output."""
         try:
@@ -344,6 +500,7 @@ class ClaudeRunner:
         ctx = get_run_context()
         sprint = ctx.sprint_number if ctx else None
         start_time = datetime.now(timezone.utc)
+        backstop_s = getattr(agent, "timeout_s", None) or DEFAULT_AGENT_BACKSTOP_S
 
         emit(_event_log, AgentStartEvent(
             agent_name=agent.name,
@@ -373,11 +530,40 @@ class ClaudeRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(working_dir),
+                # Lead a new process group so we can reap the whole tree (the CLI
+                # plus any dev servers the agent spawns) once the CLI exits.
+                start_new_session=True,
             )
 
-            stdout_bytes, stderr_bytes = await process.communicate(
-                input=prompt.encode("utf-8")
+            stdout_bytes, stderr_bytes, wedged = await _collect_output(
+                process, prompt, backstop_s
             )
+            if wedged:
+                # The CLI process itself never exited within the backstop — a
+                # genuine wedge (not a server holding the pipe, which is handled
+                # above). Hard-fail rather than wait indefinitely.
+                duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+                emit(_event_log, AgentFailedEvent(
+                    agent_name=agent.name,
+                    model=agent.model,
+                    duration_s=duration_s,
+                    exit_code=-1,
+                    error=f"CLI did not exit within {backstop_s:.0f}s",
+                    sprint=sprint,
+                    level="ERROR",
+                    message=(
+                        f"Agent '{agent.name}' did not exit within "
+                        f"{backstop_s:.0f}s — process group killed"
+                    ),
+                ))
+                raise AgentRunError(
+                    agent_name=agent.name,
+                    message=(
+                        f"Agent '{agent.name}' did not exit within "
+                        f"{backstop_s:.0f}s (CLI wedged)"
+                    ),
+                    exit_code=-1,
+                )
             exit_code = process.returncode or 0
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
 
@@ -499,15 +685,52 @@ class ClaudeRunner:
 
             await asyncio.sleep(wait_seconds)
 
-        # --- Success path (unchanged) ---
+        # --- Success path ---
 
         try:
             raw_json = json.loads(stdout_text)
         except json.JSONDecodeError as exc:
-            raise AgentRunError(
+            # The CLI exited but its stdout JSON could not be read — a
+            # fully-detached child the agent spawned is still holding the pipe.
+            # Salvage the output from the session transcript rather than
+            # discarding completed work.
+            recovery_sid = resume_session_id or self._discover_session_id(
+                working_dir, start_time
+            )
+            recovered = ""
+            if exit_code == 0 and recovery_sid:
+                recovered = self._recover_longest_from_session(
+                    recovery_sid, working_dir
+                ) or self._recover_result_from_session(recovery_sid, working_dir)
+            if not recovered.strip():
+                raise AgentRunError(
+                    agent_name=agent.name,
+                    message=f"Failed to parse JSON output: {exc}",
+                ) from exc
+            result = ClaudeResult(
+                text=recovered,
+                session_id=recovery_sid,
+                cost_usd=0.0,
+                exit_code=exit_code,
+                raw_json={},
+            )
+            duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+            emit(_event_log, AgentCompleteEvent(
                 agent_name=agent.name,
-                message=f"Failed to parse JSON output: {exc}",
-            ) from exc
+                model=agent.model,
+                duration_s=duration_s,
+                cost_usd=0.0,
+                result_length=len(result.text),
+                session_id=result.session_id,
+                sprint=sprint,
+                level="WARNING",
+                message=(
+                    f"Agent '{agent.name}' output recovered from transcript "
+                    f"(stdout pipe held open by a detached child)"
+                ),
+            ))
+            self._save_log(agent, prompt, result)
+            return result
 
         result_text = raw_json.get("result", "") or ""
         sid = raw_json.get("session_id")

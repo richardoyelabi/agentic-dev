@@ -22,6 +22,7 @@ class AgentRunConfig:
     use_bare_mode: bool = True
     mcp_config: Path | None = None
     system_prompt: str | None = None
+    timeout_s: int | None = None
 
 
 def to_run_config(
@@ -44,4 +45,5 @@ def to_run_config(
         use_bare_mode=agent_def.claude.use_bare_mode,
         mcp_config=mcp_config,
         system_prompt=system_prompt,
+        timeout_s=agent_def.claude.timeout_s,
     )

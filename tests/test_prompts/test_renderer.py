@@ -321,6 +321,32 @@ class TestDocumentationRequirements:
         assert "Documentation" in result
 
 
+class TestUatServerLifecycleHardening:
+    """UAT agents must background and tear down servers — never run one in the
+    foreground.
+
+    Regression guard for the orphaned-server pipeline hang: a ``uat_api`` agent
+    that ran ``manage.py runserver`` in the foreground left the server alive and
+    froze the pipeline. Every UAT template must carry the server-lifecycle rule.
+    """
+
+    def test_shared_bootstrap_mandates_background_and_teardown(self, real_renderer):
+        for name in ("uat_api.md.j2", "uat_web.md.j2", "uat_cli.md.j2"):
+            result = real_renderer.render(name, AGENT_TEMPLATES[name])
+            assert "Server lifecycle (mandatory)" in result, name
+            assert "Never leave one running after you exit" in result, name
+            assert "run_in_background: true" in result, name
+
+    def test_uat_api_has_background_pattern_and_teardown(self, real_renderer):
+        result = real_renderer.render(
+            "uat_api.md.j2", AGENT_TEMPLATES["uat_api.md.j2"]
+        )
+        assert "Backgrounded-process pattern" in result
+        assert "Never run it in the foreground" in result
+        assert "Never leave a server running" in result
+        assert "pkill" in result
+
+
 class TestAgentTemplatesSmokeTest:
     """Smoke tests verifying all 14 agent templates render without errors."""
 
@@ -986,6 +1012,7 @@ class TestUATBackgroundedProcessPattern:
         "template_name",
         [
             "uat_web.md.j2",
+            "uat_api.md.j2",
             "uat_desktop_electron.md.j2",
             "uat_desktop_tauri.md.j2",
             "uat_mobile.md.j2",
@@ -1002,10 +1029,17 @@ class TestUATBackgroundedProcessPattern:
 
     @pytest.mark.parametrize(
         "template_name",
-        ["uat_api.md.j2", "uat_cli.md.j2"],
+        ["uat_cli.md.j2"],
     )
     def test_one_shot_uat_templates_omit_pattern(self, real_renderer, template_name):
-        """API and CLI UAT do not boot long-lived servers; the pattern is noise there."""
+        """CLI UAT exercises commands that return on their own, so it has no
+        long-lived dev server to background.
+
+        ``uat_api`` *does* boot a backend server (the orphaned-runserver hang
+        proved it), so it now carries the full pattern — see the include test
+        above. Even here, the shared bootstrap partial still supplies the
+        mandatory server-lifecycle rule as a safety net.
+        """
         result = real_renderer.render(template_name, AGENT_TEMPLATES[template_name])
         assert "Backgrounded-process pattern" not in result
 

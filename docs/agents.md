@@ -145,6 +145,10 @@ claude:
   allowed_tools: [list]                # additive on top of the base
   max_budget_usd: float
   max_turns: int                       # defaults to DEFAULT_MAX_TURNS in config.py
+  timeout_s: int | null                # optional; wall-clock backstop (last resort)
+                                       # for a wedged CLI — normal completion is the
+                                       # CLI's own exit. Defaults to
+                                       # DEFAULT_AGENT_BACKSTOP_S in config.py
   use_bare_mode: true                  # defaults to true on AgentDefinition
 prompt_template: string                # filename under prompts/templates/
 input_documents: [list]                # document names; can be empty

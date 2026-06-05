@@ -108,6 +108,22 @@ an agent's `RunnerConfig`. In print mode, the rendered prompt is passed
 immediately after `-p` (before flags like `--allowedTools`) so the CLI
 does not parse the prompt as an extra tool name.
 
+Output is collected on the CLI's **process exit**, not on pipe-EOF. A naive
+`communicate()` blocks until stdout/stderr reach EOF; a dev server a UAT agent
+backgrounds inherits those pipes and holds them open, so `communicate()` alone
+can hang forever even after the CLI has exited. Instead `_collect_output` drives
+`communicate()` as a task and watches `process.returncode`: once the CLI exits,
+if a child still holds the pipe the subprocess's process group is reaped
+(`start_new_session=True` makes the CLI the group leader, so the pgid stays
+valid even after it exits) to force EOF and return the real output; a
+fully-detached child that still holds the pipe is abandoned and the result is
+recovered from the session transcript. A generous wall-clock backstop
+(`DEFAULT_AGENT_BACKSTOP_S`, overridable per agent via `timeout_s`) fires only
+when the CLI process *itself* never exits — a genuine wedge — raising
+`AgentRunError`; it is set high enough never to threaten a healthy long-running
+or waiting agent. Rate-limit waits happen between calls and are not counted
+against it.
+
 ### `agents/registry.py`
 Loads agent definitions from YAML files in
 `src/agentic_dev/agents/definitions/`. Provides lookup by name and team.

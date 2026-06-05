@@ -2,14 +2,34 @@
 
 import asyncio
 import json
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
+from agentic_dev.claude.runner import (
+    DEFAULT_AGENT_BACKSTOP_S,
+    ClaudeResult,
+    ClaudeRunner,
+    _collect_output,
+    _terminate_process_group,
+)
 from agentic_dev.exceptions import AgentRunError, RateLimitError
+
+
+@pytest.fixture(autouse=True)
+def _never_signal_real_process_groups():
+    """Safety net: no test in this module may deliver a real OS signal.
+
+    ``_terminate_process_group`` calls ``os.killpg``; a mock process whose
+    ``pid`` happens to map to a live group would otherwise signal it for real
+    (this has crashed the dev machine). Neutralise ``killpg`` globally; tests
+    that assert on it re-patch within their own ``with`` block.
+    """
+    with patch("agentic_dev.claude.runner.os.killpg"):
+        yield
 
 
 @dataclass
@@ -24,6 +44,7 @@ class FakeAgentConfig:
     use_bare_mode: bool = False
     mcp_config: Path | None = None
     system_prompt: str | None = None
+    timeout_s: int | None = None
 
     def __post_init__(self):
         if self.allowed_tools is None:
@@ -1053,3 +1074,249 @@ class TestShortResultRecovery:
 
         mock_last.assert_called_once()
         assert result.text == "Final sign-off text."
+
+
+class TestCollectOutput:
+    """Unit tests for _collect_output: collect on CLI *exit*, not pipe-EOF.
+
+    A dev server the agent backgrounds inherits the CLI's stdout/stderr pipes
+    and holds them open, so ``communicate`` alone hangs even after the CLI
+    exits. ``_collect_output`` keys off ``process.returncode`` and reaps the
+    process group to force EOF.
+    """
+
+    @staticmethod
+    def _proc(returncode=0, pid=4242):
+        proc = AsyncMock()
+        proc.returncode = returncode
+        proc.pid = pid
+        return proc
+
+    async def test_normal_completion_returns_output_without_reaping(self):
+        proc = self._proc(returncode=0)
+        proc.communicate = AsyncMock(return_value=(b"out", b"err"))
+
+        with patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ) as reap:
+            out, err, wedged = await _collect_output(proc, "p", backstop_s=100)
+
+        assert (out, err, wedged) == (b"out", b"err", False)
+        # EOF reached normally: nothing holds the pipe, so no group is reaped.
+        reap.assert_not_awaited()
+
+    async def test_leaked_pipe_reaped_then_real_output_returned(self):
+        """CLI exited but a child holds the pipe → reap group → real output."""
+        release = asyncio.Event()
+
+        async def _comm(*args, **kwargs):
+            await release.wait()  # unblocks once the server is reaped
+            return (b'{"result": "ok"}', b"")
+
+        proc = self._proc(returncode=0)
+        proc.communicate = AsyncMock(side_effect=_comm)
+
+        async def _reap(_process):
+            release.set()  # server killed → pipe EOF → communicate completes
+
+        with patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            side_effect=_reap,
+        ) as reap, patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ):
+            out, err, wedged = await _collect_output(proc, "p", backstop_s=100)
+
+        assert (out, wedged) == (b'{"result": "ok"}', False)
+        reap.assert_awaited()
+
+    async def test_detached_child_abandons_stdout(self):
+        """A fully-detached child keeps the pipe open → give up on stdout."""
+        async def _never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        proc = self._proc(returncode=0)
+        proc.communicate = AsyncMock(side_effect=_never)
+
+        with patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ), patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._DRAIN_GRACE_S", 0.01
+        ):
+            out, err, wedged = await _collect_output(proc, "p", backstop_s=100)
+
+        assert (out, err, wedged) == (b"", b"", False)
+
+    async def test_backstop_fires_only_when_cli_never_exits(self):
+        async def _never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        proc = self._proc(returncode=None)  # process never exits
+        proc.communicate = AsyncMock(side_effect=_never)
+
+        with patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ) as reap, patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ):
+            out, err, wedged = await _collect_output(proc, "p", backstop_s=0.05)
+
+        assert wedged is True
+        reap.assert_awaited()
+
+
+class TestRunOutputCollection:
+    """run() wiring of the exit-keyed collector, backstop, and salvage."""
+
+    @staticmethod
+    def _hanging_proc(returncode=None, pid=4242):
+        proc = AsyncMock()
+
+        async def _never(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        proc.communicate = AsyncMock(side_effect=_never)
+        proc.returncode = returncode
+        proc.pid = pid
+        return proc
+
+    async def test_wedged_cli_raises_agent_run_error(self, tmp_path: Path):
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig(name="uat_api", timeout_s=0.05)
+        proc = self._hanging_proc(returncode=None)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=proc,
+        ) as mock_exec, patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ) as reap, patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ):
+            with pytest.raises(AgentRunError, match="did not exit") as exc_info:
+                await runner.run(agent, "prompt", tmp_path)
+
+        assert exc_info.value.agent_name == "uat_api"
+        reap.assert_awaited()  # process group killed
+        mock_exec.assert_called_once()  # a wedge is a hard fail — no retry
+
+    async def test_subprocess_started_in_new_session(self, tmp_path: Path):
+        """Each subprocess leads its own session so the group can be reaped."""
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        proc = TestRun._make_mock_process(
+            json.dumps({"result": "ok", "total_cost_usd": 0.01})
+        )
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=proc,
+        ) as mock_exec:
+            await runner.run(agent, "prompt", tmp_path)
+
+        assert mock_exec.call_args.kwargs["start_new_session"] is True
+
+    async def test_default_backstop_and_per_agent_override(self, tmp_path: Path):
+        captured: dict[str, float] = {}
+
+        async def fake_collect(process, prompt, backstop_s):
+            captured["backstop"] = backstop_s
+            return (json.dumps({"result": "ok"}).encode(), b"", False)
+
+        runner = ClaudeRunner(enable_usage_api=False)
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.pid = 1
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=proc,
+        ), patch(
+            "agentic_dev.claude.runner._collect_output", side_effect=fake_collect
+        ):
+            await runner.run(FakeAgentConfig(), "p", tmp_path)
+            assert captured["backstop"] == DEFAULT_AGENT_BACKSTOP_S
+
+            await runner.run(FakeAgentConfig(timeout_s=123), "p", tmp_path)
+            assert captured["backstop"] == 123
+
+    async def test_unreadable_stdout_recovers_from_transcript(self, tmp_path: Path):
+        """Detached child held the pipe → empty stdout → salvage from transcript."""
+        runner = ClaudeRunner(enable_usage_api=False)
+        agent = FakeAgentConfig()
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.pid = 1
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=proc,
+        ), patch(
+            "agentic_dev.claude.runner._collect_output",
+            new_callable=AsyncMock,
+            return_value=(b"", b"", False),
+        ), patch.object(
+            ClaudeRunner, "_discover_session_id", return_value="sess-x"
+        ), patch.object(
+            ClaudeRunner, "_recover_longest_from_session", return_value="Recovered doc.",
+        ):
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "Recovered doc."
+        assert result.session_id == "sess-x"
+
+
+class TestTerminateProcessGroup:
+    """Reaper signals the group by pid (start_new_session ⇒ pgid == pid),
+    which stays valid even after the CLI leader itself has exited."""
+
+    async def test_sigterm_then_empty_group_no_sigkill(self):
+        proc = AsyncMock()
+        proc.pid = 4242
+
+        def killpg(pgid, sig):
+            if sig == 0:
+                raise ProcessLookupError  # group emptied after SIGTERM
+
+        with patch(
+            "agentic_dev.claude.runner.os.killpg", side_effect=killpg
+        ) as kp, patch(
+            "agentic_dev.claude.runner.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await _terminate_process_group(proc)
+
+        sigs = [c.args[1] for c in kp.call_args_list]
+        assert signal.SIGTERM in sigs
+        assert signal.SIGKILL not in sigs
+
+    async def test_sigkill_when_group_survives_grace(self):
+        proc = AsyncMock()
+        proc.pid = 4242
+
+        with patch("agentic_dev.claude.runner.os.killpg") as kp, patch(
+            "agentic_dev.claude.runner.asyncio.sleep", new_callable=AsyncMock
+        ), patch("agentic_dev.claude.runner._PROCESS_GROUP_TERM_GRACE_S", 0.4):
+            await _terminate_process_group(proc)
+
+        sigs = [c.args[1] for c in kp.call_args_list]
+        assert sigs[0] == signal.SIGTERM
+        assert sigs[-1] == signal.SIGKILL
+
+    async def test_already_empty_group_is_a_noop(self):
+        proc = AsyncMock()
+        proc.pid = 4242
+
+        with patch(
+            "agentic_dev.claude.runner.os.killpg", side_effect=ProcessLookupError
+        ) as kp, patch(
+            "agentic_dev.claude.runner.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await _terminate_process_group(proc)
+
+        kp.assert_called_once_with(4242, signal.SIGTERM)
