@@ -131,6 +131,15 @@ larger wall-clock backstop (`DEFAULT_AGENT_BACKSTOP_S`, overridable via
 `timeout_s`) is the absolute ceiling for a CLI that never exits at all. Rate-limit
 waits happen between calls and are not counted against either.
 
+When a wedge is detected, the runner captures a diagnosis *before* reaping: a live
+process-group snapshot (`_snapshot_process_group` — the CLI plus its servers / MCP /
+browser and what each is blocked on) and a transcript-tail classification
+(`_diagnose_stall` — *tool hang* vs *model stall*, and on which tool). These are
+written to a `logs/stalls/<agent>_<ts>.md` report and the diagnosis is included in
+the `AgentRunError` / `AgentFailedEvent`, so a stall self-documents instead of
+needing manual transcript archaeology. All capture is best-effort and never blocks
+the kill.
+
 ### `agents/registry.py`
 Loads agent definitions from YAML files in
 `src/agentic_dev/agents/definitions/`. Provides lookup by name and team.

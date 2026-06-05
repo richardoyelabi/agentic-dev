@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import os
 import signal
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +18,7 @@ from agentic_dev.claude.runner import (
     ClaudeRunner,
     _collect_output,
     _latest_session_activity,
+    _snapshot_process_group,
     _terminate_process_group,
 )
 from agentic_dev.exceptions import AgentRunError, RateLimitError
@@ -1186,7 +1189,7 @@ class TestCollectOutput:
                 proc, "p", tmp_path, backstop_s=0.05, idle_timeout_s=100
             )
 
-        assert wedged is not None and "did not exit" in wedged
+        assert wedged is not None and "did not exit" in wedged.reason
         reap.assert_awaited()
 
     async def test_idle_wedge_when_transcript_stops_advancing(self, tmp_path: Path):
@@ -1210,7 +1213,7 @@ class TestCollectOutput:
                 proc, "p", tmp_path, backstop_s=100, idle_timeout_s=0.05
             )
 
-        assert wedged is not None and "progress" in wedged
+        assert wedged is not None and "progress" in wedged.reason
         reap.assert_awaited()
 
     async def test_progress_resets_idle_timer(self, tmp_path: Path):
@@ -1242,7 +1245,7 @@ class TestCollectOutput:
                 proc, "p", tmp_path, backstop_s=0.1, idle_timeout_s=0.02
             )
 
-        assert wedged is not None and "did not exit" in wedged
+        assert wedged is not None and "did not exit" in wedged.reason
 
 
 class TestLatestSessionActivity:
@@ -1267,6 +1270,62 @@ class TestLatestSessionActivity:
             _latest_session_activity(tmp_path / "nope", claude_dir=tmp_path / "claude")
             is None
         )
+
+
+class TestStallDiagnostics:
+    """Live process snapshot + transcript classification captured on a wedge."""
+
+    def test_snapshot_includes_own_group(self):
+        snap = _snapshot_process_group(os.getpgrp())
+        assert str(os.getpid()) in snap
+
+    def test_snapshot_bogus_pgid_does_not_raise(self):
+        snap = _snapshot_process_group(2_000_000_000)
+        assert isinstance(snap, str)
+        assert "no live members" in snap
+
+    @staticmethod
+    def _write_transcript(claude_dir: Path, working_dir: Path, entries: list[dict]):
+        encoded = str(working_dir).replace("/", "-")
+        sessions = claude_dir / "projects" / encoded
+        sessions.mkdir(parents=True)
+        (sessions / "sess.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in entries)
+        )
+
+    def test_diagnose_tool_hang(self, tmp_path: Path):
+        wd = Path("/work/x")
+        self._write_transcript(tmp_path, wd, [
+            {"type": "assistant", "timestamp": "T1",
+             "message": {"content": [{"type": "text", "text": "ok"}]}},
+            {"type": "assistant", "timestamp": "T2",
+             "message": {"content": [{"type": "tool_use", "name": "browser_click"}]}},
+        ])
+        summary, tail = ClaudeRunner._diagnose_stall(
+            wd, "sess", datetime(2026, 1, 1, tzinfo=timezone.utc), claude_dir=tmp_path
+        )
+        assert "tool hang" in summary and "browser_click" in summary
+        assert "tool_use:browser_click" in tail
+
+    def test_diagnose_model_stall(self, tmp_path: Path):
+        wd = Path("/work/y")
+        self._write_transcript(tmp_path, wd, [
+            {"type": "assistant", "timestamp": "T1",
+             "message": {"content": [{"type": "tool_use", "name": "browser_snapshot"}]}},
+            {"type": "user", "timestamp": "T2",
+             "message": {"content": [{"type": "tool_result", "tool_use_id": "x"}]}},
+        ])
+        summary, _ = ClaudeRunner._diagnose_stall(
+            wd, "sess", datetime(2026, 1, 1, tzinfo=timezone.utc), claude_dir=tmp_path
+        )
+        assert "model stall" in summary and "browser_snapshot" in summary
+
+    def test_diagnose_missing_transcript(self, tmp_path: Path):
+        summary, tail = ClaudeRunner._diagnose_stall(
+            Path("/work/z"), None,
+            datetime(2026, 1, 1, tzinfo=timezone.utc), claude_dir=tmp_path,
+        )
+        assert "unavailable" in summary
 
 
 class TestRunOutputCollection:
@@ -1398,6 +1457,55 @@ class TestRunOutputCollection:
         assert exc_info.value.agent_name == "uat_web"
         reap.assert_awaited()  # process group killed
         mock_exec.assert_called_once()  # a wedge is a hard fail — no retry
+
+    async def test_idle_wedge_writes_stall_report(self, tmp_path: Path):
+        runner = ClaudeRunner(enable_usage_api=False, log_dir=tmp_path)
+        agent = FakeAgentConfig(name="uat_web", idle_timeout_s=0.05)
+        proc = self._hanging_proc(returncode=None)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=proc,
+        ), patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ), patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=1000.0
+        ), patch(
+            "agentic_dev.claude.runner._snapshot_process_group", return_value="SNAP"
+        ):
+            with pytest.raises(AgentRunError):
+                await runner.run(agent, "prompt", tmp_path)
+
+        reports = list((tmp_path / "stalls").glob("uat_web_*.md"))
+        assert len(reports) == 1
+        assert "SNAP" in reports[0].read_text()
+
+    async def test_diagnostics_failure_does_not_mask_wedge(self, tmp_path: Path):
+        """If diagnosis blows up, the wedge still fails cleanly (no hang/crash)."""
+        runner = ClaudeRunner(enable_usage_api=False, log_dir=tmp_path)
+        agent = FakeAgentConfig(name="uat_web", idle_timeout_s=0.05)
+        proc = self._hanging_proc(returncode=None)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=proc,
+        ), patch(
+            "agentic_dev.claude.runner._terminate_process_group",
+            new_callable=AsyncMock,
+        ), patch(
+            "agentic_dev.claude.runner._OUTPUT_POLL_INTERVAL_S", 0.01
+        ), patch(
+            "agentic_dev.claude.runner._latest_session_activity", return_value=1000.0
+        ), patch(
+            "agentic_dev.claude.runner._snapshot_process_group", return_value="SNAP"
+        ), patch.object(
+            ClaudeRunner, "_diagnose_stall", side_effect=RuntimeError("boom")
+        ):
+            with pytest.raises(AgentRunError, match="made no progress"):
+                await runner.run(agent, "prompt", tmp_path)
 
 
 class TestTerminateProcessGroup:

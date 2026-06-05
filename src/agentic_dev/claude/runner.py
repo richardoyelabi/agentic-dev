@@ -87,6 +87,56 @@ async def _cancel_task(task: "asyncio.Future") -> None:
         await task
 
 
+@dataclass(frozen=True)
+class StallInfo:
+    """Why a wedged CLI was killed, plus a live snapshot of its process group."""
+
+    reason: str
+    proc_snapshot: str
+
+
+def _snapshot_process_group(pgid: int) -> str:
+    """Best-effort table of the live processes in ``pgid`` (Linux ``/proc``).
+
+    Captured *before* the group is reaped so a wedge report shows the CLI plus
+    the dev servers / MCP / browser it spawned, and what each is blocked on
+    (``wchan``). Never raises — diagnostics must not get in the way of the kill.
+    """
+    try:
+        rows: list[str] = []
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text()
+                rbrace = stat.rindex(")")
+                fields = stat[rbrace + 2:].split()
+                state = fields[0]
+                pgrp = int(fields[2])
+            except (OSError, ValueError, IndexError):
+                continue
+            if pgrp != pgid:
+                continue
+            try:
+                wchan = (entry / "wchan").read_text().strip() or "-"
+            except OSError:
+                wchan = "?"
+            try:
+                cmdline = (
+                    (entry / "cmdline").read_text().replace("\x00", " ").strip()
+                )
+            except OSError:
+                cmdline = ""
+            rows.append(f"  {entry.name:>7} {state} {wchan:<22} {cmdline[:100]}")
+        if not rows:
+            return f"process group {pgid}: no live members"
+        return "\n".join(
+            [f"process group {pgid} ({len(rows)} live) — pid state wchan cmd", *rows]
+        )
+    except Exception as exc:  # noqa: BLE001 — diagnostics are best-effort
+        return f"process snapshot unavailable: {exc}"
+
+
 def _latest_session_activity(
     working_dir: Path, claude_dir: Path | None = None
 ) -> float | None:
@@ -121,7 +171,7 @@ async def _collect_output(
     working_dir: Path,
     backstop_s: float,
     idle_timeout_s: float,
-) -> tuple[bytes, bytes, str | None]:
+) -> tuple[bytes, bytes, StallInfo | None]:
     """Collect ``(stdout, stderr)`` keyed on the CLI's *process exit* + progress.
 
     ``process.communicate`` blocks until the stdout/stderr pipes reach EOF — not
@@ -143,8 +193,9 @@ async def _collect_output(
     - the CLI never exits within ``backstop_s`` → absolute-ceiling wedge; reap
       and report it.
 
-    The third element is ``None`` on success, or a short reason string when the
-    run was killed as wedged (the caller raises ``AgentRunError``).
+    The third element is ``None`` on success, or a ``StallInfo`` (reason + a live
+    process-group snapshot taken before the reap) when the run was killed as
+    wedged (the caller diagnoses it and raises ``AgentRunError``).
     ``process.returncode`` is set by asyncio's child watcher on exit,
     independently of communicate's blocked read. Safe to poll because the
     orchestrator runs agents sequentially (one CLI process at a time).
@@ -193,15 +244,24 @@ async def _collect_output(
 
         if loop.time() - last_progress > idle_timeout_s:
             # Alive but no transcript progress for too long — a wedged CLI.
+            # Snapshot the live process tree *before* reaping it.
+            snapshot = _snapshot_process_group(process.pid)
             await _terminate_process_group(process)
             await _cancel_task(comm_task)
-            return b"", b"", f"made no progress for {idle_timeout_s:.0f}s (wedged)"
+            return b"", b"", StallInfo(
+                reason=f"made no progress for {idle_timeout_s:.0f}s (wedged)",
+                proc_snapshot=snapshot,
+            )
 
         if loop.time() >= deadline:
             # The CLI process itself never exited: absolute-ceiling wedge.
+            snapshot = _snapshot_process_group(process.pid)
             await _terminate_process_group(process)
             await _cancel_task(comm_task)
-            return b"", b"", f"did not exit within {backstop_s:.0f}s (wedged)"
+            return b"", b"", StallInfo(
+                reason=f"did not exit within {backstop_s:.0f}s (wedged)",
+                proc_snapshot=snapshot,
+            )
 
 
 @runtime_checkable
@@ -475,6 +535,84 @@ class ClaudeRunner:
         return newest[1] if newest else None
 
     @staticmethod
+    def _diagnose_stall(
+        working_dir: Path,
+        session_id: str | None,
+        start_time: datetime,
+        claude_dir: Path | None = None,
+    ) -> tuple[str, str]:
+        """Classify a stall from the session-transcript tail.
+
+        Returns ``(summary, tail_excerpt)``. The summary distinguishes a *tool
+        hang* (a trailing ``tool_use`` with no result — stuck inside a tool) from
+        a *model stall* (a trailing ``tool_result`` / user turn awaiting the next
+        model turn, as in the skillsbloom uat_web case). Best-effort: any failure
+        degrades to an "unavailable" summary rather than raising.
+        """
+        try:
+            if claude_dir is None:
+                claude_dir = Path.home() / ".claude"
+            sid = session_id or ClaudeRunner._discover_session_id(
+                working_dir, start_time, claude_dir
+            )
+            if not sid:
+                return ("transcript diagnosis unavailable (no session id)", "")
+            encoded = str(working_dir).replace("/", "-")
+            path = claude_dir / "projects" / encoded / f"{sid}.jsonl"
+            if not path.exists():
+                return ("transcript diagnosis unavailable (no transcript)", "")
+
+            last_tool: str | None = None
+            last_ts = ""
+            pending_tool: str | None = None
+            excerpt: list[str] = []
+            for raw in path.read_text(encoding="utf-8").splitlines()[-30:]:
+                try:
+                    msg = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                ts = msg.get("timestamp", "") or ""
+                content = msg.get("message", {}).get("content")
+                kinds: list[str] = []
+                if isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        bt = block.get("type")
+                        if bt == "tool_use":
+                            last_tool = block.get("name") or last_tool
+                            pending_tool = block.get("name")
+                            kinds.append(f"tool_use:{block.get('name')}")
+                        elif bt == "tool_result":
+                            pending_tool = None  # the tool returned
+                            kinds.append("tool_result")
+                        elif bt == "text":
+                            pending_tool = None
+                            kinds.append("text")
+                elif isinstance(content, str):
+                    kinds.append("text")
+                if ts:
+                    last_ts = ts
+                if kinds:
+                    excerpt.append(f"[{ts}] {msg.get('type')}: {', '.join(kinds)}")
+
+            if pending_tool:
+                summary = (
+                    f"tool hang: stuck in tool '{pending_tool}' "
+                    f"(no result; last activity {last_ts})"
+                )
+            elif last_tool:
+                summary = (
+                    f"model stall: awaiting model response after tool "
+                    f"'{last_tool}' (last activity {last_ts})"
+                )
+            else:
+                summary = f"unknown stall (last activity {last_ts})"
+            return (summary, "\n".join(excerpt[-12:]))
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            return (f"transcript diagnosis unavailable: {exc}", "")
+
+    @staticmethod
     def _extract_session_id(stdout: str) -> str | None:
         """Try to extract session_id from potentially partial JSON output."""
         try:
@@ -599,27 +737,37 @@ class ClaudeRunner:
             stdout_bytes, stderr_bytes, wedged = await _collect_output(
                 process, prompt, working_dir, backstop_s, idle_timeout_s
             )
-            if wedged:
-                # The CLI hung — either no transcript progress for idle_timeout_s
-                # (alive but wedged, e.g. a stalled model stream) or it never
-                # exited within the backstop. Either way the process group was
-                # reaped; hard-fail rather than wait indefinitely.
+            if wedged is not None:
+                # The CLI hung — either no transcript progress (alive but wedged,
+                # e.g. a stalled model stream) or it never exited within the
+                # backstop. The group was already reaped; diagnose what it was
+                # stuck on, persist a report, then hard-fail. Diagnostics are
+                # best-effort and must never mask the underlying failure.
+                try:
+                    summary, tail = self._diagnose_stall(
+                        working_dir, resume_session_id, start_time
+                    )
+                    report = self._save_stall_report(agent, wedged, summary, tail)
+                except Exception:  # noqa: BLE001 — never let diagnostics break the raise
+                    summary, report = "diagnosis unavailable", None
                 duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+                detail = f"{wedged.reason} — {summary}"
                 emit(_event_log, AgentFailedEvent(
                     agent_name=agent.name,
                     model=agent.model,
                     duration_s=duration_s,
                     exit_code=-1,
-                    error=wedged,
+                    error=detail,
                     sprint=sprint,
                     level="ERROR",
                     message=(
-                        f"Agent '{agent.name}' {wedged} — process group killed"
+                        f"Agent '{agent.name}' {detail}"
+                        + (f" — report: {report}" if report else "")
                     ),
                 ))
                 raise AgentRunError(
                     agent_name=agent.name,
-                    message=f"Agent '{agent.name}' {wedged}",
+                    message=f"Agent '{agent.name}' {detail}",
                     exit_code=-1,
                 )
             exit_code = process.returncode or 0
@@ -843,6 +991,39 @@ class ClaudeRunner:
         self._save_log(agent, prompt, result)
 
         return result
+
+    def _save_stall_report(
+        self,
+        agent: AgentConfig,
+        stall: StallInfo,
+        summary: str,
+        tail: str,
+    ) -> Path | None:
+        """Write a wedge report under ``log_dir/stalls/``. Best-effort.
+
+        Returns the report path, or ``None`` if there is no log dir or writing
+        fails — diagnostics must never break the failure path.
+        """
+        if self._log_dir is None:
+            return None
+        try:
+            stalls_dir = self._log_dir / "stalls"
+            stalls_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            path = stalls_dir / f"{agent.name}_{ts}.md"
+            path.write_text(
+                f"# Stall report: {agent.name}\n\n"
+                f"- When: {ts}\n"
+                f"- Reason: {stall.reason}\n"
+                f"- Diagnosis: {summary}\n\n"
+                f"## Transcript tail\n\n```\n{tail or '(unavailable)'}\n```\n\n"
+                f"## Process group snapshot (before reap)\n\n"
+                f"```\n{stall.proc_snapshot}\n```\n",
+                encoding="utf-8",
+            )
+            return path
+        except OSError:
+            return None
 
     def _save_log(
         self, agent: AgentConfig, prompt: str, result: ClaudeResult
