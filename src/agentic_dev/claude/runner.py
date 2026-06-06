@@ -93,10 +93,17 @@ async def _cancel_task(task: "asyncio.Future") -> None:
 
 @dataclass(frozen=True)
 class StallInfo:
-    """Why a wedged CLI was killed, plus a live snapshot of its process group."""
+    """Why a wedged CLI was killed, plus a live snapshot of its process group.
+
+    ``kind`` records the *origin* of the wedge: ``"idle"`` (alive but its
+    transcript stopped advancing — a candidate for a resume-retry when the
+    stall is a model stall) or ``"backstop"`` (the CLI process never exited at
+    all — never retried).
+    """
 
     reason: str
     proc_snapshot: str
+    kind: str = "idle"
 
 
 def _snapshot_process_group(pgid: int) -> str:
@@ -255,6 +262,7 @@ async def _collect_output(
             return b"", b"", StallInfo(
                 reason=f"made no progress for {idle_timeout_s:.0f}s (wedged)",
                 proc_snapshot=snapshot,
+                kind="idle",
             )
 
         if loop.time() >= deadline:
@@ -265,6 +273,7 @@ async def _collect_output(
             return b"", b"", StallInfo(
                 reason=f"did not exit within {backstop_s:.0f}s (wedged)",
                 proc_snapshot=snapshot,
+                kind="backstop",
             )
 
 
@@ -321,9 +330,14 @@ class ClaudeRunner:
         base_delay: float = 30.0,
         enable_usage_api: bool = True,
         usage_client: UsageApiClient | None = None,
+        max_stall_retries: int = 2,
     ) -> None:
         self._log_dir = log_dir
         self._max_retries = max_retries
+        # Dedicated, small budget for resuming through transient *model stalls*.
+        # Kept separate from ``max_retries`` because each stall re-detection costs
+        # a full idle window, so the wall-clock bleed must be bounded tightly.
+        self._max_stall_retries = max_stall_retries
         if usage_client is None and enable_usage_api:
             usage_client = UsageApiClient()
         self._usage_client = usage_client
@@ -544,14 +558,16 @@ class ClaudeRunner:
         session_id: str | None,
         start_time: datetime,
         claude_dir: Path | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         """Classify a stall from the session-transcript tail.
 
-        Returns ``(summary, tail_excerpt)``. The summary distinguishes a *tool
-        hang* (a trailing ``tool_use`` with no result — stuck inside a tool) from
-        a *model stall* (a trailing ``tool_result`` / user turn awaiting the next
-        model turn, as in the skillsbloom uat_web case). Best-effort: any failure
-        degrades to an "unavailable" summary rather than raising.
+        Returns ``(kind, summary, tail_excerpt)`` where ``kind`` is one of
+        ``"model_stall"`` (a trailing ``tool_result`` / user turn awaiting the
+        next model turn — the transient skillsbloom uat_web case, safe to resume),
+        ``"tool_hang"`` (a trailing ``tool_use`` with no result — stuck inside a
+        tool), ``"unknown"``, or ``"unavailable"``. ``summary`` is the
+        human-readable form of the same. Best-effort: any failure degrades to an
+        ``"unavailable"`` classification rather than raising.
         """
         try:
             if claude_dir is None:
@@ -560,11 +576,19 @@ class ClaudeRunner:
                 working_dir, start_time, claude_dir
             )
             if not sid:
-                return ("transcript diagnosis unavailable (no session id)", "")
+                return (
+                    "unavailable",
+                    "transcript diagnosis unavailable (no session id)",
+                    "",
+                )
             encoded = str(working_dir).replace("/", "-")
             path = claude_dir / "projects" / encoded / f"{sid}.jsonl"
             if not path.exists():
-                return ("transcript diagnosis unavailable (no transcript)", "")
+                return (
+                    "unavailable",
+                    "transcript diagnosis unavailable (no transcript)",
+                    "",
+                )
 
             last_tool: str | None = None
             last_ts = ""
@@ -595,20 +619,23 @@ class ClaudeRunner:
                     excerpt.append(f"[{ts}] {msg.get('type')}: {', '.join(kinds)}")
 
             if pending_tool:
+                kind = "tool_hang"
                 summary = (
                     f"tool hang: stuck in tool '{pending_tool}' "
                     f"(no result; last activity {last_ts})"
                 )
             elif last_tool:
+                kind = "model_stall"
                 summary = (
                     f"model stall: awaiting model response after tool "
                     f"'{last_tool}' (last activity {last_ts})"
                 )
             else:
+                kind = "unknown"
                 summary = f"unknown stall (last activity {last_ts})"
-            return (summary, "\n".join(excerpt[-12:]))
+            return (kind, summary, "\n".join(excerpt[-12:]))
         except Exception as exc:  # noqa: BLE001 — best-effort
-            return (f"transcript diagnosis unavailable: {exc}", "")
+            return ("unavailable", f"transcript diagnosis unavailable: {exc}", "")
 
     @staticmethod
     def _extract_session_id(stdout: str) -> str | None:
@@ -711,6 +738,7 @@ class ClaudeRunner:
         resume_session_id = session_id
         exit_code = 0
         stdout_text = ""
+        model_stall_retries = 0
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0 and resume_session_id:
@@ -753,18 +781,64 @@ class ClaudeRunner:
                 with contextlib.suppress(asyncio.CancelledError):
                     await activity_tailer
             if wedged is not None:
-                # The CLI hung — either no transcript progress (alive but wedged,
-                # e.g. a stalled model stream) or it never exited within the
-                # backstop. The group was already reaped; diagnose what it was
-                # stuck on, persist a report, then hard-fail. Diagnostics are
-                # best-effort and must never mask the underlying failure.
+                # The CLI hung — either no transcript progress (alive but wedged)
+                # or it never exited within the backstop. The group was already
+                # reaped; diagnose what it was stuck on and persist a report.
+                # Diagnostics are best-effort and must never mask the failure, so a
+                # diagnosis error degrades to a non-retryable "unavailable".
                 try:
-                    summary, tail = self._diagnose_stall(
+                    diag_kind, summary, tail = self._diagnose_stall(
                         working_dir, resume_session_id, start_time
                     )
                     report = self._save_stall_report(agent, wedged, summary, tail)
                 except Exception:  # noqa: BLE001 — never let diagnostics break the raise
-                    summary, report = "diagnosis unavailable", None
+                    diag_kind, summary, report = (
+                        "unavailable", "diagnosis unavailable", None,
+                    )
+
+                # A *model stall* — the CLI is alive but blocked awaiting the
+                # model's next response (an upstream hiccup; the process snapshot
+                # shows it idle in ep_poll with no hung child) — is transient,
+                # exactly like the API-timeout case handled further below. Resume
+                # the session and retry rather than failing the whole pipeline.
+                # Gated tightly: only the idle-timeout wedge (not the wall-clock
+                # backstop), only a model stall (not a tool hang — a likely
+                # deterministic block that resuming would just re-enter), and only
+                # within a small dedicated budget, since each re-detection costs a
+                # full idle window.
+                if (
+                    wedged.kind == "idle"
+                    and diag_kind == "model_stall"
+                    and model_stall_retries < self._max_stall_retries
+                    and attempt < self._max_retries
+                ):
+                    resume_target = resume_session_id or self._discover_session_id(
+                        working_dir, start_time
+                    )
+                    if resume_target:
+                        resume_session_id = resume_target
+                        model_stall_retries += 1
+                        wait_seconds = 30.0 * (attempt + 1)
+                        emit(_event_log, AgentRetryEvent(
+                            agent_name=agent.name,
+                            model=agent.model,
+                            attempt=attempt + 1,
+                            max_retries=self._max_retries,
+                            wait_seconds=wait_seconds,
+                            wait_source="model_stall_backoff",
+                            reason="model_stall",
+                            will_resume_session=True,
+                            sprint=sprint,
+                            message=(
+                                f"Agent '{agent.name}' stalled awaiting model "
+                                f"response; resuming session {resume_target} in "
+                                f"{wait_seconds:.0f}s (stall retry "
+                                f"{model_stall_retries}/{self._max_stall_retries})"
+                            ),
+                        ))
+                        await asyncio.sleep(wait_seconds)
+                        continue
+
                 duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
                 detail = f"{wedged.reason} — {summary}"
                 emit(_event_log, AgentFailedEvent(

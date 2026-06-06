@@ -132,7 +132,8 @@ stream — making no progress yet never exiting, which exit-detection cannot cat
 So `_collect_output` also watches a **progress heartbeat**: the mtime of the
 agent's session-transcript JSONL (`_latest_session_activity`). If it does not
 advance for `DEFAULT_AGENT_IDLE_TIMEOUT_S` (20 min, overridable per agent via
-`idle_timeout_s`), the process group is reaped and `AgentRunError` raised. This is
+`idle_timeout_s`), the process group is reaped and the stall is diagnosed (below,
+which decides whether it is retried or fails). This is
 progress-based, so a healthy agent that keeps working (or briefly waits on a
 backgrounded server boot/build) is never killed — only a genuine stall is. A far
 larger wall-clock backstop (`DEFAULT_AGENT_BACKSTOP_S`, overridable via
@@ -147,6 +148,16 @@ written to a `logs/stalls/<agent>_<ts>.md` report and the diagnosis is included 
 the `AgentRunError` / `AgentFailedEvent`, so a stall self-documents instead of
 needing manual transcript archaeology. All capture is best-effort and never blocks
 the kill.
+
+The classification also drives the outcome. A **model stall** (an idle wedge whose
+transcript tail shows the CLI alive but blocked awaiting the model's next response —
+a transient upstream hiccup, exactly like the API-error case above) is retried by
+resuming the session, bounded by a small dedicated budget (`max_stall_retries`,
+default 2) kept separate from the rate-limit/API retries because each re-detection
+costs a full idle window. A **tool hang** (stuck inside a tool — a likely
+deterministic block that resuming would just re-enter) and the wall-clock backstop
+instead hard-fail with `AgentRunError`, so a genuinely stuck command surfaces for
+fixing rather than silently burning retries.
 
 While a subprocess runs, `run` also starts `tail_transcript_activity`
 (`claude/activity.py`) to surface what the agent is doing live. It is read-only

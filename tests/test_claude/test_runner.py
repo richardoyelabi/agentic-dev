@@ -16,6 +16,7 @@ from agentic_dev.claude.runner import (
     DEFAULT_AGENT_IDLE_TIMEOUT_S,
     ClaudeResult,
     ClaudeRunner,
+    StallInfo,
     _collect_output,
     _latest_session_activity,
     _snapshot_process_group,
@@ -1337,6 +1338,7 @@ class TestCollectOutput:
             )
 
         assert wedged is not None and "did not exit" in wedged.reason
+        assert wedged.kind == "backstop"
         reap.assert_awaited()
 
     async def test_idle_wedge_when_transcript_stops_advancing(self, tmp_path: Path):
@@ -1361,6 +1363,7 @@ class TestCollectOutput:
             )
 
         assert wedged is not None and "progress" in wedged.reason
+        assert wedged.kind == "idle"
         reap.assert_awaited()
 
     async def test_progress_resets_idle_timer(self, tmp_path: Path):
@@ -1448,9 +1451,10 @@ class TestStallDiagnostics:
             {"type": "assistant", "timestamp": "T2",
              "message": {"content": [{"type": "tool_use", "name": "browser_click"}]}},
         ])
-        summary, tail = ClaudeRunner._diagnose_stall(
+        kind, summary, tail = ClaudeRunner._diagnose_stall(
             wd, "sess", datetime(2026, 1, 1, tzinfo=timezone.utc), claude_dir=tmp_path
         )
+        assert kind == "tool_hang"
         assert "tool hang" in summary and "browser_click" in summary
         assert "tool_use:browser_click" in tail
 
@@ -1462,16 +1466,18 @@ class TestStallDiagnostics:
             {"type": "user", "timestamp": "T2",
              "message": {"content": [{"type": "tool_result", "tool_use_id": "x"}]}},
         ])
-        summary, _ = ClaudeRunner._diagnose_stall(
+        kind, summary, _ = ClaudeRunner._diagnose_stall(
             wd, "sess", datetime(2026, 1, 1, tzinfo=timezone.utc), claude_dir=tmp_path
         )
+        assert kind == "model_stall"
         assert "model stall" in summary and "browser_snapshot" in summary
 
     def test_diagnose_missing_transcript(self, tmp_path: Path):
-        summary, tail = ClaudeRunner._diagnose_stall(
+        kind, summary, tail = ClaudeRunner._diagnose_stall(
             Path("/work/z"), None,
             datetime(2026, 1, 1, tzinfo=timezone.utc), claude_dir=tmp_path,
         )
+        assert kind == "unavailable"
         assert "unavailable" in summary
 
 
@@ -1603,7 +1609,8 @@ class TestRunOutputCollection:
 
         assert exc_info.value.agent_name == "uat_web"
         reap.assert_awaited()  # process group killed
-        mock_exec.assert_called_once()  # a wedge is a hard fail — no retry
+        # an unclassifiable wedge (no transcript → not a model stall) hard-fails
+        mock_exec.assert_called_once()
 
     async def test_idle_wedge_writes_stall_report(self, tmp_path: Path):
         runner = ClaudeRunner(enable_usage_api=False, log_dir=tmp_path)
@@ -1653,6 +1660,158 @@ class TestRunOutputCollection:
         ):
             with pytest.raises(AgentRunError, match="made no progress"):
                 await runner.run(agent, "prompt", tmp_path)
+
+
+class TestModelStallRetry:
+    """A *model stall* (CLI alive, blocked awaiting the model's response) is a
+    transient upstream hiccup, so the run is retried by resuming the session —
+    the same treatment as a transient API error. A *tool hang* (stuck inside a
+    tool, a likely-deterministic block) and the wall-clock *backstop* (CLI never
+    exited) still fail fast.
+    """
+
+    @staticmethod
+    def _proc(returncode: int = 0, pid: int = 1):
+        proc = AsyncMock()
+        proc.returncode = returncode
+        proc.pid = pid
+        return proc
+
+    @staticmethod
+    def _stall(kind: str, reason: str):
+        return (b"", b"", StallInfo(reason=reason, proc_snapshot="SNAP", kind=kind))
+
+    async def test_model_stall_retries_by_resuming(self, tmp_path: Path):
+        """idle wedge + model-stall diagnosis → discover the session, resume, retry."""
+        runner = ClaudeRunner(max_retries=3, enable_usage_api=False)
+        agent = FakeAgentConfig(name="uat_web")
+
+        stall = self._stall("idle", "made no progress for 1200s (wedged)")
+        success = (
+            json.dumps({"result": "ok", "total_cost_usd": 0.1}).encode(),
+            b"",
+            None,
+        )
+
+        captured_cmds: list[list[str]] = []
+
+        async def mock_exec(*args, **kwargs):
+            captured_cmds.append(list(args))
+            return self._proc()
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch(
+            "agentic_dev.claude.runner._collect_output",
+            new_callable=AsyncMock, side_effect=[stall, success],
+        ), patch.object(
+            ClaudeRunner, "_diagnose_stall",
+            return_value=("model_stall", "model stall: awaiting model response", "t"),
+        ), patch.object(
+            ClaudeRunner, "_discover_session_id", return_value="discovered-sess",
+        ) as disc, patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "ok"
+        assert len(captured_cmds) == 2  # initial attempt + one resume
+        disc.assert_called()
+        second = captured_cmds[1]
+        assert "--resume" in second
+        assert second[second.index("--resume") + 1] == "discovered-sess"
+
+    async def test_tool_hang_wedge_is_not_retried(self, tmp_path: Path):
+        """A tool hang is a likely-deterministic block — fail fast, no resume."""
+        runner = ClaudeRunner(max_retries=3, enable_usage_api=False)
+        agent = FakeAgentConfig(name="uat_web")
+        stall = self._stall("idle", "made no progress for 1200s (wedged)")
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return self._proc()
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch(
+            "agentic_dev.claude.runner._collect_output",
+            new_callable=AsyncMock, side_effect=[stall],
+        ), patch.object(
+            ClaudeRunner, "_diagnose_stall",
+            return_value=("tool_hang", "tool hang: stuck in tool 'Bash'", "t"),
+        ), patch.object(
+            ClaudeRunner, "_discover_session_id", return_value="sess",
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(AgentRunError, match="made no progress"):
+                await runner.run(agent, "prompt", tmp_path)
+
+        assert call_count == 1
+
+    async def test_backstop_wedge_is_not_retried(self, tmp_path: Path):
+        """The 6h backstop (CLI never exited) is never resumed, even when the
+        transcript tail looks like a model stall."""
+        runner = ClaudeRunner(max_retries=3, enable_usage_api=False)
+        agent = FakeAgentConfig(name="uat_web")
+        stall = self._stall("backstop", "did not exit within 21600s (wedged)")
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return self._proc()
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch(
+            "agentic_dev.claude.runner._collect_output",
+            new_callable=AsyncMock, side_effect=[stall],
+        ), patch.object(
+            ClaudeRunner, "_diagnose_stall",
+            return_value=("model_stall", "model stall: awaiting model response", "t"),
+        ), patch.object(
+            ClaudeRunner, "_discover_session_id", return_value="sess",
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(AgentRunError, match="did not exit"):
+                await runner.run(agent, "prompt", tmp_path)
+
+        assert call_count == 1
+
+    async def test_model_stall_retry_budget_exhausts(self, tmp_path: Path):
+        """max_stall_retries bounds the resumes: one resume, then hard-fail."""
+        runner = ClaudeRunner(
+            max_retries=5, max_stall_retries=1, enable_usage_api=False,
+        )
+        agent = FakeAgentConfig(name="uat_web")
+        stall = self._stall("idle", "made no progress for 1200s (wedged)")
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return self._proc()
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch(
+            "agentic_dev.claude.runner._collect_output",
+            new_callable=AsyncMock, side_effect=[stall, stall],
+        ), patch.object(
+            ClaudeRunner, "_diagnose_stall",
+            return_value=("model_stall", "model stall: awaiting model response", "t"),
+        ), patch.object(
+            ClaudeRunner, "_discover_session_id", return_value="sess",
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(AgentRunError, match="made no progress"):
+                await runner.run(agent, "prompt", tmp_path)
+
+        assert call_count == 2  # initial + 1 resume, then give up
 
 
 class TestTerminateProcessGroup:
