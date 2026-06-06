@@ -106,6 +106,27 @@ agentic-dev cost                # cost breakdown by agent/sprint
 There is no `agentic-dev new` or `agentic-dev update`. Both are subsumed
 by `work` — first call onboards, subsequent calls enqueue updates.
 
+## Following progress
+
+In an interactive terminal, `agentic-dev work` shows a live dashboard:
+
+- a **status** line — current phase, the active agent, sprint progress,
+  cumulative cost, and elapsed time;
+- a **"Now"** panel — the current agent's last few actions as they happen
+  (e.g. `Read existing_code_analyses.md`, `Edit src/api/routes.py`,
+  `Bash pytest`, or `writing…`), so you can follow what an agent is doing
+  during the minutes it runs, without the screen filling up;
+- an **Events** log — coarse milestones only (phase transitions, agent
+  start/finish, QA verdicts, sprint boundaries).
+
+The terminal stays concise on purpose. The full, fine-grained activity stream
+is always written to the run's log files regardless of what the terminal shows:
+
+- `.agentic-dev/logs/runs/<run_id>/events.jsonl` — every event as JSON
+  (e.g. `grep agent_activity` to replay what an agent did);
+- `.agentic-dev/logs/runs/<run_id>/pipeline.log` — the same, human-readable;
+- `.agentic-dev/logs/latest` — symlink to the most recent run.
+
 ## Checkpoints
 
 By default the pipeline pauses after design (architecture + sprint plan)

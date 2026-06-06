@@ -148,6 +148,23 @@ the `AgentRunError` / `AgentFailedEvent`, so a stall self-documents instead of
 needing manual transcript archaeology. All capture is best-effort and never blocks
 the kill.
 
+While a subprocess runs, `run` also starts `tail_transcript_activity`
+(`claude/activity.py`) to surface what the agent is doing live. It is read-only
+on the transcript and strictly scoped to the subprocess — always cancelled in a
+`finally` before the wedge/exit handling above — so it never interferes with
+process reaping or stall diagnosis.
+
+### `claude/activity.py`
+Turns an agent's live session transcript into a concise activity feed. Owns the
+session-transcript path helpers shared with the runner (`sessions_dir_for`,
+`transcript_path`, `discover_latest_session_id`) and the transcript parsers
+(`iter_content_blocks` — also used by `runner._diagnose_stall` — plus
+`format_tool_use` and `summarize_transcript_line`). `tail_transcript_activity`
+follows the transcript JSONL and emits one `AgentActivityEvent` per new agent
+action (`Edit <file>`, `Bash <cmd>`, `Read <file>`, or a `writing…` marker). Its
+poll heartbeat binds `asyncio.sleep` at import so it stays independent of the
+runner's retry-backoff sleep (which tests mock away).
+
 ### `agents/registry.py`
 Loads agent definitions from YAML files in
 `src/agentic_dev/agents/definitions/`. Provides lookup by name and team.
@@ -265,8 +282,16 @@ Helpers for parallel execution of independent per-track agent runs
 (track analysis, per-track sprint development, per-track UAT).
 
 ### `logging/`
-Structured event logging (JSONL run logs + per-agent dumps in
-`.agentic-dev/logs/agent_dumps/`).
+Structured event logging. Every pipeline milestone is a typed `LogEvent`
+(`events.py`). `setup_logging` fans events out to a JSONL run log and a
+human-readable `pipeline.log` (under `.agentic-dev/logs/runs/<run_id>/`), plus
+per-agent dumps in `.agentic-dev/logs/agent_dumps/`. In an interactive terminal
+it also attaches a Rich live `PipelineDashboard` (`dashboard.py`) with a status
+panel (phase, active agent, sprint, cost, elapsed), a bounded **"Now" region**
+showing the current agent's last few actions (fed by `AgentActivityEvent` from
+`claude/activity.py`), and a scrolling Events log of coarse milestones. Activity
+events update the "Now" region only and are kept out of the Events log so the
+interface stays concise, while the file handlers still record the full stream.
 
 ## Data Flow
 

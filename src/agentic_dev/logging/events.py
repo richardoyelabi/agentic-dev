@@ -111,6 +111,23 @@ class AgentStartEvent(LogEvent):
     sprint: int | None = None
 
 
+class AgentActivityEvent(LogEvent):
+    """Emitted for a single in-progress action of a running agent.
+
+    Derived from the live session transcript while the agent runs, so the
+    dashboard can show *what* the agent is doing between ``agent_start`` and
+    ``agent_complete``. Logged at DEBUG so the file handlers keep the full
+    stream while the terminal view stays concise.
+    """
+
+    event_type: str = "agent_activity"
+    level: str = "DEBUG"
+    agent_name: str
+    tool: str | None = None
+    activity: str
+    sprint: int | None = None
+
+
 class AgentCompleteEvent(LogEvent):
     """Emitted when an agent finishes successfully."""
 

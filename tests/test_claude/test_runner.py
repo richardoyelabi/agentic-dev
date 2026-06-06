@@ -247,6 +247,94 @@ class TestRun:
         assert result.cost_usd == 0.0
 
 
+class TestActivityTailer:
+    """The live transcript-activity tailer is scoped to each subprocess."""
+
+    @staticmethod
+    def _make_mock_process(stdout: str, returncode: int = 0, stderr: str = ""):
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (
+            stdout.encode("utf-8"),
+            stderr.encode("utf-8"),
+        )
+        mock_process.returncode = returncode
+        return mock_process
+
+    @staticmethod
+    def _recording_tail(state: dict):
+        def factory(*args, **kwargs):
+            state["args"] = args
+            state["kwargs"] = kwargs
+
+            async def _coro():
+                state["started"] = True
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    state["cancelled"] = True
+                    raise
+
+            return _coro()
+
+        return factory
+
+    async def test_tailer_started_with_run_args_and_cancelled_on_success(
+        self, tmp_path: Path
+    ):
+        runner = ClaudeRunner()
+        agent = FakeAgentConfig(name="architect")
+        state: dict = {"started": False, "cancelled": False}
+        mock_process = self._make_mock_process(
+            json.dumps({"result": "ok", "total_cost_usd": 0.0})
+        )
+
+        async def fake_collect(process, prompt, working_dir, backstop_s, idle_timeout_s):
+            await asyncio.sleep(0.02)  # yield so the tailer task can start
+            return (b'{"result": "ok", "total_cost_usd": 0.0}', b"", None)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch(
+            "agentic_dev.claude.runner.tail_transcript_activity",
+            self._recording_tail(state),
+        ), patch(
+            "agentic_dev.claude.runner._collect_output", fake_collect
+        ):
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "ok"
+        assert state["args"][0] == tmp_path  # working_dir
+        assert state["args"][3] == "architect"  # agent name
+        assert state["started"] is True
+        assert state["cancelled"] is True
+
+    async def test_tailer_cancelled_when_run_raises(self, tmp_path: Path):
+        runner = ClaudeRunner()
+        agent = FakeAgentConfig(name="planner")
+        state: dict = {"started": False, "cancelled": False}
+        mock_process = self._make_mock_process(stdout="", returncode=1, stderr="boom")
+
+        async def fake_collect(process, prompt, working_dir, backstop_s, idle_timeout_s):
+            await asyncio.sleep(0.02)
+            return (b"", b"boom", None)
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch(
+            "agentic_dev.claude.runner.tail_transcript_activity",
+            self._recording_tail(state),
+        ), patch(
+            "agentic_dev.claude.runner._collect_output", fake_collect
+        ):
+            with pytest.raises(AgentRunError):
+                await runner.run(agent, "prompt", tmp_path)
+
+        assert state["started"] is True
+        assert state["cancelled"] is True
+
+
 class TestLogging:
     """Tests for agent execution logging."""
 
