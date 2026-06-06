@@ -14,8 +14,9 @@ claude:
     - "mcp__plugin_playwright_playwright__*"
   max_budget_usd: 5.00
   max_turns: 100
+  figma_mcp: true
 prompt_template: uat_web.md.j2
-input_documents: [features_request, frontend_spec, backend_spec, api_contract, sprint_plan, uat_prereqs, bootstrap, env_requirements]
+input_documents: [features_request, frontend_spec, backend_spec, api_contract, sprint_plan, uat_prereqs, bootstrap, env_requirements, figma_sources, figma_annotations]
 output_documents: [uat_report]
 qa_agent: uat_qa
 constraints:

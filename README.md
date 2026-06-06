@@ -34,7 +34,10 @@ runtime-verifies the result.
   `uat_desktop_electron`, `uat_desktop_tauri`). Per-track verdicts roll up
   through `uat/aggregator.py` into a single
   `## Overall Result: PASS|FAIL` report. UAT agents drive long-running
-  processes in the background and poll them with the `Monitor` tool.
+  processes in the background and poll them with the `Monitor` tool. When
+  Figma designs are available, the UI UAT agents also check design
+  fidelity — comparing the running screens against the Figma frames and
+  failing on material visual deviations.
 - **Ralph-loop semantics.** Two layered loops give ralph-style persistence
   without an extra outer controller: the per-agent QA correction loop
   inside `run_qa_cycle`, and the unbounded `agentic-dev remediate`

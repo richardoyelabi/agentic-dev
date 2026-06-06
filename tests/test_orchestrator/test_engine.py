@@ -783,6 +783,63 @@ class TestUATPhase:
         )
         assert injected_inputs["uat_report"] == action_report
 
+    @pytest.mark.asyncio
+    async def test_uat_enables_figma_for_design_fidelity_when_available(
+        self, engine, claude, doc_store, registry, prompt_renderer,
+    ) -> None:
+        """With figma_sources present and the Figma MCP server configured, the
+        opted-in UAT agent is dispatched with Figma tools expanded and the
+        prompt is told design fidelity is in scope."""
+        from agentic_dev.agents.figma_tools import figma_tool_patterns
+
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+
+        existing = {"frontend_spec", "sprint_plan", "features", "figma_sources"}
+        doc_store.exists.side_effect = lambda name: name.replace(".md", "") in existing
+        doc_store.read.side_effect = lambda name: {
+            "figma_sources": "- https://figma.com/file/abc/Design",
+            "frontend_spec": "# Frontend Spec",
+            "sprint_plan": "# Sprint Plan",
+            "features": "# Features",
+        }.get(name.replace(".md", ""), "# UAT Report\n## Overall Result: PASS")
+
+        def _agent_for(name: str) -> AgentDefinition:
+            agent = _make_agent(name, template=f"{name}.md.j2")
+            if name == "uat_web":
+                agent.claude.figma_mcp = True
+                agent.input_documents = [
+                    "features_request", "frontend_spec", "figma_sources",
+                ]
+            return agent
+
+        registry.get = MagicMock(side_effect=_agent_for)
+        claude.run.side_effect = [
+            _make_claude_result("# UAT Report\n## Overall Result: PASS", cost=0.20),
+            _make_claude_result("APPROVED", cost=0.10),
+        ]
+
+        with patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock), patch(
+            "agentic_dev.onboarding.figma.check_figma_mcp_available", return_value=None,
+        ):
+            await engine._run_uat(state)
+
+        uat_web_calls = [
+            c for c in claude.run.call_args_list
+            if getattr(c.kwargs.get("agent", None), "name", None) == "uat_web"
+        ]
+        assert uat_web_calls, "uat_web action agent was not dispatched"
+        allowed = uat_web_calls[0].kwargs["agent"].allowed_tools
+        assert any(pattern in allowed for pattern in figma_tool_patterns()), (
+            "uat_web must be dispatched with Figma MCP tools when Figma is available"
+        )
+
+        uat_render = next(
+            call for call in prompt_renderer.render_agent_prompt.call_args_list
+            if call.kwargs.get("template_name") == "uat_web.md.j2"
+        )
+        assert uat_render.kwargs["extra_context"]["figma_mcp_available"] == "true"
+
 
 class TestQACycleRetry:
     """Test the empty-output retry in QA cycle (used by UAT and input processing)."""

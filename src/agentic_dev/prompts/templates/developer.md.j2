@@ -127,6 +127,20 @@ The annotations below were left by designers on specific frames. **They are non-
 - **Validate inputs at the flag/argument level** with clear error messages.
 {% endif %}
 
+{% if track_kind in ("web", "desktop", "mobile") %}
+# Frontend Design Quality
+
+The UI is the product. Functional-but-ugly is a defect, not a pass. Hold the bar high on design quality:
+
+- **Use the `frontend-design` skill before building any screen or component.** It exists to produce distinctive, production-grade interfaces; rely on it so you do not fall back on generic, templated AI aesthetics (centred card on a gradient, default component-library look, lorem-ipsum spacing).
+{% if figma_sources is defined and figma_sources %}- **The Figma design is the visual source of truth.** Reproduce its design tokens exactly — colour values, type scale, spacing/rhythm, radii, shadows — and apply them consistently rather than approximating.
+{% else %}- **Establish a coherent design system first** — a deliberate colour palette, type scale, and spacing scale — and apply it consistently across every screen.
+{% endif %}- **Design for hierarchy and rhythm.** Deliberate spacing, alignment, and typographic scale; guide the eye to the primary action on each screen.
+- **Build every component state**, not just the happy path: hover, focus, active, disabled, loading, empty, and error — each styled intentionally.
+- **Make it responsive** across the breakpoints the design (or the platform) implies; verify it does not break at common widths.
+- **Polish the details** — consistent iconography, motion/transitions where they aid comprehension, accessible contrast and focus order. Avoid generic spacing and default styling; ship something that looks intentionally designed.
+{% endif %}
+
 # Git Hygiene
 
 - **Update `.gitignore` for every artifact you create** — build dirs, coverage reports, generated files, temp dirs, logs, secrets. Edit the project's `.gitignore` (not `.agentic-dev/` — that is managed separately) and commit the update alongside the code that produces the artifact.

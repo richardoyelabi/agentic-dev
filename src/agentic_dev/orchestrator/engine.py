@@ -722,6 +722,11 @@ class PipelineEngine:
         )
 
         cfg = load_project_config(self._project_dir)
+        from agentic_dev.onboarding.figma import figma_mcp_available_flag  # noqa: WPS433
+
+        figma_mcp_available = figma_mcp_available_flag(
+            self._doc_store.exists("figma_sources")
+        )
         per_track_reports: dict[str, str] = {}
         total_cost = 0.0
 
@@ -788,6 +793,8 @@ class PipelineEngine:
                 extra_context["frontend_kind"] = track.uat_kind or track.kind
                 extra_context["run_id"] = run_id
 
+                extra_context["figma_mcp_available"] = figma_mcp_available
+
                 result = await run_qa_cycle(
                     claude=self._claude,
                     action_agent=agent_def,
@@ -803,6 +810,7 @@ class PipelineEngine:
                     prompt_renderer=self._prompt_renderer,
                     session_id=None,
                     extra_context=extra_context,
+                    figma_mcp_enabled=figma_mcp_available == "true",
                 )
                 total_cost += result.total_cost
                 raw_report = self._doc_store.read(f"uat_report_{track.name}")

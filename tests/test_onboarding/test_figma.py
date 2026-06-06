@@ -14,6 +14,7 @@ from agentic_dev.onboarding.figma import (
     _parse_design_change_result,
     check_figma_mcp_available,
     detect_design_changes,
+    figma_mcp_available_flag,
 )
 from agentic_dev.onboarding.models import AnnotatedSource
 
@@ -62,6 +63,30 @@ class TestCheckFigmaMcpAvailable:
     def test_succeeds_when_figma_configured(self) -> None:
         with patch("agentic_dev.onboarding.figma.discover_mcp_servers", return_value=_figma_env()):
             check_figma_mcp_available()
+
+
+class TestFigmaMcpAvailableFlag:
+    def test_false_without_sources(self) -> None:
+        # No Figma sources => never "true", regardless of MCP config.
+        with patch(
+            "agentic_dev.onboarding.figma.discover_mcp_servers",
+            return_value=_figma_env(),
+        ):
+            assert figma_mcp_available_flag(has_sources=False) == "false"
+
+    def test_false_when_mcp_not_configured(self) -> None:
+        with patch(
+            "agentic_dev.onboarding.figma.discover_mcp_servers",
+            return_value=_empty_env(),
+        ):
+            assert figma_mcp_available_flag(has_sources=True) == "false"
+
+    def test_true_when_sources_and_mcp_configured(self) -> None:
+        with patch(
+            "agentic_dev.onboarding.figma.discover_mcp_servers",
+            return_value=_figma_env(),
+        ):
+            assert figma_mcp_available_flag(has_sources=True) == "true"
 
 
 class TestParseDesignChangeResult:
