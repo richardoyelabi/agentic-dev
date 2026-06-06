@@ -109,6 +109,38 @@ class TestAgentRegistry:
         assert "Bash" in developer.claude.allowed_tools
         assert developer.output_documents == []
 
+    def test_developer_can_invoke_skills(self, registry: AgentRegistry):
+        """The developer references the frontend-design and brainstorming
+        skills in its prompt, so it needs the ``Skill`` tool to invoke them."""
+        assert "Skill" in registry.get("developer").claude.allowed_tools
+
+    def test_uat_ui_agents_opt_into_figma(self, registry: AgentRegistry):
+        """UI UAT agents must be able to read the Figma designs to verify
+        design fidelity, so they opt into Figma MCP and declare the
+        ``figma_sources`` input document."""
+        for name in (
+            "uat_web",
+            "uat_desktop_electron",
+            "uat_desktop_tauri",
+            "uat_mobile",
+        ):
+            agent = registry.get(name)
+            assert agent.claude.figma_mcp is True, (
+                f"{name} should opt into Figma MCP for design-fidelity checks"
+            )
+            assert "figma_sources" in agent.input_documents, (
+                f"{name} should declare figma_sources as an input document"
+            )
+
+    def test_non_visual_uat_agents_do_not_opt_into_figma(
+        self, registry: AgentRegistry
+    ):
+        """API and CLI UAT have no visual surface, so they stay Figma-free."""
+        for name in ("uat_api", "uat_cli"):
+            assert registry.get(name).claude.figma_mcp is False, (
+                f"{name} has no visual surface and should not opt into Figma"
+            )
+
     def test_developer_agents_have_documentation_constraint(
         self, registry: AgentRegistry
     ):

@@ -347,6 +347,73 @@ class TestUatServerLifecycleHardening:
         assert "pkill" in result
 
 
+class TestDeveloperDesignCraft:
+    """The developer template must push frontend design quality for UI tracks,
+    not treat the UI as just another coding task."""
+
+    def test_ui_track_includes_design_craft_guidance(self, real_renderer):
+        result = real_renderer.render(
+            "developer.md.j2",
+            {**AGENT_TEMPLATES["developer.md.j2"], "track_kind": "web"},
+        )
+        assert "frontend-design" in result
+        assert "design quality" in result.lower()
+        # An explicit anti-generic-aesthetics instruction is the whole point.
+        assert "generic" in result.lower()
+
+    def test_cli_track_omits_frontend_design_craft(self, real_renderer):
+        result = real_renderer.render(
+            "developer.md.j2",
+            {**AGENT_TEMPLATES["developer.md.j2"], "track_kind": "cli"},
+        )
+        assert "frontend-design" not in result
+
+
+class TestUatDesignFidelity:
+    """UI UAT templates compare the running UI against the Figma design when
+    both Figma sources and the Figma MCP server are available."""
+
+    _UI_UAT_TEMPLATES = (
+        "uat_web.md.j2",
+        "uat_desktop_electron.md.j2",
+        "uat_desktop_tauri.md.j2",
+        "uat_mobile.md.j2",
+    )
+
+    def _ctx(self, name, **overrides):
+        return {**AGENT_TEMPLATES[name], **overrides}
+
+    def test_section_present_when_figma_available(self, real_renderer):
+        for name in self._UI_UAT_TEMPLATES:
+            result = real_renderer.render(
+                name,
+                self._ctx(
+                    name,
+                    figma_sources="- https://figma.com/file/abc/Design",
+                    figma_mcp_available="true",
+                ),
+            )
+            assert "Design Fidelity" in result, name
+            assert "get_screenshot" in result, name
+
+    def test_section_absent_without_figma_sources(self, real_renderer):
+        result = real_renderer.render(
+            "uat_web.md.j2", AGENT_TEMPLATES["uat_web.md.j2"]
+        )
+        assert "Design Fidelity" not in result
+
+    def test_section_absent_when_mcp_unavailable(self, real_renderer):
+        result = real_renderer.render(
+            "uat_web.md.j2",
+            self._ctx(
+                "uat_web.md.j2",
+                figma_sources="- https://figma.com/file/abc/Design",
+                figma_mcp_available="false",
+            ),
+        )
+        assert "Design Fidelity" not in result
+
+
 class TestAgentTemplatesSmokeTest:
     """Smoke tests verifying all 14 agent templates render without errors."""
 

@@ -53,6 +53,24 @@ def check_figma_mcp_available() -> None:
         raise FigmaMCPNotConfigured()
 
 
+def figma_mcp_available_flag(has_sources: bool) -> str:
+    """Return ``"true"``/``"false"`` for whether UI agents can use Figma.
+
+    Resolves to ``"true"`` only when there are Figma sources to inspect *and*
+    a Figma MCP server is configured in Claude Code. Templates gate their
+    design-token and design-fidelity instructions on this string, and the
+    orchestrator uses it to decide whether to expand the Figma MCP tool
+    patterns for agents that opt in via ``claude.figma_mcp``.
+    """
+    if not has_sources:
+        return "false"
+    try:
+        check_figma_mcp_available()
+    except FigmaMCPNotConfigured:
+        return "false"
+    return "true"
+
+
 def write_figma_sources(doc_store: DocumentStore, sources: list[AnnotatedSource]) -> None:
     """Persist Figma URLs and annotations to a ``figma_sources`` document.
 

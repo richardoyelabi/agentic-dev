@@ -71,6 +71,13 @@ configured in the project's Claude Code environment, the agent uses it
 directly for pixel-accurate implementation; otherwise it falls back to
 the text-based Design Analyses.
 
+For `web`/`desktop`/`mobile` tracks the developer prompt also carries a
+**Frontend Design Quality** section: it must use the `frontend-design`
+skill (the `Skill` tool is in the allowlist), reproduce design tokens
+exactly, build every component state, stay responsive, and avoid generic
+templated AI aesthetics. Getting the design *to* the agent is necessary
+but not sufficient — this section is the explicit quality bar.
+
 ### Integration
 
 | Agent | QA counterpart | Input | Output |
@@ -96,6 +103,19 @@ agents dispatched on `track.uat_kind` by
 
 Base tool allowlist for every UAT agent: `Read, Glob, Grep, Bash,
 WebFetch`. Budgets: `max_budget_usd: 5.00`, `max_turns: 100`.
+
+**Design fidelity (UI UAT).** `uat_web`, `uat_desktop_electron`,
+`uat_desktop_tauri`, and `uat_mobile` opt into Figma MCP (`figma_mcp: true`)
+and declare `figma_sources` / `figma_annotations` as inputs. When Figma
+sources exist *and* the MCP server is configured (`figma_mcp_available ==
+"true"`, computed once per run by `figma_mcp_available_flag`), the engine
+expands the Figma tool patterns for these agents and their prompt gains a
+**Design Fidelity** section: for each screen it screenshots the running UI,
+pulls the matching Figma frame via `get_screenshot`, and records a per-screen
+PASS/FAIL verdict on layout, spacing, colour, typography, and component
+appearance. Material visual deviations count as defects in the report, so the
+`remediate` loop drives them to resolution like any failed acceptance
+criterion. `uat_api` and `uat_cli` have no visual surface and stay Figma-free.
 
 **Backgrounded drivers.** UAT agents start long-running drivers
 (dev servers, browsers, simulators) in the background with `Bash`'s

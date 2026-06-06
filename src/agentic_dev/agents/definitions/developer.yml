@@ -4,7 +4,7 @@ team: development
 claude:
   model: opus
   permission_mode: bypassPermissions
-  allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch]
+  allowed_tools: [Bash, Read, Edit, Write, Glob, Grep, WebFetch, WebSearch, Skill]
   max_budget_usd: 5.00
   max_turns: 150
   figma_mcp: true

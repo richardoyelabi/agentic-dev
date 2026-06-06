@@ -1,0 +1,23 @@
+{% if figma_sources is defined and figma_sources and figma_mcp_available is defined and figma_mcp_available == "true" %}
+# Design Fidelity
+
+This product has Figma designs and you have access to Figma MCP tools. Beyond functional correctness, verify the running UI actually **looks like the design** — a screen that passes its acceptance criteria but does not match the design is still a defect.
+
+## Figma Sources
+
+{{ figma_sources }}
+{% if figma_annotations is defined and figma_annotations %}
+## Designer Annotations
+
+{{ figma_annotations }}
+{% endif %}
+
+For each primary page/screen that has a corresponding Figma frame:
+
+1. **Screenshot the running UI** (reuse the evidence screenshot you already capture for that screen).
+2. **View the intended design** with Figma MCP — `get_screenshot` for the frame, plus `get_design_context` / `get_variable_defs` for exact tokens when a deviation is unclear.
+3. **Compare** layout & alignment, spacing, colour, typography, and component appearance against the design, and confirm every designer annotation is honoured.
+4. **Record a Design Fidelity verdict per screen** — `PASS` (matches the design) or `FAIL` with concrete, specific deviations, e.g. *"primary button is #3B82F6, design specifies #2563EB"* or *"card padding ~8px vs 24px in the design"*.
+
+Treat material visual deviations as defects: list them in the report and factor them into the overall result so they are remediated, exactly like a failed functional acceptance criterion. Never claim a design match you did not visually verify against the Figma frame.
+{% endif %}
