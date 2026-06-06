@@ -1662,6 +1662,13 @@ class TestRunOutputCollection:
                 await runner.run(agent, "prompt", tmp_path)
 
 
+def test_agent_run_error_carries_session_id():
+    """AgentRunError can carry the failed agent's session id for resume."""
+    err = AgentRunError("uat_web", "stalled", session_id="sess-xyz")
+    assert err.session_id == "sess-xyz"
+    assert AgentRunError("a", "b").session_id is None
+
+
 class TestModelStallRetry:
     """A *model stall* (CLI alive, blocked awaiting the model's response) is a
     transient upstream hiccup, so the run is retried by resuming the session —
@@ -1745,10 +1752,11 @@ class TestModelStallRetry:
         ), patch.object(
             ClaudeRunner, "_discover_session_id", return_value="sess",
         ), patch("asyncio.sleep", new_callable=AsyncMock):
-            with pytest.raises(AgentRunError, match="made no progress"):
+            with pytest.raises(AgentRunError, match="made no progress") as exc_info:
                 await runner.run(agent, "prompt", tmp_path)
 
         assert call_count == 1
+        assert exc_info.value.session_id == "sess"
 
     async def test_backstop_wedge_is_not_retried(self, tmp_path: Path):
         """The 6h backstop (CLI never exited) is never resumed, even when the
@@ -1776,10 +1784,11 @@ class TestModelStallRetry:
         ), patch.object(
             ClaudeRunner, "_discover_session_id", return_value="sess",
         ), patch("asyncio.sleep", new_callable=AsyncMock):
-            with pytest.raises(AgentRunError, match="did not exit"):
+            with pytest.raises(AgentRunError, match="did not exit") as exc_info:
                 await runner.run(agent, "prompt", tmp_path)
 
         assert call_count == 1
+        assert exc_info.value.session_id == "sess"
 
     async def test_model_stall_retry_budget_exhausts(self, tmp_path: Path):
         """max_stall_retries bounds the resumes: one resume, then hard-fail."""

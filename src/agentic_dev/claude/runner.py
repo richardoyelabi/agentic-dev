@@ -858,6 +858,12 @@ class ClaudeRunner:
                     agent_name=agent.name,
                     message=f"Agent '{agent.name}' {detail}",
                     exit_code=-1,
+                    # Carry the wedged session so a later `agentic-dev resume`
+                    # continues it rather than re-running the agent from scratch.
+                    session_id=(
+                        resume_session_id
+                        or self._discover_session_id(working_dir, start_time)
+                    ),
                 )
             exit_code = process.returncode or 0
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
@@ -915,6 +921,7 @@ class ClaudeRunner:
                     agent_name=agent.name,
                     message=f"CLI exited with code {exit_code}: {stderr_text}",
                     exit_code=exit_code,
+                    session_id=resume_session_id,
                 )
 
             # Exhausted retries — raise immediately
@@ -944,6 +951,7 @@ class ClaudeRunner:
                             f"attempts; last exit code {exit_code}"
                         ),
                         exit_code=exit_code,
+                        session_id=resume_session_id,
                     )
                 raise RateLimitError(
                     agent_name=agent.name,

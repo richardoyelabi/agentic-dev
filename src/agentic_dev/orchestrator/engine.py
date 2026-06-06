@@ -204,6 +204,12 @@ class PipelineEngine:
                 state.failed_at_phase = state.phase
                 state.phase = PipelinePhase.FAILED
                 state.error = str(exc)
+                # Capture the failed agent's Claude session so the next
+                # `agentic-dev resume` continues it (--resume) instead of
+                # re-running the agent from scratch. `resume_from_failure`
+                # preserves this; `advance_phase`/`reset_for_update` clear it.
+                if isinstance(exc, AgentRunError) and exc.session_id:
+                    state.active_session_id = exc.session_id
                 self._state_manager.save(state)
                 raise
 
@@ -795,6 +801,14 @@ class PipelineEngine:
 
                 extra_context["figma_mcp_available"] = figma_mcp_available
 
+                # The failed/in-flight track is the first not-yet-completed one,
+                # so any session captured at failure (active_session_id) belongs
+                # to it — resume it. Clear it so a subsequent fresh track in this
+                # same run starts a new session; a re-failure repopulates it via
+                # the engine's central failure handler.
+                track_session_id = state.active_session_id
+                state.active_session_id = None
+
                 result = await run_qa_cycle(
                     claude=self._claude,
                     action_agent=agent_def,
@@ -808,7 +822,7 @@ class PipelineEngine:
                     workspace=self._project_dir / track.path,
                     doc_store=self._doc_store,
                     prompt_renderer=self._prompt_renderer,
-                    session_id=None,
+                    session_id=track_session_id,
                     extra_context=extra_context,
                     figma_mcp_enabled=figma_mcp_available == "true",
                 )

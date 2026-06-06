@@ -75,6 +75,15 @@ class TestAdvancePhase:
         with pytest.raises(InvalidTransitionError):
             advance_phase(state, PipelinePhase.UAT)
 
+    def test_clears_active_session_id(self) -> None:
+        """A forward transition starts a fresh agent context (no carried session)."""
+        state = PipelineState(
+            project_name="test-project",
+            active_session_id="sess-prev",
+        )
+        updated = advance_phase(state, PipelinePhase.INPUT_PROCESSING)
+        assert updated.active_session_id is None
+
 
 class TestResetForUpdate:
     def test_reset_for_update_from_complete(self) -> None:
@@ -139,6 +148,16 @@ class TestResetForUpdate:
         )
         result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
         assert result.completed_uat_tracks == []
+
+    def test_reset_clears_active_session_id(self) -> None:
+        """update/remediate changes inputs, so never resume a stale session."""
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.COMPLETE,
+            active_session_id="sess-prev",
+        )
+        result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
+        assert result.active_session_id is None
 
 
 class TestResumeFromFailure:
@@ -246,6 +265,17 @@ class TestResumeFromFailure:
         assert resumed.completed_uat_tracks == ["api"]
         assert resumed.phase == PipelinePhase.UAT
         assert resumed.error is None
+
+    def test_resume_preserves_active_session_id(self) -> None:
+        """A plain resume continues the failed agent's Claude session (--resume)."""
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.FAILED,
+            failed_at_phase=PipelinePhase.UAT,
+            active_session_id="sess-uat-web",
+        )
+        resumed = resume_from_failure(state)
+        assert resumed.active_session_id == "sess-uat-web"
 
     def test_resume_preserves_complete_sprints(self) -> None:
         complete_sprint = SprintState(

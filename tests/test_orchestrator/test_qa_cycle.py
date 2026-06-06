@@ -1002,7 +1002,8 @@ async def test_session_id_captured_on_result(
 async def test_session_id_forwarded_to_runner(
     claude, action_agent, qa_agent, doc_store, prompt_renderer
 ):
-    """When session_id is passed, it is forwarded to claude.run()."""
+    """Resuming a session sends a short 'continue' prompt with --resume, not the
+    full re-rendered action prompt (which would re-bill the prior context)."""
     claude.run.side_effect = [
         _make_claude_result("output", cost=0.10),
         _make_claude_result("APPROVED", cost=0.05),
@@ -1020,9 +1021,50 @@ async def test_session_id_forwarded_to_runner(
         session_id="resume-sess-99",
     )
 
-    # First claude.run call (action agent) should have session_id
+    # First claude.run call (action agent) resumes the session...
     first_call = claude.run.call_args_list[0]
     assert first_call.kwargs.get("session_id") == "resume-sess-99"
+    # ...with a short "continue" prompt, not the full render.
+    action_prompt = first_call.kwargs.get("prompt", "")
+    assert "left off" in action_prompt.lower()
+    assert action_prompt != "rendered prompt"
+    # The action template is NOT re-rendered (only QA is).
+    rendered = [
+        c.kwargs.get("template_name")
+        for c in prompt_renderer.render_agent_prompt.call_args_list
+    ]
+    assert action_agent.prompt_template not in rendered
+
+
+@pytest.mark.asyncio
+async def test_resume_empty_retry_preserves_session_id(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """If a resumed action run returns empty, the empty-retry still resumes the
+    same session rather than restarting fresh and losing the prior context."""
+    claude.run.side_effect = [
+        _make_claude_result("", cost=0.0),         # first resume attempt: empty
+        _make_claude_result("output", cost=0.10),  # empty-retry: ok
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    with patch(
+        "agentic_dev.orchestrator.qa_cycle.asyncio.sleep", new_callable=AsyncMock,
+    ):
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            session_id="resume-sess-99",
+        )
+
+    assert claude.run.call_args_list[0].kwargs.get("session_id") == "resume-sess-99"
+    assert claude.run.call_args_list[1].kwargs.get("session_id") == "resume-sess-99"
 
 
 @pytest.mark.asyncio

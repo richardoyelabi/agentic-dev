@@ -33,6 +33,14 @@ _SESSION_CORRECTION_PROMPT = (
     "output. Maintain the same output format."
 )
 
+_SESSION_RESUME_PROMPT = (
+    "Continue exactly where you left off. Your previous run in this session was "
+    "interrupted before it finished. Review what you have already done here, "
+    "complete the remaining work, and produce your final output in the same "
+    "format you were originally asked for — do not restart work you have "
+    "already completed."
+)
+
 ISSUES_FOUND_MARKER = "ISSUES_FOUND"
 
 
@@ -74,7 +82,10 @@ async def _run_with_empty_retry(
             ),
         ))
         await asyncio.sleep(empty_retry_delay)
-        result = await claude.run(agent=agent_config, prompt=prompt, working_dir=workspace)
+        result = await claude.run(
+            agent=agent_config, prompt=prompt, working_dir=workspace,
+            session_id=session_id,
+        )
 
     if not result.text.strip():
         raise AgentRunError(agent_name=agent_name, message=error_message)
@@ -258,13 +269,19 @@ async def run_qa_cycle(
         initial_qa_cost = 0.0
         action_session_id: str | None = None
     else:
-        # 1. Render and run the action agent
-        action_prompt = prompt_renderer.render_agent_prompt(
-            template_name=action_agent.prompt_template,
-            input_documents=input_docs,
-            constraints=action_agent.constraints,
-            extra_context=extra_context,
-        )
+        # 1. Run the action agent. When resuming a prior session, the original
+        #    prompt and all prior work already live in that session's history,
+        #    so send a short "continue where you left off" nudge instead of
+        #    re-piping the full prompt (which would re-bill the prior context).
+        if session_id:
+            action_prompt = _SESSION_RESUME_PROMPT
+        else:
+            action_prompt = prompt_renderer.render_agent_prompt(
+                template_name=action_agent.prompt_template,
+                input_documents=input_docs,
+                constraints=action_agent.constraints,
+                extra_context=extra_context,
+            )
         action_result = await _run_with_empty_retry(
             claude=claude,
             agent_config=action_config,

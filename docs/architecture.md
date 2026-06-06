@@ -49,11 +49,20 @@ Finite-state-machine driver. Advances through phases, dispatches to the QA
 cycle and sprint runner, evaluates checkpoints, and handles pipeline-level
 rate-limit pauses. Splits the architect's multi-document output into
 per-track `<track>_spec.md` files (see `_run_architecture` around
-[engine.py:345](../src/agentic_dev/orchestrator/engine.py#L345)).
+[engine.py:345](../src/agentic_dev/orchestrator/engine.py#L345)). When an agent
+fails, the central failure handler stores the failed run's session id (carried
+on `AgentRunError.session_id`) into `state.active_session_id`, so the next
+`agentic-dev resume` continues that Claude session (`--resume`) rather than
+re-running the agent from scratch. UAT does this per-track — the failed track is
+the first not-yet-completed one, so the captured session belongs to it.
 
 ### `orchestrator/qa_cycle.py`
 Reusable action-agent → QA-agent → optional-correction loop. Every agent
-that has a `qa_agent` field in its definition is driven through this.
+that has a `qa_agent` field in its definition is driven through this — it is the
+single execution path for all pipeline phases, so resume/session handling lives
+here. When given a `session_id` (a resume), the action run sends a short
+"continue where you left off" prompt with `--resume` instead of re-piping the
+full prompt; corrections do the same via `_SESSION_CORRECTION_PROMPT`.
 
 ### `orchestrator/sprint_runner.py`
 Executes a single sprint by running one generic `developer` + `qa` pair
@@ -213,7 +222,12 @@ Pydantic models for the state machine: `PipelinePhase`, `SprintStatus`,
 
 ### `state/transitions.py`
 Pure-logic helpers for transitioning between phases —
-`resume_from_failure()` clears error/`failed_at_phase` before resume.
+`resume_from_failure()` clears error/`failed_at_phase` before resume and
+**preserves** `active_session_id`, so a plain `agentic-dev resume` continues the
+failed agent's Claude session. `advance_phase()` (every forward transition) and
+`reset_for_update()` (update/remediate, whose inputs changed) both **clear** it,
+so a session is only ever resumed by the agent that owns it and never by a
+later phase or a changed-inputs cycle.
 
 ### `workspace/manager.py`
 Scaffolder for the `.agentic-dev/` metadata directory in the project

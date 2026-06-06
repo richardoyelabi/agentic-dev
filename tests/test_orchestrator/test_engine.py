@@ -275,6 +275,23 @@ class TestErrorHandling:
         assert "boom" in state.error
         state_manager.save.assert_called()
 
+    @pytest.mark.asyncio
+    async def test_failure_with_session_id_captures_active_session(
+        self, engine, state_manager, claude,
+    ):
+        """A session-carrying failure stores the id so resume can --resume it."""
+        state = _make_state(PipelinePhase.IDLE)
+        state_manager.load = MagicMock(return_value=state)
+        claude.run.side_effect = AgentRunError(
+            "input_processor", "boom", session_id="sess-resume",
+        )
+
+        with pytest.raises(AgentRunError):
+            await engine.run()
+
+        assert state.phase == PipelinePhase.FAILED
+        assert state.active_session_id == "sess-resume"
+
 
 class TestRateLimitPauseHandling:
     """RateLimitError must pause the pipeline, not fail it."""
@@ -601,6 +618,47 @@ class TestUATPhase:
                 await engine._run_uat(state)
 
         teardown.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_uat_resumes_active_session_for_first_incomplete_track(
+        self, engine, doc_store, registry,
+    ):
+        """On resume, the failed (first incomplete) track resumes its session;
+        active_session_id is cleared so a later fresh track starts new."""
+        from agentic_dev.exceptions import AgentRunError
+
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+        state.active_session_id = "sess-prev"
+        doc_store.exists.return_value = True
+        doc_store.read.return_value = "content"
+        registry.get = MagicMock(
+            side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
+        )
+
+        captured: dict = {}
+
+        def fake_qa(**kwargs):
+            captured["session_id"] = kwargs.get("session_id")
+            raise AgentRunError(agent_name="uat_web", message="stop after capture")
+
+        with patch(
+            "agentic_dev.uat.secrets_gate.check_secrets_gate",
+        ), patch(
+            "agentic_dev.uat.preinstall.preinstall_for_uat",
+        ), patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=AsyncMock(side_effect=fake_qa),
+        ), patch(
+            "agentic_dev.uat.teardown.teardown_for_uat",
+        ), patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock,
+        ):
+            with pytest.raises(AgentRunError):
+                await engine._run_uat(state)
+
+        assert captured["session_id"] == "sess-prev"
+        assert state.active_session_id is None
 
     @pytest.mark.asyncio
     async def test_uat_aliases_per_track_prereqs_to_generic_input(

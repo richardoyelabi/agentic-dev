@@ -10,9 +10,19 @@ class AgenticDevError(Exception):
 class AgentRunError(AgenticDevError):
     """Raised when a Claude agent run fails."""
 
-    def __init__(self, agent_name: str, message: str, exit_code: int | None = None):
+    def __init__(
+        self,
+        agent_name: str,
+        message: str,
+        exit_code: int | None = None,
+        session_id: str | None = None,
+    ):
         self.agent_name = agent_name
         self.exit_code = exit_code
+        # The agent's Claude session id (when known), so the pipeline can
+        # ``--resume`` it on the next ``agentic-dev resume`` instead of starting
+        # the agent over.
+        self.session_id = session_id
         super().__init__(f"Agent '{agent_name}' failed: {message}")
 
 

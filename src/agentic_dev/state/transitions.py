@@ -57,6 +57,10 @@ def advance_phase(
     old_phase = state.phase
     state.phase = to_phase
     state.updated_at = datetime.now(timezone.utc)
+    # A forward transition starts a fresh agent context, so never carry one
+    # phase's Claude session into the next. resume_from_failure bypasses this
+    # function, so it preserves active_session_id for --resume.
+    state.active_session_id = None
     emit(_event_log, PhaseTransitionEvent(
         from_phase=str(old_phase),
         to_phase=str(to_phase),
@@ -89,6 +93,8 @@ def reset_for_update(
     state.failed_at_phase = None
     state.checkpoint_feedback = None
     state.completed_uat_tracks = []
+    # update/remediate cycles change the inputs, so never resume a stale session.
+    state.active_session_id = None
     if mode == "remediate":
         state.remediation_cycle += 1
     state.updated_at = datetime.now(timezone.utc)
