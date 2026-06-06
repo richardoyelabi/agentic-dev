@@ -121,6 +121,22 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/secrets.env` — gitignored secrets template (auto/mock pre-filled, human placeholders)
 - `.agentic-dev/state.json` — pipeline state
 - `.agentic-dev/config.json` — project config (tracks, checkpoint, autonomy)
+- `.agentic-dev/logs/runs/<run_id>/events.jsonl` / `pipeline.log` — full event
+  stream (incl. per-action `agent_activity`); `.agentic-dev/logs/latest` symlinks
+  the most recent run
+
+## Live progress
+
+Every pipeline milestone is a typed `LogEvent` (`logging/events.py`) fanned out
+by `setup_logging` to JSONL + human-readable file handlers and, in an
+interactive terminal, a Rich live dashboard (`logging/dashboard.py`). The
+dashboard shows phase/agent/sprint/cost, a scrolling Events log of milestones,
+and a bounded **"Now" region** with the current agent's last few actions. Those
+actions come from `claude/activity.py`, which tails the agent's live session
+transcript (`tail_transcript_activity`) and emits one `AgentActivityEvent` per
+tool use or `writing…` step. Activity feeds the "Now" region only — never the
+Events log — so the interface stays concise; the file handlers keep the full
+stream.
 
 ## Ralph-loop semantics
 

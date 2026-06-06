@@ -35,6 +35,9 @@ class DashboardState:
     recent_events: deque[str] = field(
         default_factory=lambda: deque(maxlen=50)
     )
+    active_agent_activities: deque[str] = field(
+        default_factory=lambda: deque(maxlen=4)
+    )
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
@@ -80,7 +83,10 @@ class PipelineDashboard:
         """Apply a log event to the dashboard state and refresh."""
         with self._state._lock:
             self._apply_event(event)
-            self._state.recent_events.append(self._format_event_line(event))
+            # Fine-grained activity feeds the "Now" region only; keep it out of
+            # the coarse Events log so the interface stays concise.
+            if event.event_type != "agent_activity":
+                self._state.recent_events.append(self._format_event_line(event))
 
         if self._live is not None:
             self._live.update(self._render())
@@ -97,13 +103,19 @@ class PipelineDashboard:
 
         elif etype == "agent_start":
             self._state.active_agent = event.agent_name  # type: ignore[attr-defined]
+            self._state.active_agent_activities.clear()
+
+        elif etype == "agent_activity":
+            self._state.active_agent_activities.append(event.activity)  # type: ignore[attr-defined]
 
         elif etype == "agent_complete":
             self._state.active_agent = None
+            self._state.active_agent_activities.clear()
             self._state.total_cost_usd += event.cost_usd  # type: ignore[attr-defined]
 
         elif etype == "agent_failed":
             self._state.active_agent = None
+            self._state.active_agent_activities.clear()
 
         elif etype == "sprint_start":
             self._state.sprint_current = event.sprint_number  # type: ignore[attr-defined]
@@ -180,16 +192,26 @@ class PipelineDashboard:
             border_style="blue",
         )
 
+        # ---- Now: live current-agent activity ----
+        panels: list[Panel] = [status_panel]
+        if state.active_agent and state.active_agent_activities:
+            now_lines = "\n".join(f"  {line}" for line in state.active_agent_activities)
+            panels.append(Panel(
+                Text(now_lines),
+                title=f"Now: {state.active_agent}",
+                border_style="green",
+            ))
+
         # ---- Event log ----
         if state.recent_events:
             event_lines = "\n".join(state.recent_events)
         else:
             event_lines = "(no events yet)"
 
-        events_panel = Panel(
+        panels.append(Panel(
             Text(event_lines),
             title="Events",
             border_style="dim",
-        )
+        ))
 
-        return Group(status_panel, events_panel)
+        return Group(*panels)

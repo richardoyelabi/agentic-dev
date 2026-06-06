@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from agentic_dev.logging.events import (
+    AgentActivityEvent,
     AgentCompleteEvent,
     AgentEmptyRetryEvent,
     AgentFailedEvent,
@@ -100,6 +101,9 @@ _SUBCLASS_CASES: list[tuple[type[LogEvent], str, dict]] = [
     (AgentStartEvent, "agent_start", {
         "agent_name": "be_dev", "model": "opus", "prompt_length": 100,
         "working_dir": "/tmp",
+    }),
+    (AgentActivityEvent, "agent_activity", {
+        "agent_name": "be_dev", "tool": "Edit", "activity": "Edit routes.py",
     }),
     (AgentCompleteEvent, "agent_complete", {
         "agent_name": "be_dev", "model": "opus", "duration_s": 10.0,

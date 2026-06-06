@@ -11,6 +11,7 @@ from rich.console import Console, Group
 
 from agentic_dev.logging.dashboard import DashboardState, PipelineDashboard
 from agentic_dev.logging.events import (
+    AgentActivityEvent,
     AgentCompleteEvent,
     AgentFailedEvent,
     AgentStartEvent,
@@ -356,6 +357,108 @@ class TestRender:
 # ---------------------------------------------------------------------------
 # Integration: update triggers live refresh
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# "Now" region -- live current-agent activity
+# ---------------------------------------------------------------------------
+
+
+def _activity(text: str, agent: str = "developer") -> AgentActivityEvent:
+    return AgentActivityEvent(agent_name=agent, activity=text, message=text)
+
+
+class TestNowRegionState:
+    def test_active_agent_activities_default_empty_deque(self) -> None:
+        state = DashboardState()
+        assert isinstance(state.active_agent_activities, deque)
+        assert len(state.active_agent_activities) == 0
+
+    def test_activities_bounded_to_last_four(self) -> None:
+        state = DashboardState()
+        for i in range(10):
+            state.active_agent_activities.append(f"a{i}")
+        assert list(state.active_agent_activities) == ["a6", "a7", "a8", "a9"]
+
+
+class TestNowRegionUpdate:
+    def test_activity_event_appended(self, dashboard: PipelineDashboard) -> None:
+        dashboard._state.active_agent = "developer"
+        dashboard.update(_activity("Edit routes.py"))
+        assert list(dashboard._state.active_agent_activities) == ["Edit routes.py"]
+
+    def test_activity_event_not_added_to_recent_events(
+        self, dashboard: PipelineDashboard
+    ) -> None:
+        """Fine-grained activity must NOT pollute the coarse Events log."""
+        dashboard._state.active_agent = "developer"
+        dashboard.update(_activity("Edit routes.py"))
+        dashboard.update(_activity("Bash pytest"))
+        assert len(dashboard._state.recent_events) == 0
+
+    def test_agent_start_resets_activities(
+        self, dashboard: PipelineDashboard
+    ) -> None:
+        dashboard._state.active_agent_activities.append("stale action")
+        dashboard.update(AgentStartEvent(
+            message="x", agent_name="architect", model="opus",
+            prompt_length=1, working_dir="/tmp",
+        ))
+        assert len(dashboard._state.active_agent_activities) == 0
+
+    def test_agent_complete_clears_activities(
+        self, dashboard: PipelineDashboard
+    ) -> None:
+        dashboard._state.active_agent_activities.append("Edit a.py")
+        dashboard.update(AgentCompleteEvent(
+            message="done", agent_name="dev", model="opus",
+            duration_s=1.0, cost_usd=0.0, result_length=1,
+        ))
+        assert len(dashboard._state.active_agent_activities) == 0
+
+    def test_agent_failed_clears_activities(
+        self, dashboard: PipelineDashboard
+    ) -> None:
+        dashboard._state.active_agent_activities.append("Edit a.py")
+        dashboard.update(AgentFailedEvent(
+            message="fail", agent_name="dev", model="opus",
+            duration_s=1.0, exit_code=1, error="x",
+        ))
+        assert len(dashboard._state.active_agent_activities) == 0
+
+
+class TestNowRegionRender:
+    def test_now_panel_shown_with_active_agent_and_activities(
+        self, dashboard: PipelineDashboard, console: Console
+    ) -> None:
+        dashboard._state.active_agent = "architect"
+        dashboard._state.active_agent_activities.append("Edit routes.py")
+        with console.capture() as capture:
+            console.print(dashboard._render())
+        output = capture.get()
+        assert "Now:" in output
+        assert "architect" in output
+        assert "Edit routes.py" in output
+
+    def test_now_panel_hidden_without_active_agent(
+        self, dashboard: PipelineDashboard, console: Console
+    ) -> None:
+        dashboard._state.active_agent = None
+        dashboard._state.active_agent_activities.append("stale action")
+        with console.capture() as capture:
+            console.print(dashboard._render())
+        output = capture.get()
+        assert "Now:" not in output
+
+    def test_now_panel_sits_between_status_and_events(
+        self, dashboard: PipelineDashboard, console: Console
+    ) -> None:
+        dashboard._state.active_agent = "architect"
+        dashboard._state.active_agent_activities.append("Read spec.md")
+        with console.capture() as capture:
+            console.print(dashboard._render())
+        output = capture.get()
+        assert output.index("PIPELINE DASHBOARD") < output.index("Now:") < output.index("Events")
 
 
 class TestLiveRefresh:

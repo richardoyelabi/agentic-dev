@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from agentic_dev.claude.activity import (
+    iter_content_blocks,
+    tail_transcript_activity,
+)
 from agentic_dev.claude.rate_limiter import (
     RateLimitDetector,
     UsageApiClient,
@@ -572,25 +576,19 @@ class ClaudeRunner:
                 except (json.JSONDecodeError, ValueError):
                     continue
                 ts = msg.get("timestamp", "") or ""
-                content = msg.get("message", {}).get("content")
                 kinds: list[str] = []
-                if isinstance(content, list):
-                    for block in content:
-                        if not isinstance(block, dict):
-                            continue
-                        bt = block.get("type")
-                        if bt == "tool_use":
-                            last_tool = block.get("name") or last_tool
-                            pending_tool = block.get("name")
-                            kinds.append(f"tool_use:{block.get('name')}")
-                        elif bt == "tool_result":
-                            pending_tool = None  # the tool returned
-                            kinds.append("tool_result")
-                        elif bt == "text":
-                            pending_tool = None
-                            kinds.append("text")
-                elif isinstance(content, str):
-                    kinds.append("text")
+                for block in iter_content_blocks(msg):
+                    bt = block.get("type")
+                    if bt == "tool_use":
+                        last_tool = block.get("name") or last_tool
+                        pending_tool = block.get("name")
+                        kinds.append(f"tool_use:{block.get('name')}")
+                    elif bt == "tool_result":
+                        pending_tool = None  # the tool returned
+                        kinds.append("tool_result")
+                    elif bt == "text":
+                        pending_tool = None
+                        kinds.append("text")
                 if ts:
                     last_ts = ts
                 if kinds:
@@ -734,9 +732,26 @@ class ClaudeRunner:
                 start_new_session=True,
             )
 
-            stdout_bytes, stderr_bytes, wedged = await _collect_output(
-                process, prompt, working_dir, backstop_s, idle_timeout_s
-            )
+            # Surface what the agent is doing by following its live transcript.
+            # Read-only and strictly scoped to this subprocess: always cancelled
+            # before the wedge/exit handling below, so it never interferes with
+            # process reaping or stall diagnosis.
+            activity_tailer = asyncio.create_task(tail_transcript_activity(
+                working_dir,
+                start_time,
+                resume_session_id,
+                agent.name,
+                sprint,
+                logger=_event_log,
+            ))
+            try:
+                stdout_bytes, stderr_bytes, wedged = await _collect_output(
+                    process, prompt, working_dir, backstop_s, idle_timeout_s
+                )
+            finally:
+                activity_tailer.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await activity_tailer
             if wedged is not None:
                 # The CLI hung — either no transcript progress (alive but wedged,
                 # e.g. a stalled model stream) or it never exited within the
