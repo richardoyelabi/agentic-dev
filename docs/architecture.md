@@ -119,6 +119,14 @@ valid even after it exits) to force EOF and return the real output; a
 fully-detached child that still holds the pipe is abandoned and the result is
 recovered from the session transcript.
 
+Transient upstream API errors (e.g. `API Error: Request timed out`) surface as an
+exit-1 with empty stderr; the error text only lands in the session JSONL as an
+`isApiErrorMessage` entry. The runner detects this (`_session_has_api_error`) and
+retries by resuming the session. A hard timeout yields no `session_id` on stdout,
+so when none is extracted the runner falls back to `_discover_session_id` to
+locate the just-written transcript — otherwise one blip would fail the whole
+pipeline instead of resuming.
+
 A CLI can also wedge while *still alive* — e.g. hung on a stalled upstream model
 stream — making no progress yet never exiting, which exit-detection cannot catch.
 So `_collect_output` also watches a **progress heartbeat**: the mtime of the
@@ -243,6 +251,14 @@ concrete `Evidence:` bullets.
 Reads each `uat_report_<track>.md` and emits the combined `uat_report.md`
 with a single `## Overall Result: PASS|FAIL` line. PASS iff every track
 passed.
+
+### `uat/teardown.py`
+Best-effort cleanup of the UAT runtime stack. `_run_uat` calls
+`teardown_for_uat` in a `finally`, so any `docker compose` stack declared in
+`bootstrap.md` is brought `down` after UAT — pass, fail, or a mid-run agent
+error — and cannot leak between runs. Logged to
+`.agentic-dev/uat/<run_id>/teardown.log`; never raises. Non-compose host servers
+rely on the agent's own teardown step.
 
 ### `concurrency.py`
 Helpers for parallel execution of independent per-track agent runs

@@ -783,6 +783,15 @@ class ClaudeRunner:
             if extracted_sid:
                 resume_session_id = extracted_sid
 
+            # A hard API timeout exits the CLI 1 with empty stdout — no session_id
+            # to extract. Locate the just-written transcript so the api-error
+            # check can still fire and the retry can resume the session instead
+            # of failing the whole pipeline.
+            if resume_session_id is None:
+                resume_session_id = self._discover_session_id(
+                    working_dir, start_time
+                )
+
             # Retry rate limits AND transient upstream API errors. Both surface
             # as exit-1 with empty stderr; the API-error variant is only
             # visible in the session JSONL as an ``isApiErrorMessage`` entry.

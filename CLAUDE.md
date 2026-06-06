@@ -118,6 +118,7 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/artifacts/uat_report.md` — aggregated multi-track UAT report
 - `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots, transcripts
 - `.agentic-dev/uat/<run_id>/install_<track>.log` — synchronous pre-install logs
+- `.agentic-dev/uat/<run_id>/teardown.log` — best-effort `docker compose down` of the UAT stack (runs in a `finally`, even on agent failure)
 - `.agentic-dev/secrets.env` — gitignored secrets template (auto/mock pre-filled, human placeholders)
 - `.agentic-dev/state.json` — pipeline state
 - `.agentic-dev/config.json` — project config (tracks, checkpoint, autonomy)

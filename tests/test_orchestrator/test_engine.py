@@ -570,6 +570,39 @@ class TestUATPhase:
         assert "uat_report" in write_calls
 
     @pytest.mark.asyncio
+    async def test_uat_tears_down_stack_even_when_agent_raises(
+        self, engine, doc_store, registry,
+    ):
+        """A mid-run agent failure still triggers the compose teardown (finally)."""
+        from agentic_dev.exceptions import AgentRunError
+
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+        doc_store.exists.return_value = True
+        doc_store.read.return_value = "content"
+        registry.get = MagicMock(
+            side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
+        )
+
+        with patch(
+            "agentic_dev.uat.secrets_gate.check_secrets_gate",
+        ), patch(
+            "agentic_dev.uat.preinstall.preinstall_for_uat",
+        ), patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new_callable=AsyncMock,
+            side_effect=AgentRunError(agent_name="uat_web", message="boom"),
+        ), patch(
+            "agentic_dev.uat.teardown.teardown_for_uat",
+        ) as teardown, patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock,
+        ):
+            with pytest.raises(AgentRunError):
+                await engine._run_uat(state)
+
+        teardown.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_uat_aliases_per_track_prereqs_to_generic_input(
         self, engine, claude, doc_store, registry, prompt_renderer,
     ) -> None:

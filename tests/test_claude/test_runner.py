@@ -791,6 +791,65 @@ class TestSessionApiErrorDetection:
             with pytest.raises(AgentRunError, match="Transient API errors"):
                 await runner.run(agent, "prompt", tmp_path)
 
+    async def test_run_discovers_session_when_stdout_has_no_session_id(
+        self, tmp_path: Path,
+    ):
+        """Hard API timeout: exit-1 with empty stdout (no session_id) → discover
+        the transcript → detect the api-error → retry by resuming."""
+        runner = ClaudeRunner(max_retries=3, enable_usage_api=False)
+        agent = FakeAgentConfig()
+
+        fail_proc = TestRun._make_mock_process("", returncode=1, stderr="")
+        success_proc = TestRun._make_mock_process(
+            json.dumps({"result": "ok", "total_cost_usd": 0.1}),
+        )
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return fail_proc if call_count == 1 else success_proc
+
+        with patch.object(
+            ClaudeRunner, "_discover_session_id", return_value="discovered-sess",
+        ) as disc, patch.object(
+            ClaudeRunner, "_session_has_api_error", return_value=True,
+        ) as api_err, patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "ok"
+        assert call_count == 2  # retried instead of failing
+        disc.assert_called()  # fallback used because stdout had no session_id
+        # the api-error check (and the resuming retry) got the discovered id
+        api_err.assert_called_with("discovered-sess", tmp_path)
+
+    async def test_discovery_fallback_skipped_when_session_id_present(
+        self, tmp_path: Path,
+    ):
+        """When stdout yields a session_id, the discovery fallback is not used."""
+        runner = ClaudeRunner(max_retries=1, enable_usage_api=False)
+        agent = FakeAgentConfig()
+        fail_proc = TestRun._make_mock_process(
+            json.dumps({"session_id": "from-stdout"}), returncode=1, stderr="",
+        )
+
+        with patch.object(
+            ClaudeRunner, "_discover_session_id",
+        ) as disc, patch.object(
+            ClaudeRunner, "_session_has_api_error", return_value=True,
+        ), patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            return_value=fail_proc,
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(AgentRunError, match="Transient API errors"):
+                await runner.run(agent, "prompt", tmp_path)
+
+        disc.assert_not_called()
+
 
 class TestUsageApiFallback:
     """Empty-stderr / unrecognised-error fallback via the usage API.

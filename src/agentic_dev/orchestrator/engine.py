@@ -725,96 +725,103 @@ class PipelineEngine:
         per_track_reports: dict[str, str] = {}
         total_cost = 0.0
 
-        for track in uat_tracks:
-            if track.name in state.completed_uat_tracks:
-                per_track_reports[track.name] = self._doc_store.read(
-                    f"uat_report_{track.name}"
+        try:
+            for track in uat_tracks:
+                if track.name in state.completed_uat_tracks:
+                    per_track_reports[track.name] = self._doc_store.read(
+                        f"uat_report_{track.name}"
+                    )
+                    continue
+
+                desktop_framework: str | None = None
+                spec_doc = f"{track.name}_spec"
+                if (
+                    track.uat_kind == "desktop"
+                    and self._doc_store.exists(spec_doc)
+                ):
+                    desktop_framework = _read_desktop_framework(
+                        self._doc_store.read(spec_doc)
+                    )
+
+                prereq_result = check_prereqs(
+                    track=track,
+                    desktop_framework=desktop_framework,
+                    project_dir=self._project_dir,
                 )
-                continue
-
-            desktop_framework: str | None = None
-            spec_doc = f"{track.name}_spec"
-            if (
-                track.uat_kind == "desktop"
-                and self._doc_store.exists(spec_doc)
-            ):
-                desktop_framework = _read_desktop_framework(
-                    self._doc_store.read(spec_doc)
+                self._doc_store.write(
+                    f"uat_prereqs_{track.name}",
+                    render_prereqs_doc(prereq_result),
                 )
 
-            prereq_result = check_prereqs(
-                track=track,
-                desktop_framework=desktop_framework,
-                project_dir=self._project_dir,
-            )
-            self._doc_store.write(
-                f"uat_prereqs_{track.name}",
-                render_prereqs_doc(prereq_result),
-            )
+                agent_name = pick_uat_agent(track, desktop_framework)
+                agent_def = self._registry.get(agent_name)
 
-            agent_name = pick_uat_agent(track, desktop_framework)
-            agent_def = self._registry.get(agent_name)
+                input_docs: dict[str, str] = {}
+                for doc_name in agent_def.input_documents:
+                    if self._doc_store.exists(doc_name):
+                        input_docs[doc_name] = self._doc_store.read(doc_name)
+                # Back-compat alias: older specs used "features"; the new UAT
+                # agents declare "features_request". Supply it from either name.
+                if (
+                    "features_request" in agent_def.input_documents
+                    and "features_request" not in input_docs
+                    and self._doc_store.exists("features")
+                ):
+                    input_docs["features_request"] = self._doc_store.read("features")
+                # Per-track alias: agents declare ``uat_prereqs``, engine writes
+                # it as ``uat_prereqs_<track.name>``. Inject the per-track doc
+                # under the generic name the agent expects.
+                prereqs_doc = f"uat_prereqs_{track.name}"
+                if (
+                    "uat_prereqs" in agent_def.input_documents
+                    and "uat_prereqs" not in input_docs
+                    and self._doc_store.exists(prereqs_doc)
+                ):
+                    input_docs["uat_prereqs"] = self._doc_store.read(prereqs_doc)
+                # Track spec is the per-track input.
+                if self._doc_store.exists(spec_doc):
+                    input_docs[spec_doc] = self._doc_store.read(spec_doc)
 
-            input_docs: dict[str, str] = {}
-            for doc_name in agent_def.input_documents:
-                if self._doc_store.exists(doc_name):
-                    input_docs[doc_name] = self._doc_store.read(doc_name)
-            # Back-compat alias: older specs used "features"; the new UAT agents
-            # declare "features_request". Supply it from either name.
-            if (
-                "features_request" in agent_def.input_documents
-                and "features_request" not in input_docs
-                and self._doc_store.exists("features")
-            ):
-                input_docs["features_request"] = self._doc_store.read("features")
-            # Per-track alias: agents declare ``uat_prereqs``, engine writes it
-            # as ``uat_prereqs_<track.name>``. Inject the per-track doc under
-            # the generic name the agent expects.
-            prereqs_doc = f"uat_prereqs_{track.name}"
-            if (
-                "uat_prereqs" in agent_def.input_documents
-                and "uat_prereqs" not in input_docs
-                and self._doc_store.exists(prereqs_doc)
-            ):
-                input_docs["uat_prereqs"] = self._doc_store.read(prereqs_doc)
-            # Track spec is the per-track input.
-            if self._doc_store.exists(spec_doc):
-                input_docs[spec_doc] = self._doc_store.read(spec_doc)
+                extra_context = self._update_extra_context(state)
+                extra_context["track_name"] = track.name
+                extra_context["track_kind"] = track.kind
+                extra_context["frontend_kind"] = track.uat_kind or track.kind
+                extra_context["run_id"] = run_id
 
-            extra_context = self._update_extra_context(state)
-            extra_context["track_name"] = track.name
-            extra_context["track_kind"] = track.kind
-            extra_context["frontend_kind"] = track.uat_kind or track.kind
-            extra_context["run_id"] = run_id
+                result = await run_qa_cycle(
+                    claude=self._claude,
+                    action_agent=agent_def,
+                    qa_agent=self._registry.get("uat_qa"),
+                    input_docs=input_docs,
+                    output_doc_name=f"uat_report_{track.name}",
+                    # uat_qa.md.j2 references ``{{ uat_report }}`` — feed the
+                    # action agent's output under that canonical key, not the
+                    # per-track filename.
+                    qa_output_key="uat_report",
+                    workspace=self._project_dir / track.path,
+                    doc_store=self._doc_store,
+                    prompt_renderer=self._prompt_renderer,
+                    session_id=None,
+                    extra_context=extra_context,
+                )
+                total_cost += result.total_cost
+                raw_report = self._doc_store.read(f"uat_report_{track.name}")
+                validated = validate_uat_report(raw_report, uat_mode=cfg.uat_mode)
+                if validated != raw_report:
+                    self._doc_store.write(f"uat_report_{track.name}", validated)
+                per_track_reports[track.name] = validated
+                self._record_agent_run(state, agent_name, result.total_cost)
+                state.completed_uat_tracks.append(track.name)
+                self._state_manager.save(state)
 
-            result = await run_qa_cycle(
-                claude=self._claude,
-                action_agent=agent_def,
-                qa_agent=self._registry.get("uat_qa"),
-                input_docs=input_docs,
-                output_doc_name=f"uat_report_{track.name}",
-                # uat_qa.md.j2 references ``{{ uat_report }}`` — feed the
-                # action agent's output under that canonical key, not the
-                # per-track filename.
-                qa_output_key="uat_report",
-                workspace=self._project_dir / track.path,
-                doc_store=self._doc_store,
-                prompt_renderer=self._prompt_renderer,
-                session_id=None,
-                extra_context=extra_context,
-            )
-            total_cost += result.total_cost
-            raw_report = self._doc_store.read(f"uat_report_{track.name}")
-            validated = validate_uat_report(raw_report, uat_mode=cfg.uat_mode)
-            if validated != raw_report:
-                self._doc_store.write(f"uat_report_{track.name}", validated)
-            per_track_reports[track.name] = validated
-            self._record_agent_run(state, agent_name, result.total_cost)
-            state.completed_uat_tracks.append(track.name)
-            self._state_manager.save(state)
+            aggregated = aggregate_uat_reports(per_track_reports)
+            self._doc_store.write("uat_report", aggregated)
+        finally:
+            # Always reap the UAT runtime stack (compose) — even if an agent
+            # raised mid-run before reaching its own teardown — so nothing leaks.
+            from agentic_dev.uat.teardown import teardown_for_uat
 
-        aggregated = aggregate_uat_reports(per_track_reports)
-        self._doc_store.write("uat_report", aggregated)
+            teardown_for_uat(self._project_dir, run_id, self._doc_store)
 
         state.total_cost_usd += total_cost
         state.active_session_id = None
