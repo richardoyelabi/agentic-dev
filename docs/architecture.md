@@ -53,8 +53,11 @@ per-track `<track>_spec.md` files (see `_run_architecture` around
 fails, the central failure handler stores the failed run's session id (carried
 on `AgentRunError.session_id`) into `state.active_session_id`, so the next
 `agentic-dev resume` continues that Claude session (`--resume`) rather than
-re-running the agent from scratch. UAT does this per-track — the failed track is
-the first not-yet-completed one, so the captured session belongs to it.
+re-running the agent from scratch. UAT runs one bounded session **per feature**
+(mirroring the sprint per-track loop), so no single session accumulates enough
+browser evidence to bloat the context and stall the model; the failed feature is
+the first not-yet-completed one, so the captured session belongs to it. Per-feature
+reports roll up to `uat_report_<track>`, and per-track reports to `uat_report`.
 
 ### `orchestrator/qa_cycle.py`
 Reusable action-agent → QA-agent → optional-correction loop. Every agent

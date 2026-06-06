@@ -52,3 +52,19 @@ def test_missing_overall_line_treated_as_fail():
     })
     assert "## Overall Result: FAIL" in result
     assert "- **web**: FAIL" in result
+
+
+def test_label_param_customizes_section_headers():
+    """Feature-level roll-up uses ``# Feature:`` headers instead of ``# Track:``."""
+    result = aggregate_uat_reports(
+        {
+            "F001": "## Overall Result: PASS\n",
+            "F002": "## Overall Result: PASS\n",
+        },
+        label="Feature",
+    )
+    assert "## Overall Result: PASS" in result
+    assert "## Per-Feature Verdicts" in result
+    assert "# Feature: F001" in result
+    assert "# Feature: F002" in result
+    assert "- **F001**: PASS" in result

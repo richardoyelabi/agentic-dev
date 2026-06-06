@@ -145,9 +145,11 @@ class TestResetForUpdate:
             project_name="test",
             phase=PipelinePhase.COMPLETE,
             completed_uat_tracks=["api", "web"],
+            completed_uat_features={"web": ["F001"]},
         )
         result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
         assert result.completed_uat_tracks == []
+        assert result.completed_uat_features == {}
 
     def test_reset_clears_active_session_id(self) -> None:
         """update/remediate changes inputs, so never resume a stale session."""
@@ -259,10 +261,12 @@ class TestResumeFromFailure:
             failed_at_phase=PipelinePhase.UAT,
             error="uat_web agent raised AgentRunError",
             completed_uat_tracks=["api"],
+            completed_uat_features={"web": ["F001", "F002"]},
         )
         resumed = resume_from_failure(state)
 
         assert resumed.completed_uat_tracks == ["api"]
+        assert resumed.completed_uat_features == {"web": ["F001", "F002"]}
         assert resumed.phase == PipelinePhase.UAT
         assert resumed.error is None
 

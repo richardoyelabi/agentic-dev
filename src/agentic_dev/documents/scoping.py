@@ -21,6 +21,9 @@ _FEATURES_LINE_RE = re.compile(
     r"^\s*-\s+\*\*Features?:\*\*\s*(.+)", re.IGNORECASE | re.MULTILINE
 )
 
+# A feature entry in the features-request doc: ``## Feature: [F001] Title``.
+_FEATURE_HEADER_RE = re.compile(r"^##\s+Feature:\s*\[(F\d+)\]", re.MULTILINE)
+
 
 def extract_sprint_feature_ids(sprint_scope: str) -> set[str]:
     """Extract bare feature IDs from a sprint scope document.
@@ -86,3 +89,31 @@ def scope_spec_to_features(spec_text: str, feature_ids: set[str]) -> str:
             i += 1
 
     return "".join(result)
+
+
+def split_feature_sections(features_text: str) -> list[tuple[str, str]]:
+    """Split a features-request doc into one self-contained doc per feature.
+
+    Splits on ``## Feature: [FNNN]`` level-2 headers. Each returned text is a
+    valid single-feature features request: the preamble before the first
+    feature (e.g. the ``# Features Request`` title) followed by exactly that one
+    ``## Feature:`` section. Returns ``[]`` when the doc has no feature headers,
+    so callers can fall back to running the whole doc in one session.
+    """
+    matches = list(_FEATURE_HEADER_RE.finditer(features_text))
+    if not matches:
+        return []
+    preamble = features_text[: matches[0].start()].strip()
+    sections: list[tuple[str, str]] = []
+    for idx, match in enumerate(matches):
+        start = match.start()
+        end = (
+            matches[idx + 1].start()
+            if idx + 1 < len(matches)
+            else len(features_text)
+        )
+        feature_id = match.group(1)
+        body = features_text[start:end].strip()
+        unit = (f"{preamble}\n\n{body}" if preamble else body) + "\n"
+        sections.append((feature_id, unit))
+    return sections

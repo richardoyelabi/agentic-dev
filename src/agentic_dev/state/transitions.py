@@ -93,6 +93,7 @@ def reset_for_update(
     state.failed_at_phase = None
     state.checkpoint_feedback = None
     state.completed_uat_tracks = []
+    state.completed_uat_features = {}
     # update/remediate cycles change the inputs, so never resume a stale session.
     state.active_session_id = None
     if mode == "remediate":

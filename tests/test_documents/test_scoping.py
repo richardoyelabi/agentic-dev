@@ -4,6 +4,7 @@
 from agentic_dev.documents.scoping import (
     extract_sprint_feature_ids,
     scope_spec_to_features,
+    split_feature_sections,
 )
 
 
@@ -267,3 +268,43 @@ class TestScopeSpecToFeatures:
         assert "[C001] Button" in result
         # M001 has Features [F099] which doesn't match F001
         assert "[M001] Data" not in result
+
+
+# ---------------------------------------------------------------------------
+# split_feature_sections
+# ---------------------------------------------------------------------------
+
+_FEATURES_DOC = (
+    "# Features Request\n\n"
+    "Some intro preamble.\n\n"
+    "## Feature: [F001] Student listing\n"
+    "### Acceptance Criteria\n- [ ] shows the list\n\n"
+    "## Feature: [F002] Student detail\n"
+    "### Acceptance Criteria\n- [ ] shows detail\n\n"
+    "## Feature: [F010] Reports\n"
+    "### Acceptance Criteria\n- [ ] shows reports\n"
+)
+
+
+class TestSplitFeatureSections:
+    def test_returns_one_unit_per_feature_in_order(self):
+        sections = split_feature_sections(_FEATURES_DOC)
+        assert [fid for fid, _ in sections] == ["F001", "F002", "F010"]
+
+    def test_each_unit_is_self_contained_with_preamble(self):
+        sections = dict(split_feature_sections(_FEATURES_DOC))
+        f001 = sections["F001"]
+        # preamble (title) carried into each unit
+        assert "# Features Request" in f001
+        assert "Some intro preamble." in f001
+        # only this feature's section, not the others
+        assert "[F001]" in f001
+        assert "[F002]" not in f001 and "[F010]" not in f001
+        assert "shows the list" in f001
+        assert "shows detail" not in f001
+
+    def test_no_feature_headers_returns_empty(self):
+        assert split_feature_sections("# Features Request\n\nNothing here.") == []
+
+    def test_empty_doc_returns_empty(self):
+        assert split_feature_sections("") == []

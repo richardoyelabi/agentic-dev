@@ -24,11 +24,13 @@ def _extract_verdict(report: str) -> str:
     return match.group(1).upper()
 
 
-def aggregate_uat_reports(per_track: dict[str, str]) -> str:
-    """Combine N per-track UAT reports into one multi-track report.
+def aggregate_uat_reports(per_track: dict[str, str], label: str = "Track") -> str:
+    """Combine N sub-reports into one report with a derived overall verdict.
 
     Returns markdown with a top-level ``## Overall Result:`` line followed by
-    each track's report under a ``# Track: <name>`` header.
+    each sub-report under a ``# <label>: <name>`` header. ``label`` is ``Track``
+    for the multi-track roll-up and ``Feature`` for the per-feature roll-up
+    within a single track.
     """
     if not per_track:
         return "## Overall Result: FAIL\n\nNo UAT-capable tracks ran.\n"
@@ -37,12 +39,12 @@ def aggregate_uat_reports(per_track: dict[str, str]) -> str:
     overall = "PASS" if all(v == "PASS" for v in verdicts.values()) else "FAIL"
 
     parts = [f"## Overall Result: {overall}", ""]
-    parts.append("## Per-Track Verdicts")
+    parts.append(f"## Per-{label} Verdicts")
     for name in sorted(verdicts):
         parts.append(f"- **{name}**: {verdicts[name]}")
     parts.append("")
     for name in sorted(per_track):
-        parts.append(f"# Track: {name}")
+        parts.append(f"# {label}: {name}")
         parts.append("")
         parts.append(per_track[name].strip())
         parts.append("")

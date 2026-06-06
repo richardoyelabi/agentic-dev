@@ -114,7 +114,8 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/artifacts/env_requirements.md` — env vars classified as auto/mock/human
 - `.agentic-dev/artifacts/figma_sources.md` — Figma URLs and user-supplied labels
 - `.agentic-dev/artifacts/qa/<name>.md` — per-step QA reports
-- `.agentic-dev/artifacts/uat_report_<track>.md` — per-track UAT verdict
+- `.agentic-dev/artifacts/uat_report_<track>_<feature>.md` — per-feature UAT verdict (UAT runs one bounded session per feature, mirroring the per-track sprint loop)
+- `.agentic-dev/artifacts/uat_report_<track>.md` — per-track UAT verdict (roll-up of that track's per-feature reports)
 - `.agentic-dev/artifacts/uat_report.md` — aggregated multi-track UAT report
 - `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots, transcripts
 - `.agentic-dev/uat/<run_id>/install_<track>.log` — synchronous pre-install logs

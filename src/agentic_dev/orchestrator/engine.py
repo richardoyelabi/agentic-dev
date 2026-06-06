@@ -692,7 +692,13 @@ class PipelineEngine:
         return advance_phase(state, PipelinePhase.UAT)
 
     async def _run_uat(self, state: PipelineState) -> PipelineState:
-        """Run UAT for every UAT-capable track and aggregate the verdicts."""
+        """Run UAT one feature at a time for every UAT-capable track.
+
+        Each feature is verified in its own bounded Claude session (mirroring the
+        per-track sprint loop), so no single session accumulates enough browser
+        evidence to bloat the context and stall the model. Per-feature reports
+        roll up to a per-track report, and per-track reports to ``uat_report``.
+        """
         from agentic_dev.config import load_project_config
         from agentic_dev.uat.aggregator import aggregate_uat_reports
         from agentic_dev.uat.dispatcher import (
@@ -735,6 +741,10 @@ class PipelineEngine:
         )
         per_track_reports: dict[str, str] = {}
         total_cost = 0.0
+        # Per-feature UAT never resumes a session (each feature runs fresh), so
+        # drop any session captured by an earlier whole-track UAT run — otherwise
+        # the first feature would resume that large, stall-prone session.
+        state.active_session_id = None
 
         try:
             for track in uat_tracks:
@@ -767,72 +777,100 @@ class PipelineEngine:
                 agent_name = pick_uat_agent(track, desktop_framework)
                 agent_def = self._registry.get(agent_name)
 
-                input_docs: dict[str, str] = {}
+                # Shared (non-feature-scoped) input docs, built once per track.
+                base_docs: dict[str, str] = {}
                 for doc_name in agent_def.input_documents:
                     if self._doc_store.exists(doc_name):
-                        input_docs[doc_name] = self._doc_store.read(doc_name)
-                # Back-compat alias: older specs used "features"; the new UAT
-                # agents declare "features_request". Supply it from either name.
-                if (
-                    "features_request" in agent_def.input_documents
-                    and "features_request" not in input_docs
-                    and self._doc_store.exists("features")
-                ):
-                    input_docs["features_request"] = self._doc_store.read("features")
+                        base_docs[doc_name] = self._doc_store.read(doc_name)
                 # Per-track alias: agents declare ``uat_prereqs``, engine writes
-                # it as ``uat_prereqs_<track.name>``. Inject the per-track doc
-                # under the generic name the agent expects.
+                # it as ``uat_prereqs_<track.name>``.
                 prereqs_doc = f"uat_prereqs_{track.name}"
                 if (
                     "uat_prereqs" in agent_def.input_documents
-                    and "uat_prereqs" not in input_docs
+                    and "uat_prereqs" not in base_docs
                     and self._doc_store.exists(prereqs_doc)
                 ):
-                    input_docs["uat_prereqs"] = self._doc_store.read(prereqs_doc)
-                # Track spec is the per-track input.
-                if self._doc_store.exists(spec_doc):
-                    input_docs[spec_doc] = self._doc_store.read(spec_doc)
+                    base_docs["uat_prereqs"] = self._doc_store.read(prereqs_doc)
 
-                extra_context = self._update_extra_context(state)
-                extra_context["track_name"] = track.name
-                extra_context["track_kind"] = track.kind
-                extra_context["frontend_kind"] = track.uat_kind or track.kind
-                extra_context["run_id"] = run_id
-
-                extra_context["figma_mcp_available"] = figma_mcp_available
-
-                # The failed/in-flight track is the first not-yet-completed one,
-                # so any session captured at failure (active_session_id) belongs
-                # to it — resume it. Clear it so a subsequent fresh track in this
-                # same run starts a new session; a re-failure repopulates it via
-                # the engine's central failure handler.
-                track_session_id = state.active_session_id
-                state.active_session_id = None
-
-                result = await run_qa_cycle(
-                    claude=self._claude,
-                    action_agent=agent_def,
-                    qa_agent=self._registry.get("uat_qa"),
-                    input_docs=input_docs,
-                    output_doc_name=f"uat_report_{track.name}",
-                    # uat_qa.md.j2 references ``{{ uat_report }}`` — feed the
-                    # action agent's output under that canonical key, not the
-                    # per-track filename.
-                    qa_output_key="uat_report",
-                    workspace=self._project_dir / track.path,
-                    doc_store=self._doc_store,
-                    prompt_renderer=self._prompt_renderer,
-                    session_id=track_session_id,
-                    extra_context=extra_context,
-                    figma_mcp_enabled=figma_mcp_available == "true",
+                # The features request and track spec are scoped down to ONE
+                # feature per session — that is what keeps each UAT session small
+                # enough to never bloat the context and stall the model.
+                features_text = (
+                    self._doc_store.read("features")
+                    if self._doc_store.exists("features")
+                    else base_docs.get("features_request", "")
                 )
-                total_cost += result.total_cost
-                raw_report = self._doc_store.read(f"uat_report_{track.name}")
-                validated = validate_uat_report(raw_report, uat_mode=cfg.uat_mode)
-                if validated != raw_report:
-                    self._doc_store.write(f"uat_report_{track.name}", validated)
-                per_track_reports[track.name] = validated
-                self._record_agent_run(state, agent_name, result.total_cost)
+                track_spec_text = (
+                    self._doc_store.read(spec_doc)
+                    if self._doc_store.exists(spec_doc)
+                    else ""
+                )
+                units = self._uat_feature_units(features_text, track_spec_text)
+
+                track_extra = self._update_extra_context(state)
+                track_extra["track_name"] = track.name
+                track_extra["track_kind"] = track.kind
+                track_extra["frontend_kind"] = track.uat_kind or track.kind
+                track_extra["run_id"] = run_id
+                track_extra["figma_mcp_available"] = figma_mcp_available
+
+                done = state.completed_uat_features.setdefault(track.name, [])
+                feature_reports: dict[str, str] = {}
+
+                for feature_id, feature_request, feature_spec in units:
+                    report_doc = f"uat_report_{track.name}_{feature_id}"
+                    if feature_id in done:
+                        if self._doc_store.exists(report_doc):
+                            feature_reports[feature_id] = self._doc_store.read(
+                                report_doc
+                            )
+                        continue
+
+                    input_docs = dict(base_docs)
+                    input_docs["features_request"] = feature_request
+                    if feature_spec:
+                        input_docs[spec_doc] = feature_spec
+                    extra_context = {**track_extra, "feature_id": feature_id}
+
+                    result = await run_qa_cycle(
+                        claude=self._claude,
+                        action_agent=agent_def,
+                        qa_agent=self._registry.get("uat_qa"),
+                        input_docs=input_docs,
+                        output_doc_name=report_doc,
+                        # uat_qa.md.j2 references ``{{ uat_report }}`` — feed the
+                        # action agent's output under that canonical key.
+                        qa_output_key="uat_report",
+                        workspace=self._project_dir / track.path,
+                        doc_store=self._doc_store,
+                        prompt_renderer=self._prompt_renderer,
+                        # Each not-yet-completed feature runs in its own fresh,
+                        # bounded session — mirroring sprints, which only persist a
+                        # unit's session on success. Resume just skips features
+                        # already in ``completed_uat_features``; it never resumes a
+                        # (large) whole-track session from an earlier UAT run.
+                        session_id=None,
+                        extra_context=extra_context,
+                        figma_mcp_enabled=figma_mcp_available == "true",
+                    )
+                    total_cost += result.total_cost
+                    raw_report = self._doc_store.read(report_doc)
+                    validated = validate_uat_report(
+                        raw_report, uat_mode=cfg.uat_mode
+                    )
+                    if validated != raw_report:
+                        self._doc_store.write(report_doc, validated)
+                    feature_reports[feature_id] = validated
+                    self._record_agent_run(state, agent_name, result.total_cost)
+                    done.append(feature_id)
+                    self._state_manager.save(state)
+
+                # Roll the per-feature reports up into the track report.
+                track_report = aggregate_uat_reports(
+                    feature_reports, label="Feature"
+                )
+                self._doc_store.write(f"uat_report_{track.name}", track_report)
+                per_track_reports[track.name] = track_report
                 state.completed_uat_tracks.append(track.name)
                 self._state_manager.save(state)
 
@@ -850,6 +888,36 @@ class PipelineEngine:
         await self._commit_docs_changes("docs: UAT report")
 
         return advance_phase(state, PipelinePhase.UAT_QA)
+
+    def _uat_feature_units(
+        self, features_text: str, track_spec: str,
+    ) -> list[tuple[str, str, str]]:
+        """Split a track's UAT into ``(feature_id, features_request, spec)`` units.
+
+        One unit per feature, each scoped so its session stays small: the
+        features request is reduced to a single ``## Feature:`` section and the
+        track spec is filtered to that feature (mirroring how sprint developer
+        agents are scoped to a sprint's feature IDs). Falls back to a single
+        whole-doc unit when the features doc has no ``## Feature:`` headers.
+        """
+        from agentic_dev.documents.scoping import (
+            extract_sprint_feature_ids,
+            scope_spec_to_features,
+            split_feature_sections,
+        )
+
+        sections = split_feature_sections(features_text)
+        if not sections:
+            return [("all", features_text, track_spec)]
+
+        spec_ids = extract_sprint_feature_ids(track_spec)
+        selected = [(fid, text) for fid, text in sections if fid in spec_ids]
+        if not selected:
+            selected = sections
+        return [
+            (fid, text, scope_spec_to_features(track_spec, {fid}))
+            for fid, text in selected
+        ]
 
     async def _run_single_agent(
         self,

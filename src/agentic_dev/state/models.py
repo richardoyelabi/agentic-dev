@@ -89,3 +89,7 @@ class PipelineState(BaseModel):
     active_session_id: str | None = None
     tracks: list[Track] = Field(default_factory=list)
     completed_uat_tracks: list[str] = Field(default_factory=list)
+    # Per-track UAT progress: track name -> feature IDs already verified, so a
+    # resume skips passed features and re-runs only the rest. Parallel to
+    # ``completed_uat_tracks`` (which marks a track fully done).
+    completed_uat_features: dict[str, list[str]] = Field(default_factory=dict)

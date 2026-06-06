@@ -620,27 +620,50 @@ class TestUATPhase:
         teardown.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_uat_resumes_active_session_for_first_incomplete_track(
+    async def test_uat_runs_features_fresh_and_skips_completed(
         self, engine, doc_store, registry,
     ):
-        """On resume, the failed (first incomplete) track resumes its session;
-        active_session_id is cleared so a later fresh track starts new."""
-        from agentic_dev.exceptions import AgentRunError
-
+        """Resume skips already-passed features and runs the rest in fresh,
+        bounded sessions; a stale whole-track session is never resumed."""
         tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
         state = _make_state(PipelinePhase.UAT, tracks=tracks)
-        state.active_session_id = "sess-prev"
-        doc_store.exists.return_value = True
-        doc_store.read.return_value = "content"
+        state.active_session_id = "stale-whole-track-session"
+        state.completed_uat_features = {"frontend": ["F001"]}
         registry.get = MagicMock(
             side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
         )
 
-        captured: dict = {}
+        features_doc = (
+            "# Features Request\n\n"
+            "## Feature: [F001] Listing\n- [ ] lists\n\n"
+            "## Feature: [F002] Detail\n- [ ] details\n"
+        )
+        spec = "### [M001] X\n- **Features:** [F001], [F002]\n"
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name in {
+                "features", "frontend_spec", "input.md", "uat_report_frontend_F001",
+            }
+        )
 
-        def fake_qa(**kwargs):
-            captured["session_id"] = kwargs.get("session_id")
-            raise AgentRunError(agent_name="uat_web", message="stop after capture")
+        def fake_read(name):
+            if name == "features":
+                return features_doc
+            if name == "frontend_spec":
+                return spec
+            if name.startswith("uat_report_"):
+                return "## Overall Result: PASS\n"
+            return "content"
+
+        doc_store.read = MagicMock(side_effect=fake_read)
+
+        captured: list[dict] = []
+
+        async def fake_qa(**kwargs):
+            captured.append({
+                "feature_id": kwargs["extra_context"]["feature_id"],
+                "session_id": kwargs["session_id"],
+            })
+            return MagicMock(total_cost=0.1, session_id="s")
 
         with patch(
             "agentic_dev.uat.secrets_gate.check_secrets_gate",
@@ -654,11 +677,104 @@ class TestUATPhase:
         ), patch.object(
             engine, "_commit_docs_changes", new_callable=AsyncMock,
         ):
-            with pytest.raises(AgentRunError):
-                await engine._run_uat(state)
+            await engine._run_uat(state)
 
-        assert captured["session_id"] == "sess-prev"
+        # F001 already passed → skipped; only F002 runs, and it runs fresh.
+        assert [c["feature_id"] for c in captured] == ["F002"]
+        assert captured[0]["session_id"] is None
+        # The stale whole-track session is dropped, never resumed.
         assert state.active_session_id is None
+
+    def test_uat_feature_units_selects_spec_features_and_scopes(self, engine):
+        """One unit per feature the track's spec references, each scoped."""
+        features = (
+            "# Features Request\n\n"
+            "## Feature: [F001] A\n- [ ] a\n\n"
+            "## Feature: [F002] B\n- [ ] b\n\n"
+            "## Feature: [F003] C\n- [ ] c\n"
+        )
+        spec = "## Modules\n\n### [M001] X\n- **Features:** [F001], [F003]\n"
+
+        units = engine._uat_feature_units(features, spec)
+
+        assert [fid for fid, _, _ in units] == ["F001", "F003"]  # F002 not in spec
+        assert "[F001]" in units[0][1] and "[F002]" not in units[0][1]
+
+    def test_uat_feature_units_falls_back_without_headers(self, engine):
+        """A features doc with no ``## Feature:`` headers → one whole-doc unit."""
+        units = engine._uat_feature_units("no feature headers here", "spec")
+        assert units == [("all", "no feature headers here", "spec")]
+
+    @pytest.mark.asyncio
+    async def test_uat_runs_once_per_feature_scoped(
+        self, engine, doc_store, registry,
+    ):
+        """A multi-feature track runs the UAT agent once per feature, each scoped
+        to that single feature, then rolls the per-feature reports up per track."""
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+        registry.get = MagicMock(
+            side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
+        )
+
+        features_doc = (
+            "# Features Request\n\n"
+            "## Feature: [F001] Listing\n- [ ] lists\n\n"
+            "## Feature: [F002] Detail\n- [ ] details\n"
+        )
+        spec = "### [M001] X\n- **Features:** [F001], [F002]\n"
+
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name in {"features", "frontend_spec", "input.md"}
+        )
+
+        def fake_read(name):
+            if name == "features":
+                return features_doc
+            if name == "frontend_spec":
+                return spec
+            if name.startswith("uat_report_"):
+                return "## Overall Result: PASS\n"
+            return "content"
+
+        doc_store.read = MagicMock(side_effect=fake_read)
+
+        captured: list[dict] = []
+
+        async def fake_qa(**kwargs):
+            captured.append({
+                "feature_id": kwargs["extra_context"]["feature_id"],
+                "output_doc_name": kwargs["output_doc_name"],
+                "features_request": kwargs["input_docs"]["features_request"],
+            })
+            return MagicMock(total_cost=0.1, session_id="s")
+
+        with patch(
+            "agentic_dev.uat.secrets_gate.check_secrets_gate",
+        ), patch(
+            "agentic_dev.uat.preinstall.preinstall_for_uat",
+        ), patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=AsyncMock(side_effect=fake_qa),
+        ), patch(
+            "agentic_dev.uat.teardown.teardown_for_uat",
+        ), patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock,
+        ):
+            await engine._run_uat(state)
+
+        # One UAT run per feature, in order, each to a per-feature report doc.
+        assert [c["feature_id"] for c in captured] == ["F001", "F002"]
+        assert [c["output_doc_name"] for c in captured] == [
+            "uat_report_frontend_F001", "uat_report_frontend_F002",
+        ]
+        # Each run's features_request is scoped to just that feature.
+        assert "[F001]" in captured[0]["features_request"]
+        assert "[F002]" not in captured[0]["features_request"]
+        assert "[F002]" in captured[1]["features_request"]
+        # Per-feature progress + track completion recorded for resume.
+        assert state.completed_uat_features["frontend"] == ["F001", "F002"]
+        assert "frontend" in state.completed_uat_tracks
 
     @pytest.mark.asyncio
     async def test_uat_aliases_per_track_prereqs_to_generic_input(
