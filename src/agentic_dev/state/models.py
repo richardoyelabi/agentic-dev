@@ -87,6 +87,13 @@ class PipelineState(BaseModel):
     remediation_cycle: int = 0
     agent_runs: list[AgentRunRecord] = Field(default_factory=list)
     active_session_id: str | None = None
+    # Intra-cycle resume cursor. Only one agent runs at a time, so a single
+    # cursor pins the in-flight Claude session and the QA-cycle stage it died at
+    # ("action" | "initial_qa" | "correction" | "re_review"), letting the next
+    # `agentic-dev resume` continue exactly where it stopped. ``active_session_id``
+    # carries the session; ``active_qa_round`` the correction/re-review round.
+    active_qa_stage: str | None = None
+    active_qa_round: int = 0
     tracks: list[Track] = Field(default_factory=list)
     completed_uat_tracks: list[str] = Field(default_factory=list)
     # Per-track UAT progress: track name -> feature IDs already verified, so a

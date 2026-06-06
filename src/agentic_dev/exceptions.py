@@ -114,9 +114,15 @@ class RateLimitError(AgentRunError):
         message: str,
         attempts: int,
         exit_code: int | None = None,
+        session_id: str | None = None,
     ):
         self.attempts = attempts
-        super().__init__(agent_name=agent_name, message=message, exit_code=exit_code)
+        super().__init__(
+            agent_name=agent_name,
+            message=message,
+            exit_code=exit_code,
+            session_id=session_id,
+        )
 
 
 class DocumentError(AgenticDevError):

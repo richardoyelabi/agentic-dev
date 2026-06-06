@@ -9,6 +9,7 @@ from agentic_dev.agents.base import AgentDefinition, ClaudeConfig
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeResult, ClaudeRunner
 from agentic_dev.documents.store import DocumentStore
+from agentic_dev.exceptions import AgentRunError
 from agentic_dev.orchestrator.sprint_runner import SprintResult, SprintRunner
 from agentic_dev.prompts.renderer import PromptRenderer
 from agentic_dev.state.manager import StateManager
@@ -167,6 +168,83 @@ async def test_completed_tracks_are_skipped_on_resume(claude, registry, doc_stor
     assert "backend" not in result.track_results
     assert "frontend" in result.track_results
     assert claude.run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_dev_failure_persists_resume_cursor(claude, registry, doc_store, prompt_renderer, project_dir, fullstack_tracks):
+    """A failed dev agent's session/stage is persisted to the pipeline cursor so
+    the next resume continues it rather than restarting the track."""
+    sprint_state = SprintState(sprint_number=1, name="Sprint 1")
+    pipeline_state = PipelineState(
+        project_name="t", sprints=[sprint_state], tracks=fullstack_tracks,
+    )
+    state_manager = MagicMock(spec=StateManager)
+    runner = SprintRunner(
+        claude=claude,
+        registry=registry,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        project_dir=project_dir,
+        tracks=fullstack_tracks,
+        state_manager=state_manager,
+        pipeline_state=pipeline_state,
+    )
+    claude.run.side_effect = AgentRunError(
+        "developer", "stalled", session_id="dev-sess",
+    )
+
+    result = await runner.run_sprint(
+        sprint_number=1, sprint_scope="auth", sprint_state=sprint_state,
+    )
+
+    assert result.success is False
+    assert pipeline_state.active_session_id == "dev-sess"
+    assert pipeline_state.active_qa_stage == "action"
+
+
+@pytest.mark.asyncio
+async def test_resume_cursor_passed_to_in_flight_track(claude, registry, doc_store, prompt_renderer, project_dir, fullstack_tracks):
+    """On resume, the cursor is applied to the first not-complete track (the one
+    that failed) and cleared once it completes."""
+    sprint_state = SprintState(
+        sprint_number=1,
+        name="Sprint 1",
+        track_progress={
+            "backend": TrackProgress(track_name="backend", phase=TrackPhase.COMPLETE),
+        },
+    )
+    pipeline_state = PipelineState(
+        project_name="t",
+        sprints=[sprint_state],
+        tracks=fullstack_tracks,
+        active_session_id="resume-sess",
+        active_qa_stage="action",
+    )
+    state_manager = MagicMock(spec=StateManager)
+    runner = SprintRunner(
+        claude=claude,
+        registry=registry,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        project_dir=project_dir,
+        tracks=fullstack_tracks,
+        state_manager=state_manager,
+        pipeline_state=pipeline_state,
+    )
+    claude.run.side_effect = [
+        _make_claude_result("frontend code", cost=0.25),
+        _make_claude_result("APPROVED", cost=0.10),
+    ]
+
+    await runner.run_sprint(
+        sprint_number=1, sprint_scope="auth", sprint_state=sprint_state,
+    )
+
+    # backend skipped; frontend (in-flight) resumed the session.
+    assert claude.run.call_args_list[0].kwargs.get("session_id") == "resume-sess"
+    # Cursor cleared once the track completes.
+    assert pipeline_state.active_session_id is None
+    assert pipeline_state.active_qa_stage is None
 
 
 @pytest.mark.asyncio

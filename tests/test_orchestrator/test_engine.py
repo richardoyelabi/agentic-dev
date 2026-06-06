@@ -620,14 +620,17 @@ class TestUATPhase:
         teardown.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_uat_runs_features_fresh_and_skips_completed(
+    async def test_uat_resumes_failed_feature_skips_completed_rest_fresh(
         self, engine, doc_store, registry,
     ):
-        """Resume skips already-passed features and runs the rest in fresh,
-        bounded sessions; a stale whole-track session is never resumed."""
+        """Resume skips already-passed features, resumes the failed feature's
+        session at the stage it died, and runs any remaining features fresh."""
         tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
         state = _make_state(PipelinePhase.UAT, tracks=tracks)
-        state.active_session_id = "stale-whole-track-session"
+        # Cursor left by the prior run on the failed (first not-done) feature.
+        state.active_session_id = "failed-feature-session"
+        state.active_qa_stage = "action"
+        state.active_qa_round = 0
         state.completed_uat_features = {"frontend": ["F001"]}
         registry.get = MagicMock(
             side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
@@ -636,9 +639,10 @@ class TestUATPhase:
         features_doc = (
             "# Features Request\n\n"
             "## Feature: [F001] Listing\n- [ ] lists\n\n"
-            "## Feature: [F002] Detail\n- [ ] details\n"
+            "## Feature: [F002] Detail\n- [ ] details\n\n"
+            "## Feature: [F003] Search\n- [ ] search\n"
         )
-        spec = "### [M001] X\n- **Features:** [F001], [F002]\n"
+        spec = "### [M001] X\n- **Features:** [F001], [F002], [F003]\n"
         doc_store.exists = MagicMock(
             side_effect=lambda name: name in {
                 "features", "frontend_spec", "input.md", "uat_report_frontend_F001",
@@ -662,6 +666,8 @@ class TestUATPhase:
             captured.append({
                 "feature_id": kwargs["extra_context"]["feature_id"],
                 "session_id": kwargs["session_id"],
+                "resume_stage": kwargs.get("resume_stage"),
+                "resume_round": kwargs.get("resume_round"),
             })
             return MagicMock(total_cost=0.1, session_id="s")
 
@@ -679,11 +685,14 @@ class TestUATPhase:
         ):
             await engine._run_uat(state)
 
-        # F001 already passed → skipped; only F002 runs, and it runs fresh.
-        assert [c["feature_id"] for c in captured] == ["F002"]
-        assert captured[0]["session_id"] is None
-        # The stale whole-track session is dropped, never resumed.
+        # F001 skipped; F002 (the failed one) resumes its session/stage; F003 fresh.
+        assert [c["feature_id"] for c in captured] == ["F002", "F003"]
+        assert captured[0]["session_id"] == "failed-feature-session"
+        assert captured[0]["resume_stage"] == "action"
+        assert captured[1]["session_id"] is None
+        # Cursor cleared once UAT completes.
         assert state.active_session_id is None
+        assert state.active_qa_stage is None
 
     def test_uat_feature_units_selects_spec_features_and_scopes(self, engine):
         """One unit per feature the track's spec references, each scoped."""
@@ -1549,6 +1558,36 @@ class TestCrashResilience:
 
         first_call = claude.run.call_args_list[0]
         assert first_call.kwargs.get("session_id") == "prev-sess-42"
+
+    @pytest.mark.asyncio
+    async def test_feature_analysis_forwards_resume_stage(
+        self, engine, doc_store
+    ):
+        """Feature analysis forwards the full resume cursor (stage + round) so a
+        mid-cycle failure continues at the exact stage it died."""
+        state = _make_state(
+            PipelinePhase.FEATURE_ANALYSIS,
+            active_session_id="prev-sess",
+        )
+        state.active_qa_stage = "initial_qa"
+        state.active_qa_round = 0
+        doc_store.read = MagicMock(return_value="structured input")
+
+        captured: dict = {}
+
+        async def fake_qa(**kwargs):
+            captured.update(kwargs)
+            return MagicMock(total_cost=0.1, session_id=None)
+
+        with patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=AsyncMock(side_effect=fake_qa),
+        ), patch.object(engine, "_commit_docs_changes", new_callable=AsyncMock):
+            await engine._run_feature_analysis(state)
+
+        assert captured.get("session_id") == "prev-sess"
+        assert captured.get("resume_stage") == "initial_qa"
+        assert captured.get("on_progress") is not None
 
     @pytest.mark.asyncio
     async def test_feature_analysis_clears_session_id_on_success(

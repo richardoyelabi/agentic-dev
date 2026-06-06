@@ -49,23 +49,35 @@ Finite-state-machine driver. Advances through phases, dispatches to the QA
 cycle and sprint runner, evaluates checkpoints, and handles pipeline-level
 rate-limit pauses. Splits the architect's multi-document output into
 per-track `<track>_spec.md` files (see `_run_architecture` around
-[engine.py:345](../src/agentic_dev/orchestrator/engine.py#L345)). When an agent
-fails, the central failure handler stores the failed run's session id (carried
-on `AgentRunError.session_id`) into `state.active_session_id`, so the next
-`agentic-dev resume` continues that Claude session (`--resume`) rather than
-re-running the agent from scratch. UAT runs one bounded session **per feature**
-(mirroring the sprint per-track loop), so no single session accumulates enough
-browser evidence to bloat the context and stall the model; the failed feature is
-the first not-yet-completed one, so the captured session belongs to it. Per-feature
+[engine.py:345](../src/agentic_dev/orchestrator/engine.py#L345)). Every pipeline
+phase resumes the exact Claude session that was in flight when it failed — at
+whatever **QA-cycle stage** it died (action, initial QA, correction, or
+re-review), not just the action agent. A single pipeline-level resume cursor —
+`state.active_session_id` (the session) plus `active_qa_stage`/`active_qa_round`
+(the stage) — is persisted live by an `on_progress` callback as each stage runs
+and on failure; the next `agentic-dev resume` continues that session/stage rather
+than restarting. One agent runs at a time, so the cursor unambiguously names the
+in-flight unit (the first not-yet-completed track/feature/phase). UAT runs one
+bounded session **per feature** (mirroring the sprint per-track loop), so no
+single session accumulates enough browser evidence to bloat the context and stall
+the model; on resume the failed feature continues its session while completed
+features/tracks stay skipped and any remaining features run fresh. Per-feature
 reports roll up to `uat_report_<track>`, and per-track reports to `uat_report`.
 
 ### `orchestrator/qa_cycle.py`
 Reusable action-agent → QA-agent → optional-correction loop. Every agent
 that has a `qa_agent` field in its definition is driven through this — it is the
 single execution path for all pipeline phases, so resume/session handling lives
-here. When given a `session_id` (a resume), the action run sends a short
-"continue where you left off" prompt with `--resume` instead of re-piping the
-full prompt; corrections do the same via `_SESSION_CORRECTION_PROMPT`.
+here. It is a resumable state machine: `resume_stage`/`resume_round` re-enter at
+the stage that failed, loading already-saved outputs from the doc store and
+sending a short "continue where you left off" prompt with `--resume` to continue
+that stage's session (the action agent, the codebase-reading QA reviewer, a
+correction, or a re-review). `on_progress(stage, session_id, round)` reports the
+live session as each stage runs and the failed session on error, so the caller
+can persist the resume cursor. (`skip_to_correction`/`on_substep` remain as a
+deprecated coarse alias.) Rate-limit pauses resume the same way: `RateLimitError`
+carries the session id, so re-entry after the wait continues rather than
+restarts.
 
 ### `orchestrator/sprint_runner.py`
 Executes a single sprint by running one generic `developer` + `qa` pair
@@ -221,15 +233,19 @@ history snapshots in `.agentic-dev/history/`.
 
 ### `state/models.py`
 Pydantic models for the state machine: `PipelinePhase`, `SprintStatus`,
-`SprintState`, `PipelineState`, `AgentRunRecord`.
+`SprintState`, `PipelineState`, `AgentRunRecord`. The resume cursor lives on
+`PipelineState` as `active_session_id` (the in-flight Claude session) plus
+`active_qa_stage`/`active_qa_round` (the QA-cycle stage it died at).
 
 ### `state/transitions.py`
 Pure-logic helpers for transitioning between phases —
 `resume_from_failure()` clears error/`failed_at_phase` before resume and
-**preserves** `active_session_id`, so a plain `agentic-dev resume` continues the
-failed agent's Claude session. `advance_phase()` (every forward transition) and
-`reset_for_update()` (update/remediate, whose inputs changed) both **clear** it,
-so a session is only ever resumed by the agent that owns it and never by a
+**preserves** the whole resume cursor, so a plain `agentic-dev resume` continues
+the failed agent's Claude session at the stage it stopped. `advance_phase()`
+**clears** the cursor on every forward transition **except the transition to
+`FAILED`** (a swallowed sprint failure routes through here and must keep its
+cursor), and `reset_for_update()` (update/remediate, whose inputs changed) clears
+it — so a session is only ever resumed by the agent that owns it and never by a
 later phase or a changed-inputs cycle.
 
 ### `workspace/manager.py`

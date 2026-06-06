@@ -40,7 +40,12 @@ Other supporting commands all operate on the cwd-resolved project (no
 app-name argument):
 
 - `agentic-dev resume` — continue a paused/failed pipeline; takes
-  `--feedback` and `--skip-sprint`
+  `--feedback` and `--skip-sprint`. Resume continues the exact Claude session
+  that was in flight when it failed, at whatever QA-cycle stage it died (action,
+  initial QA, correction, or re-review), via a single pipeline-level resume
+  cursor (`active_session_id` + `active_qa_stage`/`active_qa_round`) — including
+  across rate-limit pauses. Completed sprints and UAT features/tracks stay
+  skipped; only the in-flight unit resumes.
 - `agentic-dev remediate` — re-enter the pipeline using the last UAT
   report as the change request (the outer ralph loop)
 - `agentic-dev tracks` — show inferred tracks; `--rediscover` re-runs the

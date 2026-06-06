@@ -59,8 +59,13 @@ def advance_phase(
     state.updated_at = datetime.now(timezone.utc)
     # A forward transition starts a fresh agent context, so never carry one
     # phase's Claude session into the next. resume_from_failure bypasses this
-    # function, so it preserves active_session_id for --resume.
-    state.active_session_id = None
+    # function, so it preserves the resume cursor for --resume. The exception is
+    # a transition to FAILED: a swallowed sprint failure routes through here, and
+    # the cursor must survive so the next resume continues that session/stage.
+    if to_phase != PipelinePhase.FAILED:
+        state.active_session_id = None
+        state.active_qa_stage = None
+        state.active_qa_round = 0
     emit(_event_log, PhaseTransitionEvent(
         from_phase=str(old_phase),
         to_phase=str(to_phase),
@@ -96,6 +101,8 @@ def reset_for_update(
     state.completed_uat_features = {}
     # update/remediate cycles change the inputs, so never resume a stale session.
     state.active_session_id = None
+    state.active_qa_stage = None
+    state.active_qa_round = 0
     if mode == "remediate":
         state.remediation_cycle += 1
     state.updated_at = datetime.now(timezone.utc)

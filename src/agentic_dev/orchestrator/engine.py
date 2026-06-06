@@ -96,6 +96,24 @@ class PipelineEngine:
             pipeline_state=state,
         )
 
+    def _qa_cursor_writer(self, state: PipelineState):
+        """Return an ``on_progress`` callback that persists the QA-cycle resume
+        cursor as each stage runs, so the next ``agentic-dev resume`` continues
+        the exact session/stage that died."""
+        def _on_progress(stage: str, session_id: str | None, round_num: int) -> None:
+            state.active_qa_stage = stage
+            state.active_session_id = session_id
+            state.active_qa_round = round_num
+            self._state_manager.save(state)
+        return _on_progress
+
+    @staticmethod
+    def _clear_qa_cursor(state: PipelineState) -> None:
+        """Drop the resume cursor after a phase/unit completes successfully."""
+        state.active_session_id = None
+        state.active_qa_stage = None
+        state.active_qa_round = 0
+
     async def _compute_rate_limit_wait(
         self,
     ) -> tuple[float, datetime | None, str]:
@@ -264,10 +282,13 @@ class PipelineEngine:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             session_id=state.active_session_id,
+            resume_stage=state.active_qa_stage,
+            resume_round=state.active_qa_round,
+            on_progress=self._qa_cursor_writer(state),
         )
 
         state.total_cost_usd += result.total_cost
-        state.active_session_id = None
+        self._clear_qa_cursor(state)
         self._record_agent_run(state, "input_processor", result.total_cost)
         await self._commit_docs_changes("docs: structured input from requirements")
 
@@ -337,12 +358,15 @@ class PipelineEngine:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             session_id=state.active_session_id,
+            resume_stage=state.active_qa_stage,
+            resume_round=state.active_qa_round,
+            on_progress=self._qa_cursor_writer(state),
             extra_context=extra_context,
         )
 
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
-        state.active_session_id = None
+        self._clear_qa_cursor(state)
         self._record_agent_run(state, "feature_analyst", total_cost)
         await self._commit_docs_changes("docs: feature analysis")
 
@@ -403,6 +427,9 @@ class PipelineEngine:
             prompt_renderer=self._prompt_renderer,
             extra_context=extra_context,
             session_id=state.active_session_id,
+            resume_stage=state.active_qa_stage,
+            resume_round=state.active_qa_round,
+            on_progress=self._qa_cursor_writer(state),
             figma_mcp_enabled=figma_mcp_available == "true",
         )
 
@@ -423,7 +450,7 @@ class PipelineEngine:
 
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
-        state.active_session_id = None
+        self._clear_qa_cursor(state)
         self._record_agent_run(state, "architect", total_cost)
         await self._commit_docs_changes("docs: architecture specs")
 
@@ -461,6 +488,9 @@ class PipelineEngine:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             session_id=state.active_session_id,
+            resume_stage=state.active_qa_stage,
+            resume_round=state.active_qa_round,
+            on_progress=self._qa_cursor_writer(state),
             extra_context=extra_context,
         )
 
@@ -501,7 +531,7 @@ class PipelineEngine:
 
         total_cost = result.total_cost
         state.total_cost_usd += total_cost
-        state.active_session_id = None
+        self._clear_qa_cursor(state)
         self._record_agent_run(state, "sprint_planner", total_cost)
         await self._commit_docs_changes("docs: sprint plan")
 
@@ -741,10 +771,14 @@ class PipelineEngine:
         )
         per_track_reports: dict[str, str] = {}
         total_cost = 0.0
-        # Per-feature UAT never resumes a session (each feature runs fresh), so
-        # drop any session captured by an earlier whole-track UAT run — otherwise
-        # the first feature would resume that large, stall-prone session.
-        state.active_session_id = None
+        # On resume, the cursor pins the in-flight (failed) feature's session and
+        # the stage it died at. That feature is, by construction, the first
+        # not-yet-completed one — so apply the cursor to the first feature we
+        # actually run, then clear it so the rest run fresh.
+        resume_session_id = state.active_session_id
+        resume_stage = state.active_qa_stage
+        resume_round = state.active_qa_round
+        resume_consumed = False
 
         try:
             for track in uat_tracks:
@@ -832,6 +866,15 @@ class PipelineEngine:
                         input_docs[spec_doc] = feature_spec
                     extra_context = {**track_extra, "feature_id": feature_id}
 
+                    # The first feature we run is the one that failed last time;
+                    # resume its session/stage. Every later feature starts fresh
+                    # in its own bounded session (avoids context bloat). Skipped
+                    # features (in ``completed_uat_features``) are never re-run.
+                    feat_session = resume_session_id if not resume_consumed else None
+                    feat_stage = resume_stage if not resume_consumed else None
+                    feat_round = resume_round if not resume_consumed else 0
+                    resume_consumed = True
+
                     result = await run_qa_cycle(
                         claude=self._claude,
                         action_agent=agent_def,
@@ -844,12 +887,10 @@ class PipelineEngine:
                         workspace=self._project_dir / track.path,
                         doc_store=self._doc_store,
                         prompt_renderer=self._prompt_renderer,
-                        # Each not-yet-completed feature runs in its own fresh,
-                        # bounded session — mirroring sprints, which only persist a
-                        # unit's session on success. Resume just skips features
-                        # already in ``completed_uat_features``; it never resumes a
-                        # (large) whole-track session from an earlier UAT run.
-                        session_id=None,
+                        session_id=feat_session,
+                        resume_stage=feat_stage,
+                        resume_round=feat_round,
+                        on_progress=self._qa_cursor_writer(state),
                         extra_context=extra_context,
                         figma_mcp_enabled=figma_mcp_available == "true",
                     )
@@ -863,6 +904,9 @@ class PipelineEngine:
                     feature_reports[feature_id] = validated
                     self._record_agent_run(state, agent_name, result.total_cost)
                     done.append(feature_id)
+                    # Feature passed: drop its cursor so a crash before the next
+                    # feature starts doesn't mis-apply this session to that one.
+                    self._clear_qa_cursor(state)
                     self._state_manager.save(state)
 
                 # Roll the per-feature reports up into the track report.
@@ -884,7 +928,7 @@ class PipelineEngine:
             teardown_for_uat(self._project_dir, run_id, self._doc_store)
 
         state.total_cost_usd += total_cost
-        state.active_session_id = None
+        self._clear_qa_cursor(state)
         await self._commit_docs_changes("docs: UAT report")
 
         return advance_phase(state, PipelinePhase.UAT_QA)

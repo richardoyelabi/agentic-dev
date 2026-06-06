@@ -71,6 +71,39 @@ class SprintRunner:
         if self._state_manager is not None and self._pipeline_state is not None:
             self._state_manager.save(self._pipeline_state)
 
+    def _read_resume_cursor(self) -> tuple[str | None, str | None, int]:
+        """The in-flight unit's resume cursor (session, stage, round).
+
+        Only the first not-yet-complete track/integration reaches a QA cycle, so
+        the pipeline-level cursor always belongs to it. Returns empties when no
+        resume is pending."""
+        st = self._pipeline_state
+        if st is None:
+            return None, None, 0
+        return st.active_session_id, st.active_qa_stage, st.active_qa_round
+
+    def _clear_resume_cursor(self) -> None:
+        st = self._pipeline_state
+        if st is not None:
+            st.active_session_id = None
+            st.active_qa_stage = None
+            st.active_qa_round = 0
+
+    def _qa_cursor_writer(self, on_stage=None):
+        """``on_progress`` callback persisting the resume cursor as each QA-cycle
+        stage runs (and, on failure, the failed session). ``on_stage`` lets the
+        caller mirror the stage into its own dashboard status."""
+        def _on_progress(stage: str, session_id: str | None, round_num: int) -> None:
+            st = self._pipeline_state
+            if st is not None:
+                st.active_qa_stage = stage
+                st.active_session_id = session_id
+                st.active_qa_round = round_num
+            if on_stage is not None:
+                on_stage(stage)
+            self._save_state()
+        return _on_progress
+
     def _tracks_for_sprint(self, sprint_state: SprintState | None) -> list[Track]:
         if sprint_state is None or not sprint_state.tracks_in_scope:
             return list(self._tracks)
@@ -257,19 +290,18 @@ class SprintRunner:
             "track_kind": track.kind,
         }
 
-        def _on_substep(substep: str) -> None:
-            if progress is None:
-                return
-            if substep == "qa":
-                progress.phase = TrackPhase.QA
-                self._save_state()
-            elif substep == "correction":
-                progress.phase = TrackPhase.CORRECTION
-                self._save_state()
+        _stage_to_track_phase = {
+            "action": TrackPhase.DEV,
+            "initial_qa": TrackPhase.QA,
+            "correction": TrackPhase.CORRECTION,
+            "re_review": TrackPhase.QA,
+        }
 
-        skip_to_correction = progress is not None and progress.phase in (
-            TrackPhase.QA, TrackPhase.CORRECTION,
-        )
+        def _on_stage(stage: str) -> None:
+            if progress is not None and stage in _stage_to_track_phase:
+                progress.phase = _stage_to_track_phase[stage]
+
+        resume_session, resume_stage, resume_round = self._read_resume_cursor()
 
         result = await run_qa_cycle(
             claude=self._claude,
@@ -280,18 +312,21 @@ class SprintRunner:
             workspace=self._project_dir / track.path,
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
-            session_id=progress.session_id if progress else None,
-            on_substep=_on_substep,
-            skip_to_correction=skip_to_correction,
+            session_id=resume_session,
+            resume_stage=resume_stage,
+            resume_round=resume_round,
+            on_progress=self._qa_cursor_writer(_on_stage),
             skip_action_output_in_qa=True,
             extra_context=extra_context,
             figma_mcp_enabled=shared_context.get("figma_mcp_available") == "true",
         )
 
         if progress is not None:
-            progress.session_id = result.session_id
             progress.phase = TrackPhase.COMPLETE
-            self._save_state()
+        # Track passed: drop its cursor so the next track in the sprint starts
+        # fresh (the in-flight track is always the first not-yet-complete one).
+        self._clear_resume_cursor()
+        self._save_state()
         return result
 
     async def _execute_sprint(
@@ -384,14 +419,17 @@ class SprintRunner:
         services = sprint_state.integration_services if sprint_state else []
         mcp_config = self._resolve_integration_mcp_config(services)
 
-        def _on_substep(substep: str) -> None:
-            if sprint_state is None:
-                return
-            if substep == "qa":
-                sprint_state.status = SprintStatus.INTEGRATION_QA
-            elif substep == "correction":
-                sprint_state.status = SprintStatus.INTEGRATION_CORRECTION
-            self._save_state()
+        _stage_to_status = {
+            "initial_qa": SprintStatus.INTEGRATION_QA,
+            "correction": SprintStatus.INTEGRATION_CORRECTION,
+            "re_review": SprintStatus.INTEGRATION_QA,
+        }
+
+        def _on_stage(stage: str) -> None:
+            if sprint_state is not None and stage in _stage_to_status:
+                sprint_state.status = _stage_to_status[stage]
+
+        resume_session, resume_stage, resume_round = self._read_resume_cursor()
 
         result = await run_qa_cycle(
             claude=self._claude,
@@ -403,10 +441,13 @@ class SprintRunner:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             qa_output_key="integration_guide",
-            session_id=sprint_state.integration_session_id if sprint_state else None,
-            on_substep=_on_substep,
+            session_id=resume_session,
+            resume_stage=resume_stage,
+            resume_round=resume_round,
+            on_progress=self._qa_cursor_writer(_on_stage),
             mcp_config=mcp_config,
         )
-        if sprint_state is not None:
-            sprint_state.integration_session_id = result.session_id
+        # Integration passed: drop its cursor.
+        self._clear_resume_cursor()
+        self._save_state()
         return result

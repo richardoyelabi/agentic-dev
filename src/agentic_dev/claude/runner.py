@@ -958,6 +958,7 @@ class ClaudeRunner:
                     message=f"Rate limited after {self._max_retries + 1} attempts: {stderr_text}",
                     attempts=self._max_retries + 1,
                     exit_code=exit_code,
+                    session_id=resume_session_id,
                 )
 
             if api_error_detected:

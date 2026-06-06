@@ -84,6 +84,33 @@ class TestAdvancePhase:
         updated = advance_phase(state, PipelinePhase.INPUT_PROCESSING)
         assert updated.active_session_id is None
 
+    def test_clears_qa_cursor_on_forward(self) -> None:
+        """A forward transition drops the whole intra-cycle resume cursor."""
+        state = PipelineState(
+            project_name="test-project",
+            active_session_id="sess-prev",
+            active_qa_stage="initial_qa",
+            active_qa_round=1,
+        )
+        updated = advance_phase(state, PipelinePhase.INPUT_PROCESSING)
+        assert updated.active_qa_stage is None
+        assert updated.active_qa_round == 0
+
+    def test_preserves_qa_cursor_on_failed_transition(self) -> None:
+        """A swallowed sprint failure routes through advance_phase(FAILED); the
+        cursor must survive so the next resume continues that session/stage."""
+        state = PipelineState(
+            project_name="test-project",
+            phase=PipelinePhase.SPRINTING,
+            active_session_id="sess-dev",
+            active_qa_stage="action",
+            active_qa_round=2,
+        )
+        updated = advance_phase(state, PipelinePhase.FAILED)
+        assert updated.active_session_id == "sess-dev"
+        assert updated.active_qa_stage == "action"
+        assert updated.active_qa_round == 2
+
 
 class TestResetForUpdate:
     def test_reset_for_update_from_complete(self) -> None:
@@ -160,6 +187,18 @@ class TestResetForUpdate:
         )
         result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
         assert result.active_session_id is None
+
+    def test_reset_clears_qa_cursor(self) -> None:
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.COMPLETE,
+            active_session_id="sess-prev",
+            active_qa_stage="correction",
+            active_qa_round=1,
+        )
+        result = reset_for_update(state, PipelinePhase.INPUT_PROCESSING, "update")
+        assert result.active_qa_stage is None
+        assert result.active_qa_round == 0
 
 
 class TestResumeFromFailure:
@@ -280,6 +319,20 @@ class TestResumeFromFailure:
         )
         resumed = resume_from_failure(state)
         assert resumed.active_session_id == "sess-uat-web"
+
+    def test_resume_preserves_qa_cursor(self) -> None:
+        """Resume continues the exact stage/round the cycle died at."""
+        state = PipelineState(
+            project_name="test",
+            phase=PipelinePhase.FAILED,
+            failed_at_phase=PipelinePhase.SPRINTING,
+            active_session_id="sess-dev",
+            active_qa_stage="correction",
+            active_qa_round=1,
+        )
+        resumed = resume_from_failure(state)
+        assert resumed.active_qa_stage == "correction"
+        assert resumed.active_qa_round == 1
 
     def test_resume_preserves_complete_sprints(self) -> None:
         complete_sprint = SprintState(

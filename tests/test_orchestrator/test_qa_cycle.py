@@ -1243,6 +1243,192 @@ async def test_skip_to_correction_no_issues_returns_existing(
 
 
 # ---------------------------------------------------------------------------
+# Stage-aware resume (resume_stage / resume_round / on_progress)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_action_raise_carries_session_id(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """An empty-output failure carries the session so resume can continue it."""
+    claude.run.side_effect = [
+        _make_claude_result("", cost=0.05),
+        _make_claude_result("", cost=0.05),
+    ]
+
+    with pytest.raises(AgentRunError) as exc_info:
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            empty_retry_delay=0.0,
+        )
+
+    assert exc_info.value.session_id == "sess-123"
+
+
+@pytest.mark.asyncio
+async def test_on_progress_reports_stages(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """on_progress reports each stage with the live session id."""
+    claude.run.side_effect = [
+        _make_claude_result("v1", cost=0.10),
+        _make_claude_result("ISSUES_FOUND: fix", cost=0.05),
+        _make_claude_result("v2", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+    events: list[tuple[str, str | None, int]] = []
+
+    await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        on_progress=lambda stage, sid, rnd: events.append((stage, sid, rnd)),
+    )
+
+    stages = [e[0] for e in events]
+    assert stages[0] == "action"
+    assert "initial_qa" in stages
+    assert "correction" in stages
+    assert "re_review" in stages
+
+
+@pytest.mark.asyncio
+async def test_on_progress_captures_failed_session(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """When an agent fails, on_progress is called with the failed session id."""
+    claude.run.side_effect = AgentRunError(
+        agent_name="action_agent", message="stalled", session_id="dead-sess",
+    )
+    events: list[tuple[str, str | None, int]] = []
+
+    with pytest.raises(AgentRunError):
+        await run_qa_cycle(
+            claude=claude,
+            action_agent=action_agent,
+            qa_agent=qa_agent,
+            input_docs={},
+            output_doc_name="out.md",
+            workspace=Path("/tmp/ws"),
+            doc_store=doc_store,
+            prompt_renderer=prompt_renderer,
+            on_progress=lambda stage, sid, rnd: events.append((stage, sid, rnd)),
+        )
+
+    assert ("action", "dead-sess", 0) in events
+
+
+@pytest.mark.asyncio
+async def test_resume_initial_qa_skips_action_resumes_qa(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """resume_stage='initial_qa' loads the saved output and resumes the QA session."""
+    doc_store.read = MagicMock(return_value="prior action output")
+    doc_store.exists = MagicMock(return_value=True)
+    claude.run.side_effect = [_make_claude_result("APPROVED", cost=0.10)]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        session_id="qa-sess",
+        resume_stage="initial_qa",
+    )
+
+    assert claude.run.call_count == 1  # only the QA review re-ran
+    qa_call = claude.run.call_args_list[0]
+    assert qa_call.kwargs.get("session_id") == "qa-sess"
+    assert "left off" in qa_call.kwargs.get("prompt", "").lower()
+    assert result.output == "prior action output"
+
+
+@pytest.mark.asyncio
+async def test_resume_correction_resumes_session(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """resume_stage='correction' resumes the in-flight correction session."""
+    doc_store.read = MagicMock(side_effect=lambda name: {
+        "out.md": "prior output",
+        "qa/out.md": "ISSUES_FOUND: fix the bug",
+    }[name])
+    doc_store.exists = MagicMock(return_value=True)
+    claude.run.side_effect = [
+        _make_claude_result("corrected output", cost=0.20),
+        _make_claude_result("APPROVED", cost=0.08),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        session_id="corr-sess",
+        resume_stage="correction",
+        resume_round=1,
+    )
+
+    correction_call = claude.run.call_args_list[0]
+    assert correction_call.kwargs.get("session_id") == "corr-sess"
+    assert "left off" in correction_call.kwargs.get("prompt", "").lower()
+    assert result.output == "corrected output"
+
+
+@pytest.mark.asyncio
+async def test_resume_re_review_skips_correction_resumes_qa(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer
+):
+    """resume_stage='re_review' skips the (already-done) correction and resumes
+    the re-review QA session."""
+    doc_store.read = MagicMock(side_effect=lambda name: {
+        "out.md": "corrected output",
+        "qa/out.md": "ISSUES_FOUND: fix the bug",
+    }[name])
+    doc_store.exists = MagicMock(return_value=True)
+    claude.run.side_effect = [_make_claude_result("APPROVED", cost=0.08)]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        session_id="rr-sess",
+        resume_stage="re_review",
+        resume_round=1,
+    )
+
+    assert claude.run.call_count == 1  # only the re-review re-ran
+    rr_call = claude.run.call_args_list[0]
+    assert rr_call.kwargs.get("session_id") == "rr-sess"
+    assert result.output == "corrected output"
+
+
+# ---------------------------------------------------------------------------
 # MCP config passthrough
 # ---------------------------------------------------------------------------
 

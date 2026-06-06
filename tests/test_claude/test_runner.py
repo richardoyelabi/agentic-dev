@@ -713,6 +713,21 @@ class TestRetry:
 
         assert exc_info.value.attempts == 3  # initial + 2 retries
 
+    async def test_exhausted_rate_limit_carries_session_id(self, tmp_path: Path):
+        """The exhausted RateLimitError carries the session so the next
+        `agentic-dev resume` continues it rather than restarting the agent."""
+        runner = ClaudeRunner(max_retries=2, base_delay=10.0, enable_usage_api=False)
+        agent = FakeAgentConfig(name="planner")
+        fail_json = json.dumps({"session_id": "sess-rl-1"})
+        mock_proc = self._make_mock_process(fail_json, returncode=1, stderr="rate limit exceeded")
+
+        with patch("agentic_dev.claude.runner.asyncio.create_subprocess_exec", return_value=mock_proc):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                with pytest.raises(RateLimitError) as exc_info:
+                    await runner.run(agent, "prompt", tmp_path)
+
+        assert exc_info.value.session_id == "sess-rl-1"
+
     async def test_session_resume_on_retry(self, tmp_path: Path):
         """Extracts session_id from failed run and uses --resume on retry."""
         runner = ClaudeRunner(max_retries=3, enable_usage_api=False)

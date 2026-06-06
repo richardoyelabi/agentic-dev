@@ -43,6 +43,20 @@ _SESSION_RESUME_PROMPT = (
 
 ISSUES_FOUND_MARKER = "ISSUES_FOUND"
 
+# QA-cycle stages, in execution order. A resume cursor names the stage the cycle
+# died at so the next run continues that exact Claude session instead of
+# restarting the whole cycle.
+STAGE_ACTION = "action"
+STAGE_INITIAL_QA = "initial_qa"
+STAGE_CORRECTION = "correction"
+STAGE_RE_REVIEW = "re_review"
+_STAGE_ORDER = {
+    STAGE_ACTION: 0,
+    STAGE_INITIAL_QA: 1,
+    STAGE_CORRECTION: 2,
+    STAGE_RE_REVIEW: 3,
+}
+
 
 async def _run_with_empty_retry(
     claude: ClaudeRunner,
@@ -88,7 +102,13 @@ async def _run_with_empty_retry(
         )
 
     if not result.text.strip():
-        raise AgentRunError(agent_name=agent_name, message=error_message)
+        raise AgentRunError(
+            agent_name=agent_name,
+            message=error_message,
+            # Carry the session so a later resume continues it rather than
+            # restarting the agent from scratch.
+            session_id=result.session_id,
+        )
 
     return result
 
@@ -171,18 +191,28 @@ async def _run_qa_review(
     max_empty_retries: int = 1,
     empty_retry_delay: float = 5.0,
     skip_action_output: bool = False,
+    resume_session_id: str | None = None,
 ) -> tuple[str, float]:
-    """Run QA agent and return (report_text, cost). Raises on empty output."""
-    if skip_action_output:
-        qa_input_docs = dict(input_docs)
+    """Run QA agent and return (report_text, cost). Raises on empty output.
+
+    When ``resume_session_id`` is set the QA agent's prior session (its full
+    prompt and partial review) already lives in that session's history, so a
+    short "continue where you left off" nudge is sent with ``--resume`` instead
+    of re-rendering and re-billing the whole review.
+    """
+    if resume_session_id:
+        qa_prompt = _SESSION_RESUME_PROMPT
     else:
-        qa_input_docs = {**input_docs, qa_key: output_text}
-    qa_prompt = prompt_renderer.render_agent_prompt(
-        template_name=qa_agent.prompt_template,
-        input_documents=qa_input_docs,
-        constraints=qa_agent.constraints,
-        extra_context=extra_context,
-    )
+        if skip_action_output:
+            qa_input_docs = dict(input_docs)
+        else:
+            qa_input_docs = {**input_docs, qa_key: output_text}
+        qa_prompt = prompt_renderer.render_agent_prompt(
+            template_name=qa_agent.prompt_template,
+            input_documents=qa_input_docs,
+            constraints=qa_agent.constraints,
+            extra_context=extra_context,
+        )
     qa_result = await _run_with_empty_retry(
         claude=claude,
         agent_config=qa_config,
@@ -193,6 +223,7 @@ async def _run_qa_review(
         sprint=sprint,
         max_empty_retries=max_empty_retries,
         empty_retry_delay=empty_retry_delay,
+        session_id=resume_session_id,
     )
 
     return qa_result.text, qa_result.cost_usd
@@ -214,6 +245,9 @@ async def run_qa_cycle(
     empty_retry_delay: float = 5.0,
     session_id: str | None = None,
     on_substep: Callable[[str], None] | None = None,
+    on_progress: Callable[[str, str | None, int], None] | None = None,
+    resume_stage: str | None = None,
+    resume_round: int = 0,
     skip_to_correction: bool = False,
     mcp_config: Path | None = None,
     content_markers: list[str] | None = None,
@@ -231,9 +265,20 @@ async def run_qa_cycle(
             Set to 0 to make QA informational only (no corrections).
         on_substep: Optional callback invoked at sub-step boundaries with
             ``"qa"`` (before QA runs) or ``"correction"`` (before correction).
-        skip_to_correction: When True, skip the action agent and initial QA
-            review, loading their outputs from the doc_store instead. Used
-            to resume mid-QA-cycle after a crash.
+        on_progress: Optional callback ``(stage, session_id, round)`` invoked as
+            each stage begins and, in the failure path, with the failed agent's
+            session id. The caller persists this cursor so the next
+            ``agentic-dev resume`` continues the exact session/stage that died.
+            ``stage`` is one of ``"action"``, ``"initial_qa"``, ``"correction"``,
+            ``"re_review"``.
+        resume_stage: When set, re-enter the cycle at this stage instead of
+            running from the top — loading already-saved outputs from the
+            doc_store and resuming ``session_id`` for that stage.
+        resume_round: The correction/re-review round to resume at (for
+            ``resume_stage`` in ``{"correction", "re_review"}``).
+        skip_to_correction: Deprecated alias for ``resume_stage="correction"``;
+            skip the action agent and initial QA review, loading their outputs
+            from the doc_store instead.
         skip_action_output_in_qa: When True, the action agent's output is NOT
             injected into the QA prompt as ``{qa_output_key: output_text}``.
             Only safe for code-review QA where the reviewer re-reads the
@@ -261,18 +306,38 @@ async def run_qa_cycle(
     )
     qa_config = to_run_config(qa_agent, figma_mcp_enabled=figma_mcp_enabled)
 
-    if skip_to_correction:
-        # Resume: load prior action output and QA report from doc_store
-        action_output_text = doc_store.read(output_doc_name)
-        initial_qa_report = doc_store.read(qa_report_name)
-        action_cost = 0.0
-        initial_qa_cost = 0.0
-        action_session_id: str | None = None
-    else:
-        # 1. Run the action agent. When resuming a prior session, the original
-        #    prompt and all prior work already live in that session's history,
-        #    so send a short "continue where you left off" nudge instead of
-        #    re-piping the full prompt (which would re-bill the prior context).
+    # ``skip_to_correction`` is the legacy spelling of "resume at the correction
+    # stage" (no session continuity). Map it onto the stage cursor.
+    if skip_to_correction and resume_stage is None:
+        resume_stage = STAGE_CORRECTION
+        resume_round = resume_round or 1
+    entry = _STAGE_ORDER.get(resume_stage, 0) if resume_stage else 0
+
+    def _progress(stage: str, sid: str | None, rnd: int) -> None:
+        if on_progress is not None:
+            on_progress(stage, sid, rnd)
+
+    async def _stage(stage, rnd, sid_in, runner):
+        """Run one sub-step, reporting its session via on_progress and, on
+        failure, the failed session before the error propagates."""
+        _progress(stage, sid_in, rnd)
+        try:
+            return await runner()
+        except AgentRunError as exc:
+            _progress(stage, exc.session_id, rnd)
+            raise
+
+    action_cost = 0.0
+    initial_qa_cost = 0.0
+    action_session_id: str | None = None
+    ran_initial_qa = False
+
+    # ---- ACTION ----
+    if entry <= _STAGE_ORDER[STAGE_ACTION]:
+        # When resuming a prior session, the original prompt and all prior work
+        # already live in that session's history, so send a short "continue
+        # where you left off" nudge instead of re-piping the full prompt (which
+        # would re-bill the prior context).
         if session_id:
             action_prompt = _SESSION_RESUME_PROMPT
         else:
@@ -282,17 +347,20 @@ async def run_qa_cycle(
                 constraints=action_agent.constraints,
                 extra_context=extra_context,
             )
-        action_result = await _run_with_empty_retry(
-            claude=claude,
-            agent_config=action_config,
-            prompt=action_prompt,
-            workspace=workspace,
-            agent_name=action_agent.name,
-            error_message="Agent returned empty output",
-            sprint=sprint,
-            max_empty_retries=max_empty_retries,
-            empty_retry_delay=empty_retry_delay,
-            session_id=session_id,
+        action_result = await _stage(
+            STAGE_ACTION, 0, session_id,
+            lambda: _run_with_empty_retry(
+                claude=claude,
+                agent_config=action_config,
+                prompt=action_prompt,
+                workspace=workspace,
+                agent_name=action_agent.name,
+                error_message="Agent returned empty output",
+                sprint=sprint,
+                max_empty_retries=max_empty_retries,
+                empty_retry_delay=empty_retry_delay,
+                session_id=session_id,
+            ),
         )
 
         action_output_text = action_result.text
@@ -326,35 +394,47 @@ async def run_qa_cycle(
                 ))
                 action_output_text = recovered
 
-        # 2. Save the action output and check budget
         doc_store.write(output_doc_name, action_output_text)
         _check_budget(
             action_agent.name, action_cost,
             action_agent.claude.max_budget_usd, sprint,
         )
+    else:
+        # Resuming past the action stage: its output is already on disk. For a
+        # correction/re-review resume, the session being resumed is the
+        # action(correction) session — carry it so later corrections continue it.
+        action_output_text = doc_store.read(output_doc_name)
+        if entry >= _STAGE_ORDER[STAGE_CORRECTION]:
+            action_session_id = session_id
 
+    # ---- INITIAL QA ----
+    if entry <= _STAGE_ORDER[STAGE_INITIAL_QA]:
         if on_substep is not None:
             on_substep("qa")
-
-        # 3. Run the initial QA review
-        initial_qa_report, initial_qa_cost = await _run_qa_review(
-            claude=claude,
-            qa_agent=qa_agent,
-            qa_config=qa_config,
-            input_docs=input_docs,
-            qa_key=qa_key,
-            output_text=action_output_text,
-            prompt_renderer=prompt_renderer,
-            workspace=workspace,
-            extra_context=extra_context,
-            sprint=sprint,
-            max_empty_retries=max_empty_retries,
-            empty_retry_delay=empty_retry_delay,
-            skip_action_output=skip_action_output_in_qa,
+        qa_resume = session_id if resume_stage == STAGE_INITIAL_QA else None
+        initial_qa_report, initial_qa_cost = await _stage(
+            STAGE_INITIAL_QA, 0, qa_resume,
+            lambda: _run_qa_review(
+                claude=claude,
+                qa_agent=qa_agent,
+                qa_config=qa_config,
+                input_docs=input_docs,
+                qa_key=qa_key,
+                output_text=action_output_text,
+                prompt_renderer=prompt_renderer,
+                workspace=workspace,
+                extra_context=extra_context,
+                sprint=sprint,
+                max_empty_retries=max_empty_retries,
+                empty_retry_delay=empty_retry_delay,
+                skip_action_output=skip_action_output_in_qa,
+                resume_session_id=qa_resume,
+            ),
         )
-
-        # 4. Save the initial QA report
         doc_store.write(qa_report_name, initial_qa_report)
+        ran_initial_qa = True
+    else:
+        initial_qa_report = doc_store.read(qa_report_name)
 
     issues_found = ISSUES_FOUND_MARKER in initial_qa_report
     emit(_event_log, QACycleVerdictEvent(
@@ -370,82 +450,115 @@ async def run_qa_cycle(
     latest_output = action_output_text
     latest_qa_report = initial_qa_report
 
-    for round_num in range(1, max_corrections + 1):
+    start_round = (
+        resume_round
+        if entry >= _STAGE_ORDER[STAGE_CORRECTION] and resume_round
+        else 1
+    )
+
+    for round_num in range(start_round, max_corrections + 1):
         if ISSUES_FOUND_MARKER not in latest_qa_report:
             break
 
-        if on_substep is not None:
-            on_substep("correction")
+        resuming_this = (
+            entry >= _STAGE_ORDER[STAGE_CORRECTION] and round_num == resume_round
+        )
+        # When resuming at re-review, the correction for this round already ran
+        # and its output is saved — skip straight to the re-review.
+        resume_at_re_review = resuming_this and resume_stage == STAGE_RE_REVIEW
 
-        # Preserve the initial QA report before overwrites
-        if round_num == 1:
+        # Preserve the initial QA report before overwrites (only when we
+        # produced it fresh this run).
+        if round_num == 1 and ran_initial_qa:
             doc_store.write(
                 f"qa/{output_doc_name}_initial", initial_qa_report
             )
 
-        # Correction: prefer session continuation when we have a session ID
-        # to avoid re-embedding the full previous output in the prompt.
-        correction_session_id: str | None = None
-        if action_session_id:
-            correction_prompt = _SESSION_CORRECTION_PROMPT.format(
-                qa_feedback=latest_qa_report,
-            )
-            correction_session_id = action_session_id
+        if resume_at_re_review:
+            latest_output = doc_store.read(output_doc_name)
+            correction_cost = 0.0
         else:
-            correction_prompt = prompt_renderer.render_agent_prompt(
-                template_name=action_agent.prompt_template,
-                input_documents=input_docs,
-                constraints=action_agent.constraints,
-                correction_mode=True,
-                previous_output=latest_output,
-                qa_feedback=latest_qa_report,
-                extra_context=extra_context,
+            if on_substep is not None:
+                on_substep("correction")
+
+            correction_session_id: str | None = None
+            if resuming_this and resume_stage == STAGE_CORRECTION and session_id:
+                # Resume the in-flight correction session where it stopped.
+                correction_prompt = _SESSION_RESUME_PROMPT
+                correction_session_id = session_id
+            elif action_session_id:
+                # Continue the action session to avoid re-embedding the full
+                # previous output in the prompt.
+                correction_prompt = _SESSION_CORRECTION_PROMPT.format(
+                    qa_feedback=latest_qa_report,
+                )
+                correction_session_id = action_session_id
+            else:
+                correction_prompt = prompt_renderer.render_agent_prompt(
+                    template_name=action_agent.prompt_template,
+                    input_documents=input_docs,
+                    constraints=action_agent.constraints,
+                    correction_mode=True,
+                    previous_output=latest_output,
+                    qa_feedback=latest_qa_report,
+                    extra_context=extra_context,
+                )
+            correction_result = await _stage(
+                STAGE_CORRECTION, round_num, correction_session_id,
+                lambda cp=correction_prompt, cs=correction_session_id: (
+                    _run_with_empty_retry(
+                        claude=claude,
+                        agent_config=action_config,
+                        prompt=cp,
+                        workspace=workspace,
+                        agent_name=action_agent.name,
+                        error_message="Agent returned empty output after correction",
+                        sprint=sprint,
+                        max_empty_retries=max_empty_retries,
+                        empty_retry_delay=empty_retry_delay,
+                        session_id=cs,
+                    )
+                ),
             )
-        correction_result = await _run_with_empty_retry(
-            claude=claude,
-            agent_config=action_config,
-            prompt=correction_prompt,
-            workspace=workspace,
-            agent_name=action_agent.name,
-            error_message="Agent returned empty output after correction",
-            sprint=sprint,
-            max_empty_retries=max_empty_retries,
-            empty_retry_delay=empty_retry_delay,
-            session_id=correction_session_id,
-        )
 
-        latest_output = correction_result.text
-        doc_store.write(output_doc_name, latest_output)
-        # Update session ID for potential subsequent correction rounds
-        if correction_result.session_id:
-            action_session_id = correction_result.session_id
+            latest_output = correction_result.text
+            doc_store.write(output_doc_name, latest_output)
+            # Update session ID for potential subsequent correction rounds
+            if correction_result.session_id:
+                action_session_id = correction_result.session_id
+            correction_cost = correction_result.cost_usd
 
-        emit(_event_log, QACycleCorrectionEvent(
-            action_agent=action_agent.name,
-            correction_cost=correction_result.cost_usd,
-            round_number=round_num,
-            sprint=sprint,
-            message=(
-                f"Correction round {round_num} for {action_agent.name} "
-                f"(${correction_result.cost_usd:.4f})"
-            ),
-        ))
+            emit(_event_log, QACycleCorrectionEvent(
+                action_agent=action_agent.name,
+                correction_cost=correction_cost,
+                round_number=round_num,
+                sprint=sprint,
+                message=(
+                    f"Correction round {round_num} for {action_agent.name} "
+                    f"(${correction_cost:.4f})"
+                ),
+            ))
 
         # Re-review: QA agent evaluates corrected output
-        re_review_report, re_review_cost = await _run_qa_review(
-            claude=claude,
-            qa_agent=qa_agent,
-            qa_config=qa_config,
-            input_docs=input_docs,
-            qa_key=qa_key,
-            output_text=latest_output,
-            prompt_renderer=prompt_renderer,
-            workspace=workspace,
-            extra_context=extra_context,
-            sprint=sprint,
-            max_empty_retries=max_empty_retries,
-            empty_retry_delay=empty_retry_delay,
-            skip_action_output=skip_action_output_in_qa,
+        rr_resume = session_id if resume_at_re_review else None
+        re_review_report, re_review_cost = await _stage(
+            STAGE_RE_REVIEW, round_num, rr_resume,
+            lambda rr=rr_resume: _run_qa_review(
+                claude=claude,
+                qa_agent=qa_agent,
+                qa_config=qa_config,
+                input_docs=input_docs,
+                qa_key=qa_key,
+                output_text=latest_output,
+                prompt_renderer=prompt_renderer,
+                workspace=workspace,
+                extra_context=extra_context,
+                sprint=sprint,
+                max_empty_retries=max_empty_retries,
+                empty_retry_delay=empty_retry_delay,
+                skip_action_output=skip_action_output_in_qa,
+                resume_session_id=rr,
+            ),
         )
 
         re_review_issues = ISSUES_FOUND_MARKER in re_review_report
@@ -469,7 +582,7 @@ async def run_qa_cycle(
         doc_store.write(qa_report_name, re_review_report)
 
         corrections.append(CorrectionRound(
-            correction_cost=correction_result.cost_usd,
+            correction_cost=correction_cost,
             re_review_cost=re_review_cost,
             qa_report=re_review_report,
         ))
