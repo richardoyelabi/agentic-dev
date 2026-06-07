@@ -6,7 +6,7 @@ claude:
   permission_mode: bypassPermissions
   allowed_tools: [Read, Glob, Grep, Bash, Monitor, WebFetch]
   max_budget_usd: 5.00
-  max_turns: 100
+  max_turns: 200
   figma_mcp: true
 prompt_template: uat_desktop_tauri.md.j2
 input_documents: [features_request, frontend_spec, backend_spec, api_contract, sprint_plan, uat_prereqs, bootstrap, env_requirements, figma_sources, figma_annotations]

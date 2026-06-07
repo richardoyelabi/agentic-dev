@@ -183,6 +183,21 @@ deterministic block that resuming would just re-enter) and the wall-clock backst
 instead hard-fail with `AgentRunError`, so a genuinely stuck command surfaces for
 fixing rather than silently burning retries.
 
+A third recoverable exit is **turn-limit exhaustion**: when an agent uses up its
+per-invocation `--max-turns` budget the CLI exits 1 with empty stderr, emitting a
+result whose `subtype` is `error_max_turns` (the hit is also recorded in the
+transcript as a `max_turns_reached` entry). `_stdout_indicates_max_turns` /
+`_session_hit_max_turns` detect this and the run resumes the session to continue
+the unfinished task — the work so far is persisted, so a fresh turn window lets it
+finish rather than failing the pipeline. It is bounded by its own small budget
+(`max_turns_retries`, default 2), kept separate from the rate-limit/API retries.
+On exhaustion (or when no session exists to resume) it raises an `AgentRunError`
+whose message names the turn limit, never the bare `CLI exited with code 1:` —
+which is also why any empty-stderr fatal exit now falls back to the CLI result's
+`subtype`/`result` (`_cli_failure_hint`) for a usable error. The interactive UAT
+agents additionally carry `max_turns: 200`, since a correction round re-runs the
+whole app exercise and 100 turns proved too few.
+
 While a subprocess runs, `run` also starts `tail_transcript_activity`
 (`claude/activity.py`) to surface what the agent is doing live. It is read-only
 on the transcript and strictly scoped to the subprocess — always cancelled in a

@@ -331,6 +331,7 @@ class ClaudeRunner:
         enable_usage_api: bool = True,
         usage_client: UsageApiClient | None = None,
         max_stall_retries: int = 2,
+        max_turns_retries: int = 2,
     ) -> None:
         self._log_dir = log_dir
         self._max_retries = max_retries
@@ -338,6 +339,11 @@ class ClaudeRunner:
         # Kept separate from ``max_retries`` because each stall re-detection costs
         # a full idle window, so the wall-clock bleed must be bounded tightly.
         self._max_stall_retries = max_stall_retries
+        # Dedicated, small budget for resuming through *turn-limit exhaustion*.
+        # Each resume grants the agent a fresh ``--max-turns`` window, so this is
+        # bounded separately from the rate-limit budget to stop a genuinely
+        # runaway agent from looping forever.
+        self._max_turns_retries = max_turns_retries
         if usage_client is None and enable_usage_api:
             usage_client = UsageApiClient()
         self._usage_client = usage_client
@@ -692,6 +698,74 @@ class ClaudeRunner:
                         return True
         return False
 
+    @staticmethod
+    def _stdout_indicates_max_turns(stdout: str) -> bool:
+        """Detect a turn-limit exhaustion from the CLI's JSON result on stdout.
+
+        With ``--output-format json`` the CLI emits a terminal result object
+        whose ``subtype`` is ``error_max_turns`` (and ``is_error`` true) when the
+        agent runs out of its per-invocation ``--max-turns`` budget, then exits
+        non-zero with empty stderr. This is the primary, filesystem-free signal.
+        """
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        return data.get("subtype") == "error_max_turns"
+
+    @staticmethod
+    def _session_hit_max_turns(
+        session_id: str | None,
+        working_dir: Path,
+        claude_dir: Path | None = None,
+    ) -> bool:
+        """Detect a turn-limit exhaustion from the session transcript tail.
+
+        Belt-and-braces companion to :meth:`_stdout_indicates_max_turns`: when
+        the CLI's stdout is empty or unparseable, the turn-limit hit is still
+        recorded in the session JSONL as a ``max_turns_reached`` entry.
+        """
+        if not session_id:
+            return False
+        if claude_dir is None:
+            claude_dir = Path.home() / ".claude"
+        encoded_path = str(working_dir).replace("/", "-")
+        jsonl_path = claude_dir / "projects" / encoded_path / f"{session_id}.jsonl"
+        if not jsonl_path.exists():
+            return False
+        try:
+            lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return False
+        for line in reversed(lines[-20:]):
+            try:
+                entry = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(entry, dict) and entry.get("type") == "max_turns_reached":
+                return True
+        return False
+
+    @staticmethod
+    def _cli_failure_hint(stdout: str) -> str:
+        """Best-effort human reason for a non-zero exit when stderr is empty.
+
+        The CLI's JSON result carries ``subtype``/``result`` even on failure;
+        surface them so the error isn't a bare ``CLI exited with code 1:``.
+        """
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return "no error output"
+        if not isinstance(data, dict):
+            return "no error output"
+        subtype = data.get("subtype")
+        result = data.get("result")
+        hint = " ".join(str(p) for p in (subtype, result) if p).strip()
+        return hint or "no error output"
+
     async def run(
         self,
         agent: AgentConfig,
@@ -739,6 +813,8 @@ class ClaudeRunner:
         exit_code = 0
         stdout_text = ""
         model_stall_retries = 0
+        max_turns_retries = 0
+        agent_max_turns = agent.max_turns or DEFAULT_MAX_TURNS
 
         for attempt in range(self._max_retries + 1):
             if attempt > 0 and resume_session_id:
@@ -901,27 +977,106 @@ class ClaudeRunner:
                     resume_session_id, working_dir,
                 )
 
+            # A turn-limit exhaustion also exits 1 with empty stderr. It is
+            # recoverable: the work so far is persisted in the session, so
+            # resuming grants a fresh ``--max-turns`` window to finish.
+            max_turns_detected = False
             if (
                 not rate_limit_detected
                 and not rate_limit_from_usage_api
                 and not api_error_detected
             ):
+                max_turns_detected = self._stdout_indicates_max_turns(
+                    stdout_text
+                ) or self._session_hit_max_turns(resume_session_id, working_dir)
+
+            if (
+                not rate_limit_detected
+                and not rate_limit_from_usage_api
+                and not api_error_detected
+                and not max_turns_detected
+            ):
+                # An empty stderr leaves the user with no clue why the CLI died;
+                # fall back to the stdout result's subtype/text when present.
+                failure_detail = stderr_text.strip() or self._cli_failure_hint(
+                    stdout_text
+                )
                 duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
                 emit(_event_log, AgentFailedEvent(
                     agent_name=agent.name,
                     model=agent.model,
                     duration_s=duration_s,
                     exit_code=exit_code,
-                    error=stderr_text[:500],
+                    error=failure_detail[:500],
                     sprint=sprint,
                     level="ERROR",
-                    message=f"Agent '{agent.name}' failed (exit={exit_code}): {stderr_text[:200]}",
+                    message=f"Agent '{agent.name}' failed (exit={exit_code}): {failure_detail[:200]}",
                 ))
                 raise AgentRunError(
                     agent_name=agent.name,
-                    message=f"CLI exited with code {exit_code}: {stderr_text}",
+                    message=f"CLI exited with code {exit_code}: {failure_detail}",
                     exit_code=exit_code,
                     session_id=resume_session_id,
+                )
+
+            if max_turns_detected:
+                # Resume the session to continue the unfinished task, bounded by
+                # a dedicated budget so a runaway agent still terminates. A resume
+                # requires a session to continue; without one we cannot recover.
+                resume_target = resume_session_id or self._discover_session_id(
+                    working_dir, start_time
+                )
+                if (
+                    resume_target
+                    and max_turns_retries < self._max_turns_retries
+                    and attempt < self._max_retries
+                ):
+                    resume_session_id = resume_target
+                    max_turns_retries += 1
+                    wait_seconds = 5.0
+                    emit(_event_log, AgentRetryEvent(
+                        agent_name=agent.name,
+                        model=agent.model,
+                        attempt=attempt + 1,
+                        max_retries=self._max_retries,
+                        wait_seconds=wait_seconds,
+                        wait_source="max_turns_resume",
+                        reason="max_turns",
+                        will_resume_session=True,
+                        sprint=sprint,
+                        message=(
+                            f"Agent '{agent.name}' hit its {agent_max_turns}-turn "
+                            f"limit; resuming session {resume_target} to continue "
+                            f"(turn-limit retry "
+                            f"{max_turns_retries}/{self._max_turns_retries})"
+                        ),
+                    ))
+                    await asyncio.sleep(wait_seconds)
+                    continue
+
+                duration_s = (datetime.now(timezone.utc) - start_time).total_seconds()
+                emit(_event_log, AgentFailedEvent(
+                    agent_name=agent.name,
+                    model=agent.model,
+                    duration_s=duration_s,
+                    exit_code=exit_code,
+                    error=f"exceeded turn limit ({agent_max_turns} turns)",
+                    sprint=sprint,
+                    level="ERROR",
+                    message=(
+                        f"Agent '{agent.name}' exceeded its turn limit "
+                        f"({agent_max_turns} turns) after "
+                        f"{max_turns_retries} resume(s)"
+                    ),
+                ))
+                raise AgentRunError(
+                    agent_name=agent.name,
+                    message=(
+                        f"exceeded turn limit ({agent_max_turns} turns) after "
+                        f"{max_turns_retries} resume(s)"
+                    ),
+                    exit_code=exit_code,
+                    session_id=resume_target,
                 )
 
             # Exhausted retries — raise immediately
