@@ -43,6 +43,23 @@ _SESSION_RESUME_PROMPT = (
 
 ISSUES_FOUND_MARKER = "ISSUES_FOUND"
 
+
+def _read_output_file(path: Path | None) -> str | None:
+    """Return ``path``'s text if it exists and is non-empty, else ``None``.
+
+    Used when the action agent's real deliverable is a file it writes (e.g. a
+    heavy UAT or integration agent that returns only a chat summary). The file
+    is the authoritative output; ``None`` signals "fall back to the agent's
+    returned text".
+    """
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return text if text.strip() else None
+
 # QA-cycle stages, in execution order. A resume cursor names the stage the cycle
 # died at so the next run continues that exact Claude session instead of
 # restarting the whole cycle.
@@ -253,6 +270,7 @@ async def run_qa_cycle(
     content_markers: list[str] | None = None,
     skip_action_output_in_qa: bool = False,
     figma_mcp_enabled: bool = False,
+    action_output_path: Path | None = None,
 ) -> QACycleResult:
     """Execute one action -> QA -> correction loop cycle.
 
@@ -286,6 +304,13 @@ async def run_qa_cycle(
             QA agents whose prompt template references the action output key
             directly (e.g. ``integration_qa`` renders ``{{ integration_guide
             }}``) — rendering will fail with ``StrictUndefined``.
+        action_output_path: When set, the canonical action/correction output is
+            read from this file (the agent's real deliverable) instead of its
+            returned text. The agent is told to write to this exact path; the
+            file is read back after each action/correction run. Falls back to
+            the agent's text only if the file is missing or empty. This is the
+            fix for heavy, tool-equipped agents (UAT, integration) that write
+            their deliverable to a file and return only a chat summary.
     """
     ctx = get_run_context()
     sprint = ctx.sprint_number if ctx else None
@@ -393,6 +418,12 @@ async def run_qa_cycle(
                     ),
                 ))
                 action_output_text = recovered
+
+        # Heavy agents write their real deliverable to a file and return only a
+        # summary — prefer the file when the caller pinned one.
+        file_output = _read_output_file(action_output_path)
+        if file_output is not None:
+            action_output_text = file_output
 
         doc_store.write(output_doc_name, action_output_text)
         _check_budget(
@@ -522,6 +553,9 @@ async def run_qa_cycle(
             )
 
             latest_output = correction_result.text
+            file_output = _read_output_file(action_output_path)
+            if file_output is not None:
+                latest_output = file_output
             doc_store.write(output_doc_name, latest_output)
             # Update session ID for potential subsequent correction rounds
             if correction_result.session_id:

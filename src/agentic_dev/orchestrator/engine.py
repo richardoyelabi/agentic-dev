@@ -818,6 +818,12 @@ class PipelineEngine:
         tracks = self._resolve_tracks(state)
         uat_tracks = [t for t in tracks if t.uat_kind]
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        # Engine-controlled run dir at the PROJECT root. Reports + evidence live
+        # here under a known run_id, so the agent (whose cwd is the track dir)
+        # can no longer scatter them into stray per-track .agentic-dev trees
+        # under self-invented run-ids, and the engine reads the report back from
+        # a path it chose rather than trusting the agent's final chat message.
+        run_dir = self._project_dir / ".agentic-dev" / "uat" / run_id
 
         if not uat_tracks:
             self._doc_store.write(
@@ -925,6 +931,9 @@ class PipelineEngine:
                 track_extra["frontend_kind"] = track.uat_kind or track.kind
                 track_extra["run_id"] = run_id
                 track_extra["figma_mcp_available"] = figma_mcp_available
+                evidence_dir = run_dir / "evidence" / track.name
+                evidence_dir.mkdir(parents=True, exist_ok=True)
+                track_extra["uat_evidence_dir"] = str(evidence_dir)
 
                 done = state.completed_uat_features.setdefault(track.name, [])
                 feature_reports: dict[str, str] = {}
@@ -942,7 +951,13 @@ class PipelineEngine:
                     input_docs["features_request"] = feature_request
                     if feature_spec:
                         input_docs[spec_doc] = feature_spec
-                    extra_context = {**track_extra, "feature_id": feature_id}
+                    report_path = run_dir / track.name / f"{feature_id}_report.md"
+                    report_path.parent.mkdir(parents=True, exist_ok=True)
+                    extra_context = {
+                        **track_extra,
+                        "feature_id": feature_id,
+                        "uat_report_path": str(report_path),
+                    }
 
                     # The first feature we run is the one that failed last time;
                     # resume its session/stage. Every later feature starts fresh
@@ -970,6 +985,7 @@ class PipelineEngine:
                         resume_round=feat_round,
                         on_progress=self._qa_cursor_writer(state),
                         extra_context=extra_context,
+                        action_output_path=report_path,
                         figma_mcp_enabled=figma_mcp_available == "true",
                     )
                     total_cost += result.total_cost

@@ -50,7 +50,7 @@ If any probe is missing, follow the fallback guidance in the Runtime Verificatio
 
 1. **Start the application.** Start the backend (if present) and the frontend dev server via `Bash`. Wait until both are responding.
 2. **Drive user flows.** For each acceptance criterion, use Playwright MCP to navigate, click, fill forms, and assert visible outcomes. One browser interaction per assertion — no shortcuts through API calls.
-3. **Capture artifacts.** Save screenshots and browser console/network transcripts under `.agentic-dev/uat/<run_id>/evidence/<track>/` — one file per AC assertion where applicable. Reference artifact paths in the report.
+3. **Capture artifacts.** Save screenshots and browser console/network transcripts under `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/` — one file per AC assertion where applicable. Reference artifact paths in the report.
 4. **Run the existing test suites** via `Bash` for regression context, but do not treat their passing as evidence of AC coverage.
 
 **If Playwright MCP is unavailable (per prereqs):** do not fabricate runtime evidence. Set `Verification mode: skipped` and `Driver: none` for affected ACs. The validator will force FAIL; that is the correct outcome.
@@ -63,7 +63,7 @@ For dev servers, build watchers, or any command that does not return on its own:
 2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on a regex for the readiness line (`Local:`, `ready in`, `Listening on`, `Serving on`, etc.). Do **not** use bare `sleep` loops.
 3. **Poll only as a fallback.** If `Monitor` is unavailable, run a bounded `curl --max-time 2 http://localhost:PORT/health` loop, max 30 attempts × 2s.
 4. **Tear down.** At the end of the run, terminate the process via `pkill -f '<command-fragment>'` through `Bash`.
-5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/server.log` as evidence.
 
 # Constraints
 

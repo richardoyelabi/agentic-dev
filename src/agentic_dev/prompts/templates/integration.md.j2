@@ -42,7 +42,17 @@ Connect the third-party services required for the current sprint.
 
 # Output Format
 
-After writing all integration code to the filesystem, produce an **Integration Guide** document:
+After writing all integration code to the filesystem, produce an **Integration Guide** document.
+{% if integration_guide_path is defined and integration_guide_path %}
+
+**Write the complete Integration Guide to this exact file — it is the file the system reads:**
+
+`{{ integration_guide_path }}`
+
+Write it there with your `Write` tool (or a `Bash` heredoc). Write the guide **only** to that path — do not invent a different path or directory, and do not rely on your final summary message to carry the guide (the system reads the file, not your message).
+{% endif %}
+
+The guide uses this structure:
 
 ```markdown
 # Integration Guide

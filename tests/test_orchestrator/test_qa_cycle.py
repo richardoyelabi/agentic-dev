@@ -1855,3 +1855,147 @@ async def test_budget_warning_does_not_stop_execution(
 
     assert result.output == "output"
     assert result.action_cost == 0.50
+
+
+# ---------------------------------------------------------------------------
+# File-sourced output (action_output_path) — for heavy agents that write their
+# real deliverable to a file and return only a summary (UAT, integration).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_action_output_read_from_path_not_stdout(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer, tmp_path
+):
+    """With action_output_path set, the file's content is the canonical output,
+    not the agent's (summary) stdout text."""
+    report_file = tmp_path / "report.md"
+    report_file.write_text(
+        "# UAT Report\n## Overall Result: PASS\n", encoding="utf-8"
+    )
+    claude.run.side_effect = [
+        _make_claude_result("Done. Report written to report.md", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="uat_report_web_F001",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        action_output_path=report_file,
+    )
+
+    assert result.output == "# UAT Report\n## Overall Result: PASS\n"
+    doc_store.write.assert_any_call(
+        "uat_report_web_F001", "# UAT Report\n## Overall Result: PASS\n"
+    )
+    persisted = [
+        c
+        for c in doc_store.write.call_args_list
+        if c[0][0] == "uat_report_web_F001"
+    ]
+    assert persisted, "report doc was never written"
+    assert all("Report written to report.md" not in c[0][1] for c in persisted)
+
+
+@pytest.mark.asyncio
+async def test_action_output_path_falls_back_to_text_when_file_missing(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer, tmp_path
+):
+    """If the agent never wrote the file, fall back to the stdout text."""
+    missing = tmp_path / "never_written.md"
+    claude.run.side_effect = [
+        _make_claude_result("fallback stdout output", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        action_output_path=missing,
+    )
+
+    assert result.output == "fallback stdout output"
+    doc_store.write.assert_any_call("out.md", "fallback stdout output")
+
+
+@pytest.mark.asyncio
+async def test_action_output_path_falls_back_when_file_empty(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer, tmp_path
+):
+    """An empty/whitespace file is treated as 'not written' — fall back to text."""
+    empty = tmp_path / "report.md"
+    empty.write_text("   \n", encoding="utf-8")
+    claude.run.side_effect = [
+        _make_claude_result("non-empty stdout", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ]
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        action_output_path=empty,
+    )
+
+    assert result.output == "non-empty stdout"
+
+
+@pytest.mark.asyncio
+async def test_correction_round_rereads_output_path(
+    claude, action_agent, qa_agent, doc_store, prompt_renderer, tmp_path
+):
+    """Each correction round re-reads the file the agent rewrote, so the
+    corrected content (not the correction summary) is persisted."""
+    report_file = tmp_path / "report.md"
+    results = iter([
+        _make_claude_result("action summary", cost=0.10),
+        _make_claude_result("ISSUES_FOUND: fix it", cost=0.05),
+        _make_claude_result("correction summary", cost=0.10),
+        _make_claude_result("APPROVED", cost=0.05),
+    ])
+    file_contents = iter(["v1 file content", "v2 file content"])
+
+    async def _run(*args, **kwargs):
+        agent = kwargs.get("agent")
+        result = next(results)
+        # Only the action agent's runs (action + correction) rewrite the file.
+        if agent is not None and agent.name == "action_agent":
+            report_file.write_text(next(file_contents), encoding="utf-8")
+        return result
+
+    claude.run.side_effect = _run
+
+    result = await run_qa_cycle(
+        claude=claude,
+        action_agent=action_agent,
+        qa_agent=qa_agent,
+        input_docs={},
+        output_doc_name="out.md",
+        workspace=Path("/tmp/ws"),
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        action_output_path=report_file,
+    )
+
+    assert result.output == "v2 file content"
+    output_writes = [
+        c for c in doc_store.write.call_args_list if c[0][0] == "out.md"
+    ]
+    assert [c[0][1] for c in output_writes] == ["v1 file content", "v2 file content"]

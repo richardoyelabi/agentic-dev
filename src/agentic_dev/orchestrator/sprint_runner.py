@@ -487,6 +487,17 @@ class SprintRunner:
 
         resume_session, resume_stage, resume_round = self._read_resume_cursor()
 
+        # Engine-controlled deliverable path: the integration agent (Write/Bash,
+        # 150 turns) writes its real guide to a file and returns only a summary,
+        # so pin the path and read the guide back rather than capturing stdout.
+        guide_path = (
+            self._project_dir
+            / ".agentic-dev"
+            / "artifacts"
+            / f"integration_guide_sprint_{sprint_number}.md"
+        )
+        guide_path.parent.mkdir(parents=True, exist_ok=True)
+
         result = await run_qa_cycle(
             claude=self._claude,
             action_agent=self._registry.get("integration"),
@@ -497,12 +508,25 @@ class SprintRunner:
             doc_store=self._doc_store,
             prompt_renderer=self._prompt_renderer,
             qa_output_key="integration_guide",
+            extra_context={"integration_guide_path": str(guide_path)},
+            action_output_path=guide_path,
             session_id=resume_session,
             resume_stage=resume_stage,
             resume_round=resume_round,
             on_progress=self._qa_cursor_writer(_on_stage),
             mcp_config=mcp_config,
         )
+        # Loud backstop: if the agent never wrote its guide file, run_qa_cycle
+        # fell back to the agent's (summary) text — flag the degraded capture.
+        if not (
+            guide_path.exists()
+            and guide_path.read_text(encoding="utf-8").strip()
+        ):
+            _event_log.warning(
+                f"Integration guide was not written to {guide_path}; the captured "
+                f"'sprint_{sprint_number}_integration' may be only a summary "
+                f"rather than the full Integration Guide."
+            )
         # Integration passed: drop its cursor.
         self._clear_resume_cursor()
         self._save_state()

@@ -113,6 +113,7 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/artifacts/<track>_spec.md` — per-track architecture spec
 - `.agentic-dev/artifacts/api_contract.md` — emitted iff any track has `kind=api`
 - `.agentic-dev/artifacts/sprint_plan.md` — sprint plan with `Tracks in scope:` lines
+- `.agentic-dev/artifacts/integration_guide_sprint_<n>.md` — the integration agent's guide, written to this engine-controlled file and read back as the `sprint_<n>_integration` doc (the agent returns only a chat summary, so the file — not its final message — is authoritative)
 - `.agentic-dev/artifacts/reconciliation_report.md` — cross-document ID-graph findings (written iff any), surfaced at the design checkpoint
 - `.agentic-dev/artifacts/track_<name>_analysis.md` — per-track existing-code analysis
 - `.agentic-dev/artifacts/existing_code_analyses.md` — concatenated input for the architect
@@ -120,10 +121,11 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/artifacts/env_requirements.md` — env vars classified as auto/mock/human
 - `.agentic-dev/artifacts/figma_sources.md` — Figma URLs and user-supplied labels
 - `.agentic-dev/artifacts/qa/<name>.md` — per-step QA reports
-- `.agentic-dev/artifacts/uat_report_<track>_<feature>.md` — per-feature UAT verdict (UAT runs one bounded session per feature, mirroring the per-track sprint loop)
+- `.agentic-dev/artifacts/uat_report_<track>_<feature>.md` — per-feature UAT verdict. The UAT agent writes its full report to the engine-controlled file `.agentic-dev/uat/<run_id>/<track>/<feature>_report.md`; the engine reads that file back (never the agent's final chat message, which is only a summary) and persists it here. A missing/degraded capture is rewritten to a loud `## Overall Result: FAIL` by `validate_uat_report`.
 - `.agentic-dev/artifacts/uat_report_<track>.md` — per-track UAT verdict (roll-up of that track's per-feature reports)
 - `.agentic-dev/artifacts/uat_report.md` — aggregated multi-track UAT report
-- `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots, transcripts
+- `.agentic-dev/uat/<run_id>/<track>/<feature>_report.md` — the agent-written UAT report the engine reads back (engine-controlled absolute path, passed to the agent as `uat_report_path`)
+- `.agentic-dev/uat/<run_id>/evidence/<track>/...` — UAT screenshots, transcripts (engine-controlled absolute dir, passed to the agent as `uat_evidence_dir`, so evidence no longer scatters into stray per-track `.agentic-dev/` trees)
 - `.agentic-dev/uat/<run_id>/install_<track>.log` — synchronous pre-install logs
 - `.agentic-dev/uat/<run_id>/teardown.log` — best-effort `docker compose down` of the UAT stack (runs in a `finally`, even on agent failure)
 - `.agentic-dev/secrets.env` — gitignored secrets template (auto/mock pre-filled, human placeholders)
