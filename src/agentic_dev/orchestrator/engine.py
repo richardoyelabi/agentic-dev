@@ -233,8 +233,23 @@ class PipelineEngine:
 
             self._state_manager.save(state)
 
-            if should_pause(state.phase, self._checkpoint_config):
+            if self._checkpoint_should_pause(state):
                 raise CheckpointPause(phase=state.phase)
+
+    def _checkpoint_should_pause(self, state: PipelineState) -> bool:
+        """Whether to pause at the current phase for human review.
+
+        Honours the configured checkpoints and additionally forces a pause at
+        the design checkpoint when reconciliation found ERROR-severity
+        cross-document defects — so guaranteed-broken plans are reviewed before
+        the build even when ``after_design`` is disabled.
+        """
+        if should_pause(state.phase, self._checkpoint_config):
+            return True
+        return (
+            state.phase == PipelinePhase.DESIGN_CHECKPOINT
+            and state.reconciliation_blocked
+        )
 
     async def _execute_phase(self, state: PipelineState) -> PipelineState:
         """Dispatch to the appropriate handler based on the current phase."""
@@ -514,6 +529,14 @@ class PipelineEngine:
             for w in convention_warnings:
                 _log.warning(w)
 
+        # Reconcile the cross-document ID graph (features <-> specs <-> sprints).
+        # ERROR findings block the design checkpoint so guaranteed-broken plans
+        # are fixed before the expensive build.
+        from agentic_dev.documents.reconciliation import has_errors
+
+        findings = self._run_reconciliation(state)
+        state.reconciliation_blocked = has_errors(findings)
+
         # Write sprint scope documents so developers receive full sprint context
         for sprint in state.sprints:
             if sprint.scope_text:
@@ -537,12 +560,61 @@ class PipelineEngine:
 
         return advance_phase(state, PipelinePhase.SPRINT_PLANNING_QA)
 
+    def _run_reconciliation(self, state: PipelineState) -> list:
+        """Reconcile the feature/spec/sprint ID graph and surface findings.
+
+        Emits one event per finding (so cross-document gaps are never silent)
+        and writes a ``reconciliation_report`` artifact for the design
+        checkpoint. Returns the findings list.
+        """
+        from agentic_dev.documents.reconciliation import (
+            format_findings,
+            reconcile,
+        )
+        from agentic_dev.logging import emit, get_event_logger
+        from agentic_dev.logging.events import ReconciliationWarningEvent
+
+        features = (
+            self._doc_store.read("features")
+            if self._doc_store.exists("features")
+            else ""
+        )
+        specs_by_track: dict[str, str] = {}
+        for track in self._resolve_tracks(state):
+            spec_name = f"{track.name}_spec"
+            if self._doc_store.exists(spec_name):
+                specs_by_track[track.name] = self._doc_store.read(spec_name)
+        api_contract = (
+            self._doc_store.read("api_contract")
+            if self._doc_store.exists("api_contract")
+            else ""
+        )
+
+        findings = reconcile(features, state.sprints, specs_by_track, api_contract)
+        if findings:
+            _log = get_event_logger("engine")
+            for finding in findings:
+                emit(_log, ReconciliationWarningEvent(
+                    code=finding.code,
+                    severity=finding.severity,
+                    ids=list(finding.ids),
+                    level="ERROR" if finding.severity == "ERROR" else "WARNING",
+                    message=finding.message,
+                ))
+            self._doc_store.write(
+                "reconciliation_report", format_findings(findings)
+            )
+        return findings
+
     async def _advance_past_checkpoint(self, state: PipelineState) -> PipelineState:
         """Advance past a checkpoint to the sprinting phase.
 
         If checkpoint_feedback was provided, store it so sprint agents can
         reference it as additional context.
         """
+        # Resuming past the checkpoint acknowledges any reconciliation errors.
+        state.reconciliation_blocked = False
+
         if state.checkpoint_feedback:
             self._doc_store.write("checkpoint_feedback", state.checkpoint_feedback)
             state.checkpoint_feedback = None
@@ -839,7 +911,13 @@ class PipelineEngine:
                     if self._doc_store.exists(spec_doc)
                     else ""
                 )
-                units = self._uat_feature_units(features_text, track_spec_text)
+                in_scope_ids = self._uat_in_scope_ids(state, track.name)
+                self._warn_uat_coverage_gaps(
+                    features_text, in_scope_ids, track.name
+                )
+                units = self._uat_feature_units(
+                    features_text, track_spec_text, in_scope_ids
+                )
 
                 track_extra = self._update_extra_context(state)
                 track_extra["track_name"] = track.name
@@ -935,14 +1013,22 @@ class PipelineEngine:
 
     def _uat_feature_units(
         self, features_text: str, track_spec: str,
+        in_scope_ids: set[str] | None = None,
     ) -> list[tuple[str, str, str]]:
         """Split a track's UAT into ``(feature_id, features_request, spec)`` units.
 
         One unit per feature, each scoped so its session stays small: the
         features request is reduced to a single ``## Feature:`` section and the
         track spec is filtered to that feature (mirroring how sprint developer
-        agents are scoped to a sprint's feature IDs). Falls back to a single
-        whole-doc unit when the features doc has no ``## Feature:`` headers.
+        agents are scoped to a sprint's feature IDs).
+
+        Selection of *which* features to UAT comes from *in_scope_ids* — the
+        authoritative track->feature mapping derived from the sprint plan — so a
+        feature the architect's spec references only in prose (e.g. ``(F004)``)
+        or omits is still tested. When no mapping is supplied, falls back to the
+        legacy behaviour of scraping bracketed IDs from the spec. Falls back to
+        a single whole-doc unit when the features doc has no ``## Feature:``
+        headers.
         """
         from agentic_dev.documents.scoping import (
             extract_sprint_feature_ids,
@@ -954,14 +1040,61 @@ class PipelineEngine:
         if not sections:
             return [("all", features_text, track_spec)]
 
-        spec_ids = extract_sprint_feature_ids(track_spec)
-        selected = [(fid, text) for fid, text in sections if fid in spec_ids]
+        selected_ids = set(in_scope_ids or ())
+        if not selected_ids:
+            selected_ids = extract_sprint_feature_ids(track_spec)
+        selected = [(fid, text) for fid, text in sections if fid in selected_ids]
         if not selected:
             selected = sections
         return [
             (fid, text, scope_spec_to_features(track_spec, {fid}))
             for fid, text in selected
         ]
+
+    def _uat_in_scope_ids(self, state: PipelineState, track_name: str) -> set[str]:
+        """Feature IDs a track is responsible for, per the sprint plan.
+
+        This is the authoritative track->feature mapping (the sprint planner's
+        structured output), used to drive UAT selection instead of scraping
+        bracketed IDs out of the architect's spec prose.
+        """
+        from agentic_dev.documents.scoping import extract_sprint_feature_ids
+
+        ids: set[str] = set()
+        for sprint in state.sprints:
+            if track_name in sprint.tracks_in_scope:
+                ids |= extract_sprint_feature_ids(sprint.scope_text)
+        return ids
+
+    def _warn_uat_coverage_gaps(
+        self, features_text: str, in_scope_ids: set[str], track_name: str,
+    ) -> None:
+        """Emit a loud warning for in-scope features that cannot be UAT'd.
+
+        A feature in scope for the track (per the sprint plan) but missing a
+        ``## Feature:`` section has no unit to scope a session to, so it would
+        be silently skipped. Surface it instead.
+        """
+        if not in_scope_ids:
+            return
+        from agentic_dev.documents.scoping import split_feature_sections
+        from agentic_dev.logging import emit, get_event_logger
+        from agentic_dev.logging.events import ReconciliationWarningEvent
+
+        defined = {fid for fid, _ in split_feature_sections(features_text)}
+        missing = sorted(in_scope_ids - defined)
+        if not missing:
+            return
+        emit(get_event_logger("engine"), ReconciliationWarningEvent(
+            code="uat_coverage_gap",
+            severity="WARN",
+            ids=missing,
+            message=(
+                f"Track '{track_name}': in-scope feature(s) "
+                f"{', '.join(missing)} have no '## Feature:' section and will "
+                f"not be UAT-tested."
+            ),
+        ))
 
     async def _run_single_agent(
         self,

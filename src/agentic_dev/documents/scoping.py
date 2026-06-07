@@ -24,6 +24,9 @@ _FEATURES_LINE_RE = re.compile(
 # A feature entry in the features-request doc: ``## Feature: [F001] Title``.
 _FEATURE_HEADER_RE = re.compile(r"^##\s+Feature:\s*\[(F\d+)\]", re.MULTILINE)
 
+# A level-3 spec section header: ``### [M001] User`` -> captures ``M001``.
+_SECTION_ID_RE = re.compile(r"^###\s+\[([^\]]+)\]")
+
 
 def extract_sprint_feature_ids(sprint_scope: str) -> set[str]:
     """Extract bare feature IDs from a sprint scope document.
@@ -51,11 +54,25 @@ def scope_spec_to_features(spec_text: str, feature_ids: set[str]) -> str:
 
     Returns the original text unchanged when *feature_ids* is empty.
     """
+    return scope_spec_to_features_verbose(spec_text, feature_ids)[0]
+
+
+def scope_spec_to_features_verbose(
+    spec_text: str, feature_ids: set[str],
+) -> tuple[str, list[str]]:
+    """Like :func:`scope_spec_to_features`, but also report dropped sections.
+
+    Returns ``(scoped_text, dropped_ids)`` where *dropped_ids* lists the
+    ``### [<id>]`` section IDs (e.g. ``"M002"``) that were omitted because their
+    ``**Features:**`` line referenced none of *feature_ids*. Callers emit a
+    warning so the otherwise-silent drop becomes visible.
+    """
     if not feature_ids or not spec_text.strip():
-        return spec_text
+        return spec_text, []
 
     lines = spec_text.splitlines(keepends=True)
     result: list[str] = []
+    dropped: list[str] = []
     i = 0
 
     while i < len(lines):
@@ -82,13 +99,16 @@ def scope_spec_to_features(spec_text: str, feature_ids: set[str]) -> str:
                 referenced = set(_FEATURE_REF_RE.findall(features_match.group(1)))
                 if referenced & feature_ids:
                     result.extend(section_lines)
+                else:
+                    id_match = _SECTION_ID_RE.match(line)
+                    dropped.append(id_match.group(1) if id_match else line.strip())
             else:
                 result.extend(section_lines)
         else:
             result.append(line)
             i += 1
 
-    return "".join(result)
+    return "".join(result), dropped
 
 
 def split_feature_sections(features_text: str) -> list[tuple[str, str]]:

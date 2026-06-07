@@ -785,6 +785,162 @@ class TestUATPhase:
         assert state.completed_uat_features["frontend"] == ["F001", "F002"]
         assert "frontend" in state.completed_uat_tracks
 
+    def test_uat_feature_units_uses_in_scope_ids(self, engine):
+        """Authoritative selection: in-scope features are UAT'd even when the
+        spec references them only in prose or omits them (skillsbloom F004/F008)."""
+        features = (
+            "# Features Request\n\n"
+            "## Feature: [F001] A\n- [ ] a\n\n"
+            "## Feature: [F004] B\n- [ ] b\n\n"
+            "## Feature: [F008] C\n- [ ] c\n"
+        )
+        spec = (
+            "## Modules\n\n"
+            "### [M001] X\n- **Features:** [F001]\n- modals (F004) — existing\n"
+        )
+        units = engine._uat_feature_units(
+            features, spec, in_scope_ids={"F001", "F004", "F008"}
+        )
+        assert [fid for fid, _, _ in units] == ["F001", "F004", "F008"]
+
+    def test_uat_feature_units_falls_back_to_spec_without_in_scope(self, engine):
+        """With no authoritative mapping, behaviour is the legacy spec-driven one."""
+        features = "## Feature: [F001] A\n- a\n\n## Feature: [F002] B\n- b\n"
+        spec = "### [M001] X\n- **Features:** [F001]\n"
+        units = engine._uat_feature_units(features, spec)
+        assert [fid for fid, _, _ in units] == ["F001"]
+
+    @pytest.mark.asyncio
+    async def test_uat_selects_features_from_sprint_plan_not_spec(
+        self, engine, doc_store, registry,
+    ):
+        """_run_uat picks features from the sprint-plan track mapping, so a
+        frontend feature the spec only parenthesises is still UAT'd."""
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(
+            PipelinePhase.UAT,
+            tracks=tracks,
+            sprints=[
+                SprintState(
+                    sprint_number=1,
+                    name="S1",
+                    scope_text="- **Features:** [F001], [F002]\n",
+                    tracks_in_scope=["frontend"],
+                ),
+            ],
+        )
+        registry.get = MagicMock(
+            side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
+        )
+        features_doc = (
+            "# Features Request\n\n"
+            "## Feature: [F001] Listing\n- [ ] lists\n\n"
+            "## Feature: [F002] Detail\n- [ ] details\n"
+        )
+        spec = "### [M001] X\n- **Features:** [F001]\n- detail modal (F002)\n"
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name in {"features", "frontend_spec", "input.md"}
+        )
+
+        def fake_read(name):
+            if name == "features":
+                return features_doc
+            if name == "frontend_spec":
+                return spec
+            if name.startswith("uat_report_"):
+                return "## Overall Result: PASS\n"
+            return "content"
+
+        doc_store.read = MagicMock(side_effect=fake_read)
+        captured: list[str] = []
+
+        async def fake_qa(**kwargs):
+            captured.append(kwargs["extra_context"]["feature_id"])
+            return MagicMock(total_cost=0.1, session_id="s")
+
+        with patch(
+            "agentic_dev.uat.secrets_gate.check_secrets_gate",
+        ), patch(
+            "agentic_dev.uat.preinstall.preinstall_for_uat",
+        ), patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=AsyncMock(side_effect=fake_qa),
+        ), patch(
+            "agentic_dev.uat.teardown.teardown_for_uat",
+        ), patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock,
+        ):
+            await engine._run_uat(state)
+
+        # F002 is selected despite being only parenthesised in the spec.
+        assert captured == ["F001", "F002"]
+        assert state.completed_uat_features["frontend"] == ["F001", "F002"]
+
+    @pytest.mark.asyncio
+    async def test_uat_warns_on_in_scope_feature_without_section(
+        self, engine, doc_store, registry,
+    ):
+        """An in-scope feature with no ## Feature: section can't be UAT'd —
+        emit a loud coverage warning instead of silently skipping it."""
+        from agentic_dev.logging.events import ReconciliationWarningEvent
+
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(
+            PipelinePhase.UAT,
+            tracks=tracks,
+            sprints=[
+                SprintState(
+                    sprint_number=1,
+                    name="S1",
+                    scope_text="- **Features:** [F001], [F099]\n",
+                    tracks_in_scope=["frontend"],
+                ),
+            ],
+        )
+        registry.get = MagicMock(
+            side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
+        )
+        features_doc = "# Features Request\n\n## Feature: [F001] Listing\n- [ ] lists\n"
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name in {"features", "frontend_spec", "input.md"}
+        )
+
+        def fake_read(name):
+            if name == "features":
+                return features_doc
+            if name == "frontend_spec":
+                return "### [M001] X\n- **Features:** [F001]\n"
+            if name.startswith("uat_report_"):
+                return "## Overall Result: PASS\n"
+            return "content"
+
+        doc_store.read = MagicMock(side_effect=fake_read)
+
+        events: list = []
+        with patch(
+            "agentic_dev.uat.secrets_gate.check_secrets_gate",
+        ), patch(
+            "agentic_dev.uat.preinstall.preinstall_for_uat",
+        ), patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=AsyncMock(return_value=MagicMock(total_cost=0.1, session_id="s")),
+        ), patch(
+            "agentic_dev.uat.teardown.teardown_for_uat",
+        ), patch(
+            "agentic_dev.logging.emit",
+            side_effect=lambda _logger, event: events.append(event),
+        ), patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock,
+        ):
+            await engine._run_uat(state)
+
+        gaps = [
+            e for e in events
+            if isinstance(e, ReconciliationWarningEvent)
+            and e.code == "uat_coverage_gap"
+        ]
+        assert any("F099" in e.ids for e in gaps)
+
     @pytest.mark.asyncio
     async def test_uat_aliases_per_track_prereqs_to_generic_input(
         self, engine, claude, doc_store, registry, prompt_renderer,
@@ -2451,3 +2607,89 @@ class TestArchitectureFigmaAnnotations:
         # either way the architect must not see meaningful annotations content.
         annotations = captured["input_docs"].get("figma_annotations", "")
         assert not annotations
+
+
+class TestReconciliationGate:
+    """Cross-document reconciliation wired into planning + the design checkpoint."""
+
+    def test_run_reconciliation_emits_and_reports(self, engine, doc_store):
+        from agentic_dev.logging.events import ReconciliationWarningEvent
+
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(
+            PipelinePhase.SPRINT_PLANNING,
+            tracks=tracks,
+            sprints=[
+                SprintState(
+                    sprint_number=1,
+                    name="S1",
+                    scope_text="- **Features:** [F001]\n",
+                    tracks_in_scope=["frontend"],
+                ),
+            ],
+        )
+        features_doc = (
+            "# Features Request\n\n"
+            "## Feature: [F001] A\n- a\n\n"
+            "## Feature: [F002] B\n- b\n"  # scheduled nowhere -> orphan
+        )
+        doc_store.exists = MagicMock(side_effect=lambda n: n in {"features"})
+        doc_store.read = MagicMock(
+            side_effect=lambda n: features_doc if n == "features" else "content"
+        )
+        events: list = []
+        with patch(
+            "agentic_dev.logging.emit",
+            side_effect=lambda _logger, event: events.append(event),
+        ):
+            findings = engine._run_reconciliation(state)
+
+        assert any(f.code == "orphan_feature" and "F002" in f.ids for f in findings)
+        assert any(
+            isinstance(e, ReconciliationWarningEvent) and e.severity == "ERROR"
+            for e in events
+        )
+        assert any(
+            call.args[0] == "reconciliation_report"
+            for call in doc_store.write.call_args_list
+        )
+
+    def test_run_reconciliation_clean_returns_no_findings(self, engine, doc_store):
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(
+            PipelinePhase.SPRINT_PLANNING,
+            tracks=tracks,
+            sprints=[
+                SprintState(
+                    sprint_number=1,
+                    name="S1",
+                    scope_text="- **Features:** [F001]\n",
+                    tracks_in_scope=["frontend"],
+                ),
+            ],
+        )
+        features_doc = "# Features Request\n\n## Feature: [F001] A\n- a\n"
+        spec = "### [P001] A\n- **Features:** [F001]\n- x\n"
+        doc_store.exists = MagicMock(
+            side_effect=lambda n: n in {"features", "frontend_spec"}
+        )
+        doc_store.read = MagicMock(
+            side_effect=lambda n: (
+                features_doc if n == "features"
+                else spec if n == "frontend_spec"
+                else "content"
+            )
+        )
+        assert engine._run_reconciliation(state) == []
+
+    def test_checkpoint_pauses_on_reconciliation_errors(self, engine):
+        """ERROR findings force a design-checkpoint pause even when the user
+        disabled after_design (engine fixture has after_design=False)."""
+        state = _make_state(PipelinePhase.DESIGN_CHECKPOINT)
+        state.reconciliation_blocked = True
+        assert engine._checkpoint_should_pause(state) is True
+
+    def test_checkpoint_does_not_pause_without_errors(self, engine):
+        state = _make_state(PipelinePhase.DESIGN_CHECKPOINT)
+        state.reconciliation_blocked = False
+        assert engine._checkpoint_should_pause(state) is False

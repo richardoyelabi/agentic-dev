@@ -1,7 +1,7 @@
 """Tests for the track-based sprint runner."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -359,7 +359,7 @@ def test_tracks_for_sprint_returns_all_when_state_is_none(runner, fullstack_trac
 
 def test_read_track_spec_returns_empty_when_missing(runner, doc_store):
     doc_store.exists.return_value = False
-    assert runner._read_track_spec("nonexistent", set()) == ""
+    assert runner._read_track_spec("nonexistent", set(), 1) == ""
 
 
 def test_sprint_result_dataclass():
@@ -418,3 +418,56 @@ class TestSharedContextFigmaAnnotations:
         ctx = runner._build_shared_context(sprint_state=None)
 
         assert "figma_annotations" not in ctx
+
+
+class TestScopeDropEvents:
+    """Non-silent scoping: dropped spec sections are surfaced as events."""
+
+    _SPEC = (
+        "# Frontend Spec\n## Pages\n"
+        "### [P001] Login\n- **Features:** [F001]\n- x\n"
+        "### [P002] Dash\n- **Features:** [F002]\n- y\n"
+    )
+
+    def test_read_track_spec_emits_scope_drop_for_filtered_section(
+        self, runner, doc_store
+    ):
+        from agentic_dev.logging.events import ScopeDropEvent
+
+        doc_store.exists = MagicMock(side_effect=lambda n: n == "frontend_spec")
+        doc_store.read = MagicMock(
+            side_effect=lambda n: self._SPEC if n == "frontend_spec"
+            else f"content of {n}"
+        )
+        events: list = []
+        with patch(
+            "agentic_dev.orchestrator.sprint_runner.emit",
+            side_effect=lambda _logger, event: events.append(event),
+        ):
+            scoped = runner._read_track_spec("frontend", {"F001"}, 2)
+
+        assert "[P001] Login" in scoped and "[P002] Dash" not in scoped
+        drops = [e for e in events if isinstance(e, ScopeDropEvent)]
+        assert len(drops) == 1
+        assert "P002" in drops[0].dropped_ids
+        assert drops[0].sprint == 2
+        assert drops[0].track == "frontend"
+
+    def test_read_track_spec_no_event_when_nothing_dropped(
+        self, runner, doc_store
+    ):
+        from agentic_dev.logging.events import ScopeDropEvent
+
+        doc_store.exists = MagicMock(side_effect=lambda n: n == "frontend_spec")
+        doc_store.read = MagicMock(
+            side_effect=lambda n: self._SPEC if n == "frontend_spec"
+            else f"content of {n}"
+        )
+        events: list = []
+        with patch(
+            "agentic_dev.orchestrator.sprint_runner.emit",
+            side_effect=lambda _logger, event: events.append(event),
+        ):
+            runner._read_track_spec("frontend", {"F001", "F002"}, 1)
+
+        assert not [e for e in events if isinstance(e, ScopeDropEvent)]

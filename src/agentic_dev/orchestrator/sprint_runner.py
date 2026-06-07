@@ -9,13 +9,17 @@ from pathlib import Path
 from agentic_dev.agents.registry import AgentRegistry
 from agentic_dev.claude.runner import ClaudeRunner
 from agentic_dev.mcp.claude_settings import discover_mcp_servers, find_server_for_service
-from agentic_dev.documents.scoping import extract_sprint_feature_ids, scope_spec_to_features
+from agentic_dev.documents.scoping import (
+    extract_sprint_feature_ids,
+    scope_spec_to_features_verbose,
+)
 from agentic_dev.documents.store import DocumentStore
 from agentic_dev.exceptions import AgentRunError, RateLimitError
 from agentic_dev.onboarding.figma import FigmaMCPNotConfigured, check_figma_mcp_available
 from agentic_dev.logging import get_event_logger, emit
 from agentic_dev.logging.context import get_run_context
 from agentic_dev.logging.events import (
+    ScopeDropEvent,
     SprintStartEvent,
     SprintPhaseEvent,
     SprintCompleteEvent,
@@ -110,11 +114,51 @@ class SprintRunner:
         scoped = set(sprint_state.tracks_in_scope)
         return [t for t in self._tracks if t.name in scoped]
 
-    def _read_track_spec(self, track_name: str, feature_ids: set[str]) -> str:
+    def _scope_doc(
+        self,
+        doc_name: str,
+        text: str,
+        feature_ids: set[str],
+        sprint_number: int,
+        track: str | None = None,
+    ) -> str:
+        """Scope *text* to *feature_ids*, emitting a warning for dropped sections.
+
+        Makes the otherwise-silent ``scope_spec_to_features`` drops visible: if a
+        ``### [M###]`` section is filtered out because the architect's
+        ``**Features:**`` line and the sprint plan's IDs disagree, the developer
+        would build blind to it — so surface it as a ``ScopeDropEvent``.
+        """
+        scoped, dropped = scope_spec_to_features_verbose(text, feature_ids)
+        if dropped:
+            feature_list = ", ".join(sorted(feature_ids)) or "(none)"
+            emit(_event_log, ScopeDropEvent(
+                doc_name=doc_name,
+                dropped_ids=dropped,
+                feature_ids=sorted(feature_ids),
+                track=track,
+                sprint=sprint_number,
+                message=(
+                    f"Sprint {sprint_number}: scoping {doc_name} to features "
+                    f"{feature_list} dropped section(s) {', '.join(dropped)} — "
+                    f"verify the spec and sprint plan reference the same IDs."
+                ),
+            ))
+        return scoped
+
+    def _read_track_spec(
+        self, track_name: str, feature_ids: set[str], sprint_number: int,
+    ) -> str:
         doc_name = f"{track_name}_spec"
         if not self._doc_store.exists(doc_name):
             return ""
-        return scope_spec_to_features(self._doc_store.read(doc_name), feature_ids)
+        return self._scope_doc(
+            doc_name,
+            self._doc_store.read(doc_name),
+            feature_ids,
+            sprint_number,
+            track=track_name,
+        )
 
     def _update_rolling_summary(self, sprint_number: int) -> None:
         parts: list[str] = []
@@ -277,7 +321,7 @@ class SprintRunner:
         ))
 
         feature_ids = extract_sprint_feature_ids(sprint_scope)
-        track_spec = self._read_track_spec(track.name, feature_ids)
+        track_spec = self._read_track_spec(track.name, feature_ids, sprint_number)
 
         input_docs: dict[str, str] = {
             "track_spec": track_spec,
@@ -344,7 +388,12 @@ class SprintRunner:
 
         feature_ids = extract_sprint_feature_ids(sprint_scope)
         api_contract = (
-            scope_spec_to_features(self._doc_store.read("api_contract"), feature_ids)
+            self._scope_doc(
+                "api_contract",
+                self._doc_store.read("api_contract"),
+                feature_ids,
+                sprint_number,
+            )
             if self._doc_store.exists("api_contract")
             else ""
         )
@@ -408,12 +457,19 @@ class SprintRunner:
         for track in self._tracks:
             doc_name = f"{track.name}_spec"
             if self._doc_store.exists(doc_name):
-                spec_docs[doc_name] = scope_spec_to_features(
-                    self._doc_store.read(doc_name), feature_ids,
+                spec_docs[doc_name] = self._scope_doc(
+                    doc_name,
+                    self._doc_store.read(doc_name),
+                    feature_ids,
+                    sprint_number,
+                    track=track.name,
                 )
         if self._doc_store.exists("api_contract"):
-            spec_docs["api_contract"] = scope_spec_to_features(
-                self._doc_store.read("api_contract"), feature_ids,
+            spec_docs["api_contract"] = self._scope_doc(
+                "api_contract",
+                self._doc_store.read("api_contract"),
+                feature_ids,
+                sprint_number,
             )
 
         services = sprint_state.integration_services if sprint_state else []

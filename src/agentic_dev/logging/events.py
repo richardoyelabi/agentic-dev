@@ -397,3 +397,41 @@ class UATPrereqValidationEvent(LogEvent):
     agent_name: str
     missing: list[str]
     level: str = "WARNING"
+
+
+# ---------------------------------------------------------------------------
+# Cross-document scoping & reconciliation
+# ---------------------------------------------------------------------------
+
+
+class ScopeDropEvent(LogEvent):
+    """Emitted when feature-scoping silently removes spec/contract sections.
+
+    Makes the previously-invisible drops in ``scope_spec_to_features`` visible:
+    if a ``### [M###]`` section is filtered out because its ``**Features:**``
+    line matches none of the scoped feature IDs, the section ID is reported here.
+    """
+
+    event_type: str = "scope_drop"
+    level: str = "WARNING"
+    doc_name: str
+    dropped_ids: list[str]
+    feature_ids: list[str] = Field(default_factory=list)
+    track: str | None = None
+    sprint: int | None = None
+
+
+class ReconciliationWarningEvent(LogEvent):
+    """Emitted for a single cross-document reconciliation finding.
+
+    Reconciliation checks that the ``F###``/``M###``/``E###`` ID graph across
+    the features doc, specs, sprint plan, and API contract lines up. Each
+    finding (orphan feature, dangling reference, non-canonical reference, etc.)
+    is emitted as one event so coverage gaps are never silent.
+    """
+
+    event_type: str = "reconciliation_warning"
+    level: str = "WARNING"
+    code: str
+    severity: str = "WARN"
+    ids: list[str] = Field(default_factory=list)

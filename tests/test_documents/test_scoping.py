@@ -4,6 +4,7 @@
 from agentic_dev.documents.scoping import (
     extract_sprint_feature_ids,
     scope_spec_to_features,
+    scope_spec_to_features_verbose,
     split_feature_sections,
 )
 
@@ -32,6 +33,15 @@ class TestExtractSprintFeatureIds:
 
     def test_no_features(self):
         scope = "Sprint 1: Setup\n- **Dependencies:** none"
+        assert extract_sprint_feature_ids(scope) == set()
+
+    def test_parenthesized_refs_not_matched(self):
+        """Non-bracketed prose references are NOT extracted — the exact cause of
+        the skillsbloom UAT skip, where the spec wrote ``(F004, F005)``."""
+        scope = (
+            "- Goal create/edit modals (F004, F005) — existing\n"
+            "- Goal success modal (F006) — existing\n"
+        )
         assert extract_sprint_feature_ids(scope) == set()
 
     def test_multiple_lines(self):
@@ -268,6 +278,45 @@ class TestScopeSpecToFeatures:
         assert "[C001] Button" in result
         # M001 has Features [F099] which doesn't match F001
         assert "[M001] Data" not in result
+
+
+# ---------------------------------------------------------------------------
+# scope_spec_to_features_verbose
+# ---------------------------------------------------------------------------
+
+
+class TestScopeSpecToFeaturesVerbose:
+    def test_reports_dropped_section_ids(self):
+        scoped, dropped = scope_spec_to_features_verbose(BACKEND_SPEC, {"F001"})
+
+        # Same scoping result as the non-verbose variant.
+        assert "[M001] User" in scoped
+        assert "[M002] Post" not in scoped
+        # Sections filtered out are reported, by their bracketed ID.
+        assert set(dropped) == {"M002", "M003", "S002"}
+
+    def test_no_drops_when_all_match(self):
+        scoped, dropped = scope_spec_to_features_verbose(
+            BACKEND_SPEC, {"F001", "F002", "F003"}
+        )
+        assert dropped == []
+        assert scoped == BACKEND_SPEC
+
+    def test_no_drops_when_feature_ids_empty(self):
+        scoped, dropped = scope_spec_to_features_verbose(BACKEND_SPEC, set())
+        assert dropped == []
+        assert scoped == BACKEND_SPEC
+
+    def test_section_without_features_line_not_dropped(self):
+        scoped, dropped = scope_spec_to_features_verbose(FRONTEND_SPEC, {"F001"})
+        # C001 has no Features line → kept, not reported as dropped.
+        assert "[C001] Navbar" in scoped
+        assert "C001" not in dropped
+
+    def test_scope_spec_to_features_delegates_to_verbose(self):
+        assert scope_spec_to_features(BACKEND_SPEC, {"F001"}) == (
+            scope_spec_to_features_verbose(BACKEND_SPEC, {"F001"})[0]
+        )
 
 
 # ---------------------------------------------------------------------------

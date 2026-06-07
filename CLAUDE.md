@@ -113,6 +113,7 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/artifacts/<track>_spec.md` — per-track architecture spec
 - `.agentic-dev/artifacts/api_contract.md` — emitted iff any track has `kind=api`
 - `.agentic-dev/artifacts/sprint_plan.md` — sprint plan with `Tracks in scope:` lines
+- `.agentic-dev/artifacts/reconciliation_report.md` — cross-document ID-graph findings (written iff any), surfaced at the design checkpoint
 - `.agentic-dev/artifacts/track_<name>_analysis.md` — per-track existing-code analysis
 - `.agentic-dev/artifacts/existing_code_analyses.md` — concatenated input for the architect
 - `.agentic-dev/artifacts/bootstrap.md` — canonical install/run/test/UAT commands per track
@@ -131,6 +132,29 @@ All agent-produced artifacts live under `<project>/.agentic-dev/artifacts/`.
 - `.agentic-dev/logs/runs/<run_id>/events.jsonl` / `pipeline.log` — full event
   stream (incl. per-action `agent_activity`); `.agentic-dev/logs/latest` symlinks
   the most recent run
+
+## Cross-document consistency
+
+Independent agents emit cross-referencing docs (`features.md`, `<track>_spec.md`,
+`api_contract.md`, the sprint plan) that the pipeline filters against each other
+by `F###`/`M###`/`E###` IDs. Two safeguards keep an ID mismatch from silently
+dropping content:
+
+- **Authoritative selection, non-silent filtering.** UAT selects *which* features
+  to test per track from the sprint plan's `tracks_in_scope` + `Features:` mapping
+  (`_uat_in_scope_ids`), not by scraping bracketed IDs out of spec prose — so a
+  feature the spec mentions only as `(F004)` or omits is still tested. Sprint and
+  integration spec/contract scoping uses `scope_spec_to_features_verbose`
+  (`documents/scoping.py`): whenever a `### [M###]` section is filtered out, a
+  `ScopeDropEvent` is emitted so the drop is visible rather than silent.
+- **Reconciliation gate at the design checkpoint.** After sprint planning,
+  `reconcile()` (`documents/reconciliation.py`) checks the ID graph and emits one
+  `ReconciliationWarningEvent` per finding (orphan feature, dangling reference,
+  prose-only/non-canonical reference, spec coverage gap), writing
+  `reconciliation_report.md`. ERROR-severity findings set
+  `state.reconciliation_blocked`, which forces a `DESIGN_CHECKPOINT` pause even
+  when `after_design` is disabled (mirroring the sprint-plan parser's fail-loud
+  philosophy). Resuming past the checkpoint clears the flag.
 
 ## Live progress
 

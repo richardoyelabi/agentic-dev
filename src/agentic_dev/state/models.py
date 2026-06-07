@@ -81,6 +81,11 @@ class PipelineState(BaseModel):
     sprints: list[SprintState] = Field(default_factory=list)
     current_sprint: int | None = None
     checkpoint_feedback: str | None = None
+    # Set when sprint-planning reconciliation finds ERROR-severity cross-document
+    # inconsistencies (e.g. a feature scheduled in no sprint). Forces a pause at
+    # the design checkpoint even when ``after_design`` is disabled, so guaranteed
+    # defects are reviewed before the expensive build; cleared once acknowledged.
+    reconciliation_blocked: bool = False
     error: str | None = None
     failed_at_phase: PipelinePhase | None = None
     total_cost_usd: float = 0.0
