@@ -1886,3 +1886,142 @@ class TestTerminateProcessGroup:
             await _terminate_process_group(proc)
 
         kp.assert_called_once_with(4242, signal.SIGTERM)
+
+
+class TestMaxTurnsRecovery:
+    """Tests for max-turns exhaustion detection and resume-to-continue recovery.
+
+    When an agent runs out of its per-invocation turn budget, the Claude CLI
+    exits non-zero with empty stderr and emits a result whose ``subtype`` is
+    ``error_max_turns`` (the turn-limit hit is also recorded in the session
+    transcript as a ``max_turns_reached`` entry). The runner must treat this as
+    a recoverable, resumable condition rather than a fatal failure with a
+    misleading empty error message.
+    """
+
+    @staticmethod
+    def _make_mock_process(stdout: str, returncode: int = 0, stderr: str = ""):
+        return TestRun._make_mock_process(stdout, returncode, stderr)
+
+    @staticmethod
+    def _write_jsonl(tmp_path: Path, session_id: str, entries: list[dict]) -> Path:
+        encoded = str(tmp_path).replace("/", "-")
+        sessions_dir = tmp_path / ".claude" / "projects" / encoded
+        sessions_dir.mkdir(parents=True)
+        jsonl_path = sessions_dir / f"{session_id}.jsonl"
+        jsonl_path.write_text(
+            "\n".join(json.dumps(e) for e in entries), encoding="utf-8"
+        )
+        return jsonl_path
+
+    # --- detection helpers --------------------------------------------------
+
+    def test_stdout_subtype_detected(self):
+        stdout = json.dumps({"subtype": "error_max_turns", "session_id": "s"})
+        assert ClaudeRunner._stdout_indicates_max_turns(stdout) is True
+
+    def test_stdout_other_subtype_not_detected(self):
+        stdout = json.dumps({"subtype": "success", "result": "done"})
+        assert ClaudeRunner._stdout_indicates_max_turns(stdout) is False
+
+    def test_stdout_non_json_not_detected(self):
+        assert ClaudeRunner._stdout_indicates_max_turns("") is False
+        assert ClaudeRunner._stdout_indicates_max_turns("not json") is False
+
+    def test_session_transcript_max_turns_detected(self, tmp_path: Path):
+        self._write_jsonl(
+            tmp_path, "sess-mt",
+            [
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}},
+                {"type": "max_turns_reached", "maxTurns": 100, "turnCount": 101},
+            ],
+        )
+        assert ClaudeRunner._session_hit_max_turns(
+            "sess-mt", tmp_path, claude_dir=tmp_path / ".claude",
+        ) is True
+
+    def test_session_transcript_clean_not_detected(self, tmp_path: Path):
+        self._write_jsonl(
+            tmp_path, "sess-clean",
+            [{"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}}],
+        )
+        assert ClaudeRunner._session_hit_max_turns(
+            "sess-clean", tmp_path, claude_dir=tmp_path / ".claude",
+        ) is False
+
+    def test_session_transcript_missing_file_not_detected(self, tmp_path: Path):
+        assert ClaudeRunner._session_hit_max_turns(
+            "nope", tmp_path, claude_dir=tmp_path / ".claude",
+        ) is False
+        assert ClaudeRunner._session_hit_max_turns(None, tmp_path) is False
+
+    # --- recovery behaviour -------------------------------------------------
+
+    async def test_resumes_session_on_max_turns_then_succeeds(self, tmp_path: Path):
+        """A max-turns exit resumes the same session and continues to success."""
+        runner = ClaudeRunner(
+            max_retries=5, max_turns_retries=2, enable_usage_api=False,
+        )
+        agent = FakeAgentConfig()
+        max_turns_json = json.dumps(
+            {"subtype": "error_max_turns", "session_id": "sess-mt-1"}
+        )
+        fail_proc = self._make_mock_process(max_turns_json, returncode=1, stderr="")
+        success_proc = self._make_mock_process(
+            json.dumps({"result": "finished", "total_cost_usd": 0.2})
+        )
+
+        call_count = 0
+        captured_cmds: list[list[str]] = []
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            captured_cmds.append(list(args))
+            return fail_proc if call_count == 1 else success_proc
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                result = await runner.run(agent, "prompt", tmp_path)
+
+        assert result.text == "finished"
+        assert call_count == 2
+        second_cmd = captured_cmds[1]
+        assert "--resume" in second_cmd
+        assert second_cmd[second_cmd.index("--resume") + 1] == "sess-mt-1"
+
+    async def test_max_turns_exhaustion_raises_clear_error(self, tmp_path: Path):
+        """When the resume budget is spent, raise a turn-limit-specific error
+        (not the misleading empty ``CLI exited with code 1:``) and carry the
+        session so a later resume can continue it."""
+        runner = ClaudeRunner(
+            max_retries=5, max_turns_retries=1, enable_usage_api=False,
+        )
+        agent = FakeAgentConfig(name="uat_web")
+        max_turns_json = json.dumps(
+            {"subtype": "error_max_turns", "session_id": "sess-mt-2"}
+        )
+        proc = self._make_mock_process(max_turns_json, returncode=1, stderr="")
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return proc
+
+        with patch(
+            "agentic_dev.claude.runner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                with pytest.raises(AgentRunError) as exc_info:
+                    await runner.run(agent, "prompt", tmp_path)
+
+        # Bounded: one resume attempt, then give up (no infinite loop).
+        assert call_count == 2
+        assert exc_info.value.session_id == "sess-mt-2"
+        assert "turn limit" in str(exc_info.value).lower()

@@ -42,3 +42,20 @@ def test_figma_mcp_defaults_false_on_other_agents():
     reg = AgentRegistry()
     qa = reg.get("qa")
     assert qa.claude.figma_mcp is False
+
+
+def test_interactive_uat_agents_have_room_for_correction_reruns():
+    """The interactive UAT agents re-run a full app exercise on each correction
+    round; 100 turns proved too few (real runs hit the turn limit mid-task), so
+    they get a larger budget. The runner can still resume on exhaustion, but a
+    generous ceiling avoids needless resume churn."""
+    reg = AgentRegistry()
+    for name in (
+        "uat_web",
+        "uat_api",
+        "uat_cli",
+        "uat_desktop_electron",
+        "uat_desktop_tauri",
+        "uat_mobile",
+    ):
+        assert reg.get(name).claude.max_turns >= 200, name
