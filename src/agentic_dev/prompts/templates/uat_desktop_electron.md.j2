@@ -40,7 +40,7 @@ Boot the Electron app in dev mode, attach Playwright via CDP, and drive the real
 1. **Boot the app.** Start the Electron app in dev mode with remote debugging enabled (`--remote-debugging-port=...` or the framework's dev command).
 2. **Attach Playwright.** Connect Playwright MCP to the CDP endpoint. Enumerate windows; the main application window is the primary target.
 3. **Drive user flows.** For each AC, navigate, click, fill, and assert. Exercise IPC flows (menu actions, tray interactions) where features require them.
-4. **Capture artifacts.** Screenshots, DOM snapshots, and IPC transcripts under `.agentic-dev/uat/<run_id>/evidence/<track>/`.
+4. **Capture artifacts.** Screenshots, DOM snapshots, and IPC transcripts under `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/`.
 
 **If Playwright MCP or Node are unavailable (per prereqs):** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 
@@ -52,7 +52,7 @@ For the Electron dev server, the renderer build watcher, or any backend service 
 2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on the framework's ready line (`webpack compiled`, `vite ready`, `Listening on`, the CDP port banner, etc.). Do **not** use bare `sleep` loops.
 3. **Poll only as a fallback.** If `Monitor` is unavailable, probe the CDP endpoint with `curl --max-time 2 http://localhost:<port>/json/version` in a bounded loop (max 30 × 2s).
 4. **Tear down.** At the end of the run, terminate the process via `pkill -f '<command-fragment>'` through `Bash`.
-5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/server.log` as evidence.
 
 # Constraints
 

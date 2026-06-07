@@ -40,7 +40,7 @@ For each acceptance criterion, drive the real app on a booted emulator or simula
 1. **Confirm a device is running.** `adb devices` or `xcrun simctl list devices booted` must show at least one non-web device. If not, fall back to spec-tracing and mark ACs as skipped.
 2. **Install and launch the app.** Build the app for the booted device in dev mode.
 3. **Drive flows.** For each AC, author a Maestro flow (or the project's integration_test) and execute it via `Bash`. Capture the run output.
-4. **Capture artifacts.** Maestro run logs and screenshots under `.agentic-dev/uat/<run_id>/evidence/<track>/`.
+4. **Capture artifacts.** Maestro run logs and screenshots under `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/`.
 
 **If no device is running or the runner is unavailable:** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 
@@ -52,7 +52,7 @@ For Metro / Flutter dev servers, long-running Maestro flows, or any backend serv
 2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on the readiness line (`Welcome to Metro`, `Flutter run key commands`, `Maestro session ready`, etc.). Do **not** use bare `sleep` loops.
 3. **Poll only as a fallback.** If `Monitor` is unavailable, probe with a bounded health check (e.g. `curl --max-time 2 http://localhost:8081/status` for Metro), max 30 × 2s.
 4. **Tear down.** At the end of the run, terminate the process via `pkill -f '<command-fragment>'` through `Bash`.
-5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/server.log` as evidence.
 
 # Constraints
 

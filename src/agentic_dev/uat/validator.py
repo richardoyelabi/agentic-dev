@@ -50,6 +50,12 @@ def validate_uat_report(
     false-PASS rules mechanically. See module docstring for rule semantics.
     """
     acs = _parse_acs(report)
+    if _OVERALL_RESULT_RE.search(report) is None and not acs:
+        # The captured text is not a UAT report at all — no Overall Result
+        # verdict and no AC entries. Most likely the agent returned a chat
+        # summary instead of writing the report to its file. Fail loudly rather
+        # than silently persisting a non-report as a "FAIL report".
+        return _render_missing_report_override() + report
     overall = _parse_overall(report)
     if overall != "PASS":
         return report
@@ -159,6 +165,25 @@ def _evaluate_rules(
             ))
 
     return triggered
+
+
+def _render_missing_report_override() -> str:
+    """Render the override prepended when no real report was captured at all."""
+    return "\n".join([
+        "## Overall Result: FAIL",
+        "",
+        "## Validator Override",
+        "",
+        "No UAT report was captured for this feature. The recorded output below "
+        "is not a valid UAT report — it has no `## Overall Result` verdict and "
+        "no `### [AC-...]` entries, which usually means the agent returned a "
+        "chat summary instead of writing the report to its file. Treated as a "
+        "hard FAIL.",
+        "",
+        "---",
+        "",
+        "",
+    ])
 
 
 def _render_override(triggered: list[tuple[str, str]]) -> str:

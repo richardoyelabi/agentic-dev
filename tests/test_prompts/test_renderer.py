@@ -586,6 +586,43 @@ class TestTemplateVariablesMatchOrchestratorKeys:
             "likely still using 'sprint_plan'"
         )
 
+    def test_uat_report_format_instructs_write_to_pinned_path(self, real_renderer):
+        """When the engine pins a report path, the UAT agent is told to write the
+        full report to that exact file — not just return it in chat."""
+        result = real_renderer.render("uat_web.md.j2", {
+            **AGENT_TEMPLATES["uat_web.md.j2"],
+            "uat_report_path": "/proj/.agentic-dev/uat/RUN/frontend/F001_report.md",
+            "uat_evidence_dir": "/proj/.agentic-dev/uat/RUN/evidence/frontend",
+        })
+        assert "/proj/.agentic-dev/uat/RUN/frontend/F001_report.md" in result
+        assert "the file the system reads" in result
+        # Evidence references resolve to the engine-controlled absolute dir.
+        assert "/proj/.agentic-dev/uat/RUN/evidence/frontend" in result
+        assert "<run_id>" not in result
+
+    def test_uat_report_format_omits_write_instruction_when_no_path(
+        self, real_renderer
+    ):
+        """Without a pinned path the write-to-file block is absent (back-compat)."""
+        result = real_renderer.render(
+            "uat_web.md.j2", AGENT_TEMPLATES["uat_web.md.j2"]
+        )
+        assert "the file the system reads" not in result
+
+    def test_integration_instructs_write_to_pinned_guide_path(self, real_renderer):
+        """When the engine pins a guide path, the integration agent writes the
+        guide to that exact file."""
+        result = real_renderer.render("integration.md.j2", {
+            **AGENT_TEMPLATES["integration.md.j2"],
+            "integration_guide_path": (
+                "/proj/.agentic-dev/artifacts/integration_guide_sprint_3.md"
+            ),
+        })
+        assert (
+            "/proj/.agentic-dev/artifacts/integration_guide_sprint_3.md" in result
+        )
+        assert "the file the system reads" in result
+
     def test_architect_renders_figma_sources_when_provided(self, real_renderer):
         """When figma_sources is provided, the Figma section renders."""
         result = real_renderer.render("architect.md.j2", {

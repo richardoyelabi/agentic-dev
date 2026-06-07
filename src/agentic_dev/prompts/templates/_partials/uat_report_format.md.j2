@@ -1,6 +1,23 @@
 # Output Format
 
 Produce a **UAT Report** in the exact format below. A code-level validator will reject the report if structural fields are missing.
+{% if uat_report_path is defined and uat_report_path %}
+
+**Write the complete report to this exact file — it is the file the system reads:**
+
+`{{ uat_report_path }}`
+
+Write it there with a `Bash` heredoc, for example:
+
+```bash
+cat > '{{ uat_report_path }}' <<'REPORT_EOF'
+# UAT Report
+... full report in the format below ...
+REPORT_EOF
+```
+
+Write the report **only** to that path — do not invent a different path or directory, and do not rely on your final chat message to carry the report (it may be a brief summary; the system reads the file).
+{% endif %}
 
 ```markdown
 # UAT Report
@@ -23,7 +40,7 @@ Produce a **UAT Report** in the exact format below. A code-level validator will 
 - **Driver:** {{ driver_enum }}
 - **Evidence:**
   - <concrete observation per assertion — no vague language>
-- **Artifacts:** (relative paths under .agentic-dev/uat/<run_id>/evidence/<track>/)
+- **Artifacts:** (filenames under {{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/)
   - <path>
 - **Notes:** <optional>
 

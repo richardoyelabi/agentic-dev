@@ -785,6 +785,80 @@ class TestUATPhase:
         assert state.completed_uat_features["frontend"] == ["F001", "F002"]
         assert "frontend" in state.completed_uat_tracks
 
+    @pytest.mark.asyncio
+    async def test_uat_passes_engine_controlled_report_and_evidence_paths(
+        self, engine, doc_store, registry, project_dir,
+    ):
+        """The report file and evidence dir are engine-controlled, absolute, and
+        rooted at the PROJECT-root run dir (not the track workspace) — so the
+        agent can no longer scatter reports into stray per-track .agentic-dev
+        trees under self-invented run-ids, and the engine reads the real report
+        back from a known path."""
+        tracks = [Track(name="frontend", path="frontend", kind="web", uat_kind="web")]
+        state = _make_state(PipelinePhase.UAT, tracks=tracks)
+        registry.get = MagicMock(
+            side_effect=lambda name: _make_agent(name, template=f"{name}.md.j2")
+        )
+        features_doc = (
+            "# Features Request\n\n## Feature: [F001] Listing\n- [ ] lists\n"
+        )
+        spec = "### [M001] X\n- **Features:** [F001]\n"
+        doc_store.exists = MagicMock(
+            side_effect=lambda name: name in {"features", "frontend_spec", "input.md"}
+        )
+
+        def fake_read(name):
+            if name == "features":
+                return features_doc
+            if name == "frontend_spec":
+                return spec
+            if name.startswith("uat_report_"):
+                return "## Overall Result: PASS\n"
+            return "content"
+
+        doc_store.read = MagicMock(side_effect=fake_read)
+        captured: dict = {}
+
+        async def fake_qa(**kwargs):
+            captured["action_output_path"] = kwargs.get("action_output_path")
+            captured["uat_report_path"] = kwargs["extra_context"].get(
+                "uat_report_path"
+            )
+            captured["uat_evidence_dir"] = kwargs["extra_context"].get(
+                "uat_evidence_dir"
+            )
+            return MagicMock(total_cost=0.1, session_id="s")
+
+        with patch(
+            "agentic_dev.uat.secrets_gate.check_secrets_gate",
+        ), patch(
+            "agentic_dev.uat.preinstall.preinstall_for_uat",
+        ), patch(
+            "agentic_dev.orchestrator.engine.run_qa_cycle",
+            new=AsyncMock(side_effect=fake_qa),
+        ), patch(
+            "agentic_dev.uat.teardown.teardown_for_uat",
+        ), patch.object(
+            engine, "_commit_docs_changes", new_callable=AsyncMock,
+        ):
+            await engine._run_uat(state)
+
+        report_path = captured["action_output_path"]
+        assert report_path is not None, "engine did not pin a report file path"
+        report_path = Path(report_path)
+        assert report_path.name == "F001_report.md"
+        assert report_path.parent.name == "frontend"
+        # Project-root rooted, NOT under the track workspace (project_dir/frontend).
+        assert str(report_path).startswith(
+            str(project_dir / ".agentic-dev" / "uat")
+        )
+        # The template receives the same path as a string.
+        assert captured["uat_report_path"] == str(report_path)
+        # Evidence dir shares the same run dir and is project-root rooted.
+        evidence = Path(captured["uat_evidence_dir"])
+        assert evidence.name == "frontend" and evidence.parent.name == "evidence"
+        assert report_path.parent.parent == evidence.parent.parent
+
     def test_uat_feature_units_uses_in_scope_ids(self, engine):
         """Authoritative selection: in-scope features are UAT'd even when the
         spec references them only in prose or omits them (skillsbloom F004/F008)."""

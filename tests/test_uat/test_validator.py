@@ -242,3 +242,37 @@ class TestOverrideSectionShape:
         override_idx = result.index("## Validator Override")
         body_idx = result.index("# UAT Report")
         assert override_idx < body_idx
+
+
+class TestValidatorFlagsNonReport:
+    """A captured chat summary (no report structure) is flagged as a hard FAIL,
+    not silently persisted as a 'FAIL report' — the loud backstop for a capture
+    miss (agent returned a summary instead of writing the report file)."""
+
+    def test_summary_without_report_structure_forces_fail_override(self):
+        summary = (
+            "Done. Report written to .agentic-dev/uat/f022/report.md. "
+            "All 10 ACs pass."
+        )
+        result = validate_uat_report(summary, uat_mode="full")
+        assert "Validator Override" in result
+        assert "## Overall Result: FAIL" in result
+        # The original text is preserved after the override for debugging.
+        assert "Done. Report written" in result
+
+    def test_real_fail_report_is_left_unchanged(self):
+        report = _report(
+            overall="FAIL",
+            acs=[{"result": "FAIL", "mode": "runtime", "driver": "playwright"}],
+        )
+        result = validate_uat_report(report, uat_mode="full")
+        assert result == report
+
+    def test_report_with_acs_but_no_overall_is_not_misflagged(self):
+        """A report with AC structure is a (possibly malformed) report, not a
+        summary — the missing-report guard must not trigger."""
+        partial = (
+            "### [AC-001] X\n- **Result:** PASS\n- **Evidence:**\n  - did it\n"
+        )
+        result = validate_uat_report(partial, uat_mode="full")
+        assert "No UAT report was captured" not in result

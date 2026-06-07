@@ -40,7 +40,7 @@ Tauri uses the OS-native webview (WebKitGTK / WebView2 / WKWebView), which Playw
 1. **Start tauri-driver.** Run `tauri-driver` to expose a WebDriver endpoint for the Tauri app.
 2. **Build and launch the app.** Build in dev mode and launch under tauri-driver.
 3. **Drive user flows.** For each AC, use WebDriver commands via a client script (e.g. `selenium`/`webdriverio` via `Bash`) to navigate, click, and assert.
-4. **Capture artifacts.** WebDriver session logs, screenshots, and (if available) Tauri backend logs under `.agentic-dev/uat/<run_id>/evidence/<track>/`.
+4. **Capture artifacts.** WebDriver session logs, screenshots, and (if available) Tauri backend logs under `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/`.
 
 **If `tauri-driver` is unavailable (per prereqs):** do not fabricate evidence. Set `Verification mode: skipped` + `Driver: none`.
 
@@ -52,7 +52,7 @@ For `tauri-driver`, the Tauri app itself in dev mode, or any backend service it 
 2. **Wake on readiness.** Use `Monitor` against the same background shell to wake on the readiness line (`tauri-driver listening`, `Listening on`, framework dev-server ready banner). Do **not** use bare `sleep` loops.
 3. **Poll only as a fallback.** If `Monitor` is unavailable, run a bounded probe loop against the WebDriver endpoint (`curl --max-time 2 http://localhost:4444/status`), max 30 × 2s.
 4. **Tear down.** At the end of the run, terminate the process via `pkill -f '<command-fragment>'` through `Bash`.
-5. **Capture logs.** `Read` the background shell's output-file path and copy it to `.agentic-dev/uat/<run_id>/evidence/<track>/server.log` as evidence.
+5. **Capture logs.** `Read` the background shell's output-file path and copy it to `{{ uat_evidence_dir | default('.agentic-dev/uat/<run_id>/evidence/<track>') }}/server.log` as evidence.
 
 # Constraints
 

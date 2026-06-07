@@ -321,6 +321,50 @@ async def test_integration_phase_runs_after_tracks(claude, registry, doc_store, 
 
 
 @pytest.mark.asyncio
+async def test_integration_capture_is_file_based(
+    claude, registry, doc_store, prompt_renderer, project_dir, fullstack_tracks,
+):
+    """The integration guide is captured from an engine-controlled file (the
+    agent's real deliverable), not its summary stdout. The engine pins the path
+    and exposes it to the template as ``integration_guide_path``."""
+    runner = SprintRunner(
+        claude=claude,
+        registry=registry,
+        doc_store=doc_store,
+        prompt_renderer=prompt_renderer,
+        project_dir=project_dir,
+        tracks=fullstack_tracks,
+    )
+    captured: dict = {}
+
+    async def fake_qa(**kwargs):
+        captured["action_output_path"] = kwargs.get("action_output_path")
+        captured["integration_guide_path"] = (
+            (kwargs.get("extra_context") or {}).get("integration_guide_path")
+        )
+        return MagicMock(total_cost=0.1, session_id="s")
+
+    with patch(
+        "agentic_dev.orchestrator.sprint_runner.run_qa_cycle",
+        new=AsyncMock(side_effect=fake_qa),
+    ):
+        await runner._run_integration(
+            sprint_number=3,
+            sprint_scope="auth",
+            feature_ids={"F001"},
+            shared_context={},
+            sprint_state=None,
+        )
+
+    path = captured["action_output_path"]
+    assert path is not None, "integration did not pin a guide file path"
+    path = Path(path)
+    assert path.name == "integration_guide_sprint_3.md"
+    assert str(path).startswith(str(project_dir / ".agentic-dev" / "artifacts"))
+    assert captured["integration_guide_path"] == str(path)
+
+
+@pytest.mark.asyncio
 async def test_rolling_summary_uses_track_names(claude, registry, prompt_renderer, project_dir, fullstack_tracks, tmp_path):
     """Rolling summary aggregates per-track sprint outputs (not hardcoded backend/frontend)."""
     real_store = DocumentStore(tmp_path / "proj")
